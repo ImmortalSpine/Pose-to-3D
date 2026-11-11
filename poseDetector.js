@@ -242,6 +242,29 @@ export class TorsoPoseEstimator {
             }
         }
 
+        // 解剖學生理防呆校正：衣袖遮擋 / 偽陽性反向折返過濾 (Sleeve Occlusion Sanity Filter)
+        // 當大臂自然下垂 (elbow.y > shoulder.y + 0.08)，但 MediaPipe 因外套/褶皺誤將手腕抓在手肘上方 (wrist.y < elbow.y - 0.04)
+        // 且未檢測到手掌 21 節點 (手被衣服或腰胯遮擋) 時，手腕必然插在腰際/口袋/骨盆處，絕不可能在腋下折疊倒插
+        const sanitizeWristOcclusion = (s, e, w, h, matchedHand, side) => {
+            if (!s || !e || !w || !h) return w;
+            const sign = (side === 'left') ? 1.0 : -1.0;
+            const uArmDown = (e.y - s.y) > 0.08;
+            const foreUp = (w.y - e.y) < -0.04;
+            const closeToTorso = Math.abs(w.x - s.x) < 0.14;
+            if (!matchedHand && uArmDown && foreUp && closeToTorso) {
+                return {
+                    x: h.x + sign * 0.05,
+                    y: h.y - 0.03 * torsoHeight,
+                    z: e.z || 0,
+                    visibility: 0.5
+                };
+            }
+            return w;
+        };
+
+        const activeLeftWrist = sanitizeWristOcclusion(leftShoulder, leftElbow, leftWrist, leftHip, matchedLeftHand, 'left');
+        const activeRightWrist = sanitizeWristOcclusion(rightShoulder, rightElbow, rightWrist, rightHip, matchedRightHand, 'right');
+
         // 判定手部姿態類型 (前置手 / 插腰手 / 體側垂手)
         const checkFrontOfPelvis = (w) => {
             if (!w || !leftHip || !rightHip) return false;
@@ -267,22 +290,22 @@ export class TorsoPoseEstimator {
             return (elbowFlared > 0.065 && wristInward > 0.06 && flexAngle > 0.70 && atWaistHeight);
         };
 
-        const isLeftHandOnHip = checkHandOnHip(leftShoulder, leftElbow, leftWrist, 'left');
-        const isRightHandOnHip = checkHandOnHip(rightShoulder, rightElbow, rightWrist, 'right');
+        const isLeftHandOnHip = checkHandOnHip(leftShoulder, leftElbow, activeLeftWrist, 'left');
+        const isRightHandOnHip = checkHandOnHip(rightShoulder, rightElbow, activeRightWrist, 'right');
 
-        const isLeftFrontOfPelvis = !isLeftHandOnHip && checkFrontOfPelvis(leftWrist);
-        const isRightFrontOfPelvis = !isRightHandOnHip && checkFrontOfPelvis(rightWrist);
+        const isLeftFrontOfPelvis = !isLeftHandOnHip && checkFrontOfPelvis(activeLeftWrist);
+        const isRightFrontOfPelvis = !isRightHandOnHip && checkFrontOfPelvis(activeRightWrist);
 
         // 12. 左右大臂與前臂解算 (含肌肉包絡面避障、插腰側腰定位與相機真實投影傾角保真)
         const leftArmPose = this._solveArmKinematics(
-            leftShoulder, leftElbow, leftWrist, 'left',
+            leftShoulder, leftElbow, activeLeftWrist, 'left',
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             leftThumb, leftPinky,
             leftHip, rightHip, isLeftFrontOfPelvis, isLeftHandOnHip
         );
 
         const rightArmPose = this._solveArmKinematics(
-            rightShoulder, rightElbow, rightWrist, 'right',
+            rightShoulder, rightElbow, activeRightWrist, 'right',
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             rightThumb, rightPinky,
             leftHip, rightHip, isRightFrontOfPelvis, isRightHandOnHip
@@ -386,7 +409,7 @@ export class TorsoPoseEstimator {
             landmarks2D: {
                 leftShoulder, rightShoulder,
                 leftElbow, rightElbow,
-                leftWrist, rightWrist,
+                leftWrist: activeLeftWrist, rightWrist: activeRightWrist,
                 leftHip, rightHip,
                 midShoulder, midHip,
                 nose,
