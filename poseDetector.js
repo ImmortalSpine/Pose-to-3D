@@ -211,17 +211,51 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
-        // 結合 MediaPipe 雙肩與雙髖在 3D 相機空間中的真實法向投影 (atan2(Δz, Δx))
-        // 具備平滑連續性，正面站姿下 (Δz ≈ 0) 自動完美對齊 0° 正面，絕不產生跳變與側身畸變
+        // 1. 頭頸部正中線校驗 (Head-Centering Verification)
+        const noseOffset = Math.abs((nose.x - midShoulder.x) * ar);
+        const isHeadCentered = (noseOffset < 0.045);
+
+        // 2. 2D 幾何展寬約束 (Screen-Space Compression Guardrail)
+        // 在正面拍攝時，雙肩展寬比例 sRatio >= 0.58 (頭部居中時) 代表 2D 畫面上雙肩開闊展現，幾何上 100% 屬於正面！
+        // 徹底消除 MediaPipe 單圖深度隨機噪聲導致的假性 75° 側轉或 150° 背身倒轉
+        const sRatio = shoulderSpan / torsoHeight;
+        const rRefS = isHeadCentered ? 0.58 : 0.68;
+        const compS = this._clamp(sRatio / rRefS, 0.0, 1.0);
+        const maxShoulderYaw = Math.acos(compS); // 2D 投影決定的最大可能側偏角
+
+        const hRatio = hipSpan / torsoHeight;
+        const rRefH = isHeadCentered ? 0.42 : 0.48;
+        const compH = this._clamp(hRatio / rRefH, 0.0, 1.0);
+        const maxHipYaw = Math.acos(compH);
+
+        // 3. 深度差信號轉屏幕尺度 (MediaPipe Depth to Isotropic Screen Units)
         const rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
         const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
         const combinedDz = (rawDz * 0.70 + hipDz * 0.30);
 
-        let thoracicYaw = Math.atan2(combinedDz * 1.35, Math.max(0.04, shoulderDx));
-        thoracicYaw = this._clamp(thoracicYaw, -1.3, 1.3);
+        const dzScreenS = combinedDz * (torsoHeight / 0.50);
+        const rawThoracicYaw = Math.atan2(dzScreenS, Math.max(0.01, Math.abs(shoulderDx)));
 
-        let pelvisYaw = Math.atan2(hipDz * 1.35, Math.max(0.04, hipDx));
-        pelvisYaw = this._clamp(pelvisYaw, -1.2, 1.2);
+        // 4. 死區平滑濾波 (Deadzone filter: 深度信號 <= 0.045 時平滑歸零，消除噪聲抖動)
+        const dzMag = Math.abs(combinedDz);
+        let deadzoneS = 0.0;
+        if (dzMag > 0.045) {
+            deadzoneS = (dzMag < 0.12) ? ((dzMag - 0.045) / 0.075) : 1.0;
+        }
+        const signS = combinedDz >= 0 ? 1.0 : -1.0;
+        let thoracicYaw = signS * Math.min(Math.abs(rawThoracicYaw), maxShoulderYaw) * deadzoneS;
+        thoracicYaw = this._clamp(thoracicYaw, -1.2, 1.2);
+
+        const dzScreenH = hipDz * (torsoHeight / 0.50);
+        const rawPelvisYaw = Math.atan2(dzScreenH, Math.max(0.01, Math.abs(hipDx)));
+        const hipDzMag = Math.abs(hipDz);
+        let deadzoneH = 0.0;
+        if (hipDzMag > 0.045) {
+            deadzoneH = (hipDzMag < 0.12) ? ((hipDzMag - 0.045) / 0.075) : 1.0;
+        }
+        const signH = hipDz >= 0 ? 1.0 : -1.0;
+        let pelvisYaw = signH * Math.min(Math.abs(rawPelvisYaw), maxHipYaw) * deadzoneH;
+        pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
 
         // 6. 胸廓側傾 (Roll - 高低肩)
         let thoracicRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
@@ -889,9 +923,10 @@ export class TorsoPoseEstimator {
             const uFootLocal = vFootPelvis.clone().applyQuaternion(qTibiaInv).normalize();
 
             // F. 解算踝關節 Yaw (腳尖內八/外八) 與 Pitch (腳背屈曲/踮腳/垂足)
+            // 補償足部網格自身的幾何自然休止傾角 (~0.15 rad / 8.5°)，站立時足底平貼地面
             ankleYaw = Math.atan2(uFootLocal.x, uFootLocal.z);
             const horiz = Math.hypot(uFootLocal.x, uFootLocal.z);
-            anklePitch = Math.atan2(-uFootLocal.y, horiz);
+            anklePitch = Math.atan2(-uFootLocal.y, horiz) - 0.15;
 
             // G. 腳底平貼地面補償 (Ground Leveling Roll for Subtalar Joint)
             const qPreRoll = qTibia.clone()

@@ -1528,10 +1528,10 @@ export class AnatomicalTorso {
             vert.rotation.z = lumbarRoll * factor * 0.25;
         });
 
-        // 3. 胸椎與肋骨整體單元
-        this.thoracicCageUnit.rotation.x = thoracicPitch;
-        this.thoracicCageUnit.rotation.y = thoracicYaw;
-        this.thoracicCageUnit.rotation.z = thoracicRoll;
+        // 3. 胸椎與肋骨整體單元 (相對於骨盆父級空間之相對偏轉，使胸廓在世界/相機空間之姿態精確等於 thoracicPitch/Yaw/Roll)
+        this.thoracicCageUnit.rotation.x = thoracicPitch - pelvisPitch;
+        this.thoracicCageUnit.rotation.y = thoracicYaw - pelvisYaw;
+        this.thoracicCageUnit.rotation.z = thoracicRoll - pelvisRoll;
 
         // 4. 頸椎
         const cCount = this.cervicalVertebrae.length;
