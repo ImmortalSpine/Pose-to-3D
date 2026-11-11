@@ -38,9 +38,13 @@ class App {
             leftArmPitch: 0,
             leftArmRoll: 0.12,
             leftArmYaw: 0,
+            leftElbowFlex: 0.15,
+            leftForearmTwist: 0.35,
             rightArmPitch: 0,
             rightArmRoll: -0.12,
-            rightArmYaw: 0
+            rightArmYaw: 0,
+            rightElbowFlex: 0.15,
+            rightForearmTwist: 0.35
         };
         this.aiPoseBackup = { ...this.currentPose };
 
@@ -162,6 +166,9 @@ class App {
         document.getElementById('toggleArms').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleArms(e.target.checked);
         });
+        document.getElementById('toggleForearms').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleForearms(e.target.checked);
+        });
         document.getElementById('togglePelvis').addEventListener('change', (e) => {
             this.anatomicalTorso.togglePelvis(e.target.checked);
         });
@@ -204,7 +211,11 @@ class App {
         this._bindSlider('sliderLumbarPitch', 'valLumbarPitch', 'lumbarPitch');
         this._bindSlider('sliderNeckPitch', 'valNeckPitch', 'cervicalPitch');
         this._bindSlider('sliderRightArmRoll', 'valRightArmRoll', 'rightArmRoll');
+        this._bindSlider('sliderRightElbowFlex', 'valRightElbowFlex', 'rightElbowFlex');
+        this._bindSlider('sliderRightForearmTwist', 'valRightForearmTwist', 'rightForearmTwist');
         this._bindSlider('sliderLeftArmRoll', 'valLeftArmRoll', 'leftArmRoll');
+        this._bindSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', 'leftElbowFlex');
+        this._bindSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', 'leftForearmTwist');
 
         // 重置為 AI 姿態
         document.getElementById('btnResetPose').addEventListener('click', () => {
@@ -253,7 +264,11 @@ class App {
         setSlider('sliderLumbarPitch', 'valLumbarPitch', this.currentPose.lumbarPitch);
         setSlider('sliderNeckPitch', 'valNeckPitch', this.currentPose.cervicalPitch);
         setSlider('sliderRightArmRoll', 'valRightArmRoll', this.currentPose.rightArmRoll);
+        setSlider('sliderRightElbowFlex', 'valRightElbowFlex', this.currentPose.rightElbowFlex);
+        setSlider('sliderRightForearmTwist', 'valRightForearmTwist', this.currentPose.rightForearmTwist);
         setSlider('sliderLeftArmRoll', 'valLeftArmRoll', this.currentPose.leftArmRoll);
+        setSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', this.currentPose.leftElbowFlex);
+        setSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', this.currentPose.leftForearmTwist);
     }
 
     _setCameraView(view) {
@@ -444,6 +459,9 @@ class App {
         if (type === 'sampleA') {
             ctx.fillText("範例 A：微側身挺胸 + 抬手姿態", 40, 60);
             targetPose = {
+                pelvisRoll: -0.06,
+                pelvisPitch: 0,
+                pelvisYaw: 0.1,
                 thoracicPitch: -0.15,
                 thoracicYaw: 0.25,
                 thoracicRoll: -0.05,
@@ -453,15 +471,22 @@ class App {
                 cervicalPitch: -0.05,
                 cervicalYaw: 0.15,
                 leftArmPitch: 0.1,
-                leftArmRoll: 0.2, // 左手微放開
+                leftArmRoll: 0.2,
                 leftArmYaw: 0,
+                leftElbowFlex: 0.25,
+                leftForearmTwist: 0.35,
                 rightArmPitch: 0.35,
                 rightArmRoll: -1.15, // 右手高抬
-                rightArmYaw: 0
+                rightArmYaw: 0,
+                rightElbowFlex: 1.85, // 右肘屈曲比耶
+                rightForearmTwist: 0.4
             };
         } else {
             ctx.fillText("範例 B：側彎對抗 (Contrapposto)", 40, 60);
             targetPose = {
+                pelvisRoll: 0.22,
+                pelvisPitch: 0.02,
+                pelvisYaw: -0.08,
                 thoracicPitch: 0.05,
                 thoracicYaw: -0.25,
                 thoracicRoll: 0.22,
@@ -473,9 +498,13 @@ class App {
                 leftArmPitch: -0.1,
                 leftArmRoll: 0.45,
                 leftArmYaw: 0,
+                leftElbowFlex: 0.45,
+                leftForearmTwist: 0.3,
                 rightArmPitch: 0.2,
                 rightArmRoll: -0.3,
-                rightArmYaw: 0
+                rightArmYaw: 0,
+                rightElbowFlex: 0.5,
+                rightForearmTwist: 0.3
             };
         }
 

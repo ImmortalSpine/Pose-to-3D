@@ -118,6 +118,13 @@
                     </label>
                 </div>
                 <div class="toggle-row">
+                    <span>前臂雙骨 (尺骨 & 橈骨)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleForearms" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
                     <span>骨盆系統 (髂/坐/恥/薦/尾骨)</span>
                     <label class="toggle-switch">
                         <input type="checkbox" id="togglePelvis" checked>
@@ -210,10 +217,42 @@
 
                 <div class="control-row">
                     <div class="control-label-wrap">
+                        <span>右肘屈曲 (Right Elbow Flex)</span>
+                        <span class="control-val" id="valRightElbowFlex">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightElbowFlex" min="0" max="145" value="0">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>右橈骨翻轉 (Right Radius Twist)</span>
+                        <span class="control-val" id="valRightForearmTwist">20°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightForearmTwist" min="0" max="180" value="20">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
                         <span>左臂抬起/外展 (Left Arm)</span>
                         <span class="control-val" id="valLeftArmRoll">7°</span>
                     </div>
                     <input type="range" class="range-slider" id="sliderLeftArmRoll" min="0" max="140" value="7">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左肘屈曲 (Left Elbow Flex)</span>
+                        <span class="control-val" id="valLeftElbowFlex">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftElbowFlex" min="0" max="145" value="0">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左橈骨翻轉 (Left Radius Twist)</span>
+                        <span class="control-val" id="valLeftForearmTwist">20°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftForearmTwist" min="0" max="180" value="20">
                 </div>
             </div>
         </aside>
