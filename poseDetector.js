@@ -472,13 +472,13 @@ export class TorsoPoseEstimator {
             cervicalPitch: this._clamp(cervicalPitch, -0.4, 0.4),
             cervicalYaw: this._clamp(cervicalYaw, -0.9, 0.9),
             leftArmPitch: this._clamp(leftArmPitch, -2.2, 2.2),
-            leftArmRoll: this._clamp(leftArmRoll, -0.5, 2.6),
+            leftArmRoll: this._clamp(leftArmRoll, -0.85, 3.23),
             leftArmYaw: this._clamp(leftArmYaw, -2.2, 2.2),
             leftElbowFlex: this._clamp(leftElbowFlex, 0, 2.7),
             leftForearmTwist: this._clamp(leftForearmTwist, 0, Math.PI),
             leftHandGesture: leftHandGesture,
             rightArmPitch: this._clamp(rightArmPitch, -2.2, 2.2),
-            rightArmRoll: this._clamp(rightArmRoll, -2.6, 0.5),
+            rightArmRoll: this._clamp(rightArmRoll, -3.23, 0.85),
             rightArmYaw: this._clamp(rightArmYaw, -2.2, 2.2),
             rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
@@ -591,11 +591,11 @@ export class TorsoPoseEstimator {
             uArm.normalize();
         }
 
-        // B. 肋骨防穿插約束：下垂時側向維持安全間距
+        // B. 肋骨防穿插約束：僅在手臂下垂且在軀幹高度時維持側向安全間距
         const pShoulderLocal = new THREE.Vector3(sign * 6.5, 8.8, -0.6);
         let pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
 
-        if (sign * pElbowLocal.x < 5.2 && pElbowLocal.y > 0.0 && uArm.z < 0.5) {
+        if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 5.2 && uArm.z < 0.5) {
             pElbowLocal.x = sign * 5.2;
             uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
             pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
@@ -639,24 +639,13 @@ export class TorsoPoseEstimator {
         const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
         const flex = Math.acos(dotFlex);
 
-        // 預設正向法線 (當手臂筆直無屈曲時的解剖朝向：面朝人體前方 +Z)
-        let zDef = new THREE.Vector3(0, 0, 1);
-        const dotZDefY = zDef.dot(yAxis);
-        zDef.sub(yAxis.clone().multiplyScalar(dotZDefY)).normalize();
-        if (zDef.lengthSq() < 1e-4) {
-            zDef = new THREE.Vector3(0, 1, 0).cross(yAxis).normalize();
+        // 正向法線 zAxis (人體前方 +Z 在垂直於大臂長軸的切平面上的正交投影)
+        let zAxis = new THREE.Vector3(0, 0, 1);
+        const dotZY = zAxis.dot(yAxis);
+        zAxis.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
+        if (zAxis.lengthSq() < 1e-4) {
+            zAxis = new THREE.Vector3(0, 1, 0);
         }
-
-        // 實測前臂屈曲展開法線 (uFore 在垂直於 uArm 平面上的正交投影)
-        const uForeOrth = uFore.clone().sub(uArm.clone().multiplyScalar(dotFlex));
-        let zMeas = uForeOrth.normalize();
-        if (zMeas.lengthSq() < 1e-4) {
-            zMeas = zDef.clone();
-        }
-
-        // 平滑權重：消除軸向奇異性，小角度屈曲平滑過渡
-        const w = THREE.MathUtils.clamp((flex - 0.08) / 0.18, 0.0, 1.0);
-        const zAxis = zDef.clone().lerp(zMeas, w).normalize();
 
         // xAxis: 肘關節鉸鏈橫軸 (保證右手法則正交基底)
         const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
@@ -694,8 +683,28 @@ export class TorsoPoseEstimator {
 
         twist = THREE.MathUtils.clamp(twist, 0.1, Math.PI);
 
+        // 7. 歐拉角相位解包與生理極限約束 (Phase Unwrapping & Anatomical Clamping)
+        let roll = euler.z;
+        if (side === 'right') {
+            // 右臂外展/高抬為負向旋轉 (0 -> -90° -> -180°)
+            // 當大臂抬起或過頂時，atan2 可能翻轉至正半周 (+90° ~ +180°)
+            // 進行相位解包以維持連續負角度 (-180° ~ -200°)
+            if (roll > Math.PI * 0.5) {
+                roll -= 2 * Math.PI;
+            }
+            roll = this._clamp(roll, -3.23, 0.85); // 支援直挺挺衝天舉手 (-185°) 至跨胸內收 (+48°)
+        } else {
+            // 左臂外展/高抬為正向旋轉 (0 -> +90° -> +180°)
+            // 當大臂抬起或過頂時，atan2 可能翻轉至負半周 (-90° ~ -180°)
+            // 進行相位解包以維持連續正角度 (+180° ~ +200°)
+            if (roll < -Math.PI * 0.5) {
+                roll += 2 * Math.PI;
+            }
+            roll = this._clamp(roll, -0.85, 3.23); // 支援跨胸內收 (-48°) 至直挺挺衝天舉手 (+185°)
+        }
+
         return {
-            roll: this._clamp(euler.z, side === 'left' ? -0.5 : -2.6, side === 'left' ? 2.6 : 0.5),
+            roll: roll,
             pitch: this._clamp(euler.x, -2.2, 2.2),
             yaw: this._clamp(euler.y, -2.2, 2.2),
             flex: this._clamp(flex, 0, 2.7),
