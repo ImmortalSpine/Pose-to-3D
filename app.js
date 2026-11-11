@@ -39,13 +39,13 @@ class App {
             leftArmRoll: 0.12,
             leftArmYaw: 0,
             leftElbowFlex: 0.15,
-            leftForearmTwist: 0.35,
+            leftForearmTwist: 1.48, // 生理休息位半旋前 (85°)，掌心對準大腿
             leftHandGesture: 'relaxed',
             rightArmPitch: 0,
             rightArmRoll: -0.12,
             rightArmYaw: 0,
             rightElbowFlex: 0.15,
-            rightForearmTwist: 0.35,
+            rightForearmTwist: 1.48, // 生理休息位半旋前 (85°)，掌心對準大腿
             rightHandGesture: 'relaxed'
         };
         this.aiPoseBackup = { ...this.currentPose };
@@ -514,12 +514,12 @@ class App {
                 leftArmRoll: 0.2,
                 leftArmYaw: 0,
                 leftElbowFlex: 0.25,
-                leftForearmTwist: 0.35,
+                leftForearmTwist: 1.48,
                 rightArmPitch: 0.35,
                 rightArmRoll: -1.15, // 右手高抬
                 rightArmYaw: 0,
                 rightElbowFlex: 1.85, // 右肘屈曲比耶
-                rightForearmTwist: 0.4,
+                rightForearmTwist: 0.35,
                 rightHandGesture: 'peace',
                 leftHandGesture: 'relaxed'
             };
@@ -541,12 +541,12 @@ class App {
                 leftArmRoll: 0.45,
                 leftArmYaw: 0,
                 leftElbowFlex: 0.45,
-                leftForearmTwist: 0.3,
+                leftForearmTwist: 1.48,
                 rightArmPitch: 0.2,
                 rightArmRoll: -0.3,
                 rightArmYaw: 0,
                 rightElbowFlex: 0.5,
-                rightForearmTwist: 0.3,
+                rightForearmTwist: 1.48,
                 rightHandGesture: 'relaxed',
                 leftHandGesture: 'relaxed'
             };
