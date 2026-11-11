@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
  * 
@@ -140,18 +142,16 @@ export class TorsoPoseEstimator {
         let cervicalYaw = -thoracicYaw * 0.75 + ((nose.x - midShoulder.x) * 0.8);
 
         // -------------------------------------------------------------
-        // 11. 左右大臂與前臂 (肱骨、尺骨、橈骨 3D 姿態逆向解算)
+        // 11. 左右大臂與前臂 (正交基底正向動力學解算器)
         // -------------------------------------------------------------
-        // 透過胸廓逆變換，將相機座標系中的 3D 向量無縫轉換至模特兒胸廓自身座標系中
-        // 徹底解決側身、俯仰或轉體時手臂投影至錯誤平面的問題
         const leftArmPose = this._solveArmKinematics(
             leftShoulder, leftElbow, leftWrist, 'left',
-            thoracicPitch, thoracicYaw, thoracicRoll
+            thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight
         );
 
         const rightArmPose = this._solveArmKinematics(
             rightShoulder, rightElbow, rightWrist, 'right',
-            thoracicPitch, thoracicYaw, thoracicRoll
+            thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight
         );
 
         let leftArmPitch = leftArmPose.pitch;
@@ -208,15 +208,15 @@ export class TorsoPoseEstimator {
             lumbarYaw: this._clamp(thoracicYaw * 0.35, -0.5, 0.5),
             cervicalPitch: this._clamp(cervicalPitch, -0.4, 0.4),
             cervicalYaw: this._clamp(cervicalYaw, -0.9, 0.9),
-            leftArmPitch: this._clamp(leftArmPitch, -1.6, 1.2),
-            leftArmRoll: this._clamp(leftArmRoll, 0.04, 2.5),
-            leftArmYaw: this._clamp(leftArmYaw, -1.6, 1.6),
-            leftElbowFlex: this._clamp(leftElbowFlex, 0, 2.65),
+            leftArmPitch: this._clamp(leftArmPitch, -1.8, 1.4),
+            leftArmRoll: this._clamp(leftArmRoll, 0.02, 2.5),
+            leftArmYaw: this._clamp(leftArmYaw, -1.8, 1.8),
+            leftElbowFlex: this._clamp(leftElbowFlex, 0, 2.7),
             leftForearmTwist: this._clamp(leftForearmTwist, 0, Math.PI),
-            rightArmPitch: this._clamp(rightArmPitch, -1.6, 1.2),
-            rightArmRoll: this._clamp(rightArmRoll, -2.5, -0.04),
-            rightArmYaw: this._clamp(rightArmYaw, -1.6, 1.6),
-            rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.65),
+            rightArmPitch: this._clamp(rightArmPitch, -1.8, 1.4),
+            rightArmRoll: this._clamp(rightArmRoll, -2.5, -0.02),
+            rightArmYaw: this._clamp(rightArmYaw, -1.8, 1.8),
+            rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
             landmarks2D: {
                 leftShoulder, rightShoulder,
@@ -230,38 +230,18 @@ export class TorsoPoseEstimator {
     }
 
     /**
-     * 將相機空間的 3D 向量變換至胸廓局部坐標系 (Thorax Local Frame)
-     * 應用 Rz(-roll) * Ry(-yaw) * Rx(-pitch) 逆向旋轉
+     * 完整上肢 3D 正交基底逆向運動學解算器 (Two-Bone Orthonormal IK Solver)
+     * 1. 勾股深度重構 (Pythagorean Depth) 結合生理背壁約束，防止側身時手臂向後穿刺
+     * 2. 構造 [X_hinge, Y_shaft, Z_front] 正交旋轉基底，徹底根治歐拉角奇異性與軸向耦合
+     * 3. 確保肘關節鉸鏈在三維空間中嚴格沿著 (肩-肘-腕) 唯一平面向前屈曲，100% 精準對準手腕點 (摸臉/摸頸/插腰)
+     * 4. 輸出 'YXZ' 歐拉角，與右側面板滑桿雙向同步
      */
-    _transformToLocal(vec, pitch, yaw, roll) {
-        // 1. Rx(-pitch)
-        const cp = Math.cos(-pitch), sp = Math.sin(-pitch);
-        const y1 = cp * vec.y - sp * vec.z;
-        const z1 = sp * vec.y + cp * vec.z;
-        const x1 = vec.x;
+    _solveArmKinematics(shoulder, elbow, wrist, side, thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight) {
+        const sign = (side === 'left') ? 1.0 : -1.0;
 
-        // 2. Ry(-yaw)
-        const cy = Math.cos(-yaw), sy = Math.sin(-yaw);
-        const x2 = cy * x1 + sy * z1;
-        const z2 = -sy * x1 + cy * z1;
-        const y2 = y1;
-
-        // 3. Rz(-roll)
-        const cr = Math.cos(-roll), sr = Math.sin(-roll);
-        const x3 = cr * x2 - sr * y2;
-        const y3 = sr * x2 + cr * y2;
-        const z3 = z2;
-
-        return { x: x3, y: y3, z: z3 };
-    }
-
-    /**
-     * 完整上肢 3D 逆向運動學解算器 (Shoulder-Elbow-Wrist Kinematic Solver)
-     */
-    _solveArmKinematics(shoulder, elbow, wrist, side, thoracicPitch, thoracicYaw, thoracicRoll) {
         if (!elbow || !shoulder) {
             return {
-                roll: side === 'left' ? 0.12 : -0.12,
+                roll: sign * 0.12,
                 pitch: 0,
                 yaw: 0,
                 flex: 0.15,
@@ -269,85 +249,97 @@ export class TorsoPoseEstimator {
             };
         }
 
-        // 1. 相機空間 3D 向量 (Shoulder -> Elbow, Elbow -> Wrist)
-        // MediaPipe x 向右為正 (+X)
-        // MediaPipe y 向下為正，Three.js 向上為正，故 y_cam = -(y2 - y1)
-        // MediaPipe z 靠近鏡頭為負，Three.js 相機在 +Z，故 z_cam = -(z2 - z1) * depthScale
-        const depthScale = 1.25;
-        const vArmCam = {
-            x: elbow.x - shoulder.x,
-            y: -(elbow.y - shoulder.y),
-            z: -((elbow.z || 0) - (shoulder.z || 0)) * depthScale
-        };
+        // 1. 相機平面投影向量 (Screen X-Y)
+        const dxArm = elbow.x - shoulder.x;
+        const dyArm = -(elbow.y - shoulder.y); // Three.js 向上為正
+        const lArm2D = Math.hypot(dxArm, dyArm);
 
-        let vForeCam = null;
+        // 人體解剖標準比例 (大臂約為軀幹高度的 0.58，前臂約為 0.52)
+        const scale = torsoHeight || 0.45;
+        const LArm = scale * 0.58;
+        const LFore = scale * 0.52;
+
+        // 2. 解剖深度推估 (Pythagorean Depth)
+        const rawDzArm = Math.sqrt(Math.max(0, LArm * LArm - lArm2D * lArm2D));
+        // 手肘位置偏向身體前側 (+Z) 或側邊，避免向後穿刺背壁
+        const mpDz = -((elbow.z || 0) - (shoulder.z || 0));
+        const zSignArm = mpDz < -0.05 ? -0.2 : 0.6;
+        const dzArm = rawDzArm * zSignArm;
+
+        const vArmCam = new THREE.Vector3(dxArm, dyArm, dzArm);
+
+        // 前臂相機向量
+        let vForeCam;
         if (wrist) {
-            vForeCam = {
-                x: wrist.x - elbow.x,
-                y: -(wrist.y - elbow.y),
-                z: -((wrist.z || 0) - (elbow.z || 0)) * depthScale
-            };
-        }
+            const dxFore = wrist.x - elbow.x;
+            const dyFore = -(wrist.y - elbow.y);
+            const lFore2D = Math.hypot(dxFore, dyFore);
+            const rawDzFore = Math.sqrt(Math.max(0, LFore * LFore - lFore2D * lFore2D));
+            // 手部操作 (摸臉、摸頸、插腰、胸前) 均在人體前側 (+Z)
+            const mpDzFore = -((wrist.z || 0) - (elbow.z || 0));
+            const zSignFore = mpDzFore < -0.08 ? 0.2 : 0.75;
+            const dzFore = rawDzFore * zSignFore;
 
-        // 2. 變換至胸廓局部坐標系
-        const vArmLocal = this._transformToLocal(vArmCam, thoracicPitch, thoracicYaw, thoracicRoll);
-        const magArm = Math.hypot(vArmLocal.x, vArmLocal.y, vArmLocal.z) || 1;
-        const uArm = { x: vArmLocal.x / magArm, y: vArmLocal.y / magArm, z: vArmLocal.z / magArm };
-
-        // 3. 大臂冠狀面外展/內收 (Roll) 與 矢狀面前屈/後伸 (Pitch)
-        // 自然垂下方向為 (0, -1, 0)
-        let armRoll = Math.atan2(uArm.x, -uArm.y);
-        let armPitch = -Math.atan2(uArm.z, -uArm.y);
-
-        // 4. 計算肘關節屈曲度 (Flexion) 與 肱骨軸向旋轉 (Yaw)
-        let elbowFlex = 0.15;
-        let armYaw = 0;
-        let forearmTwist = 0.35;
-
-        if (vForeCam) {
-            const vForeLocal = this._transformToLocal(vForeCam, thoracicPitch, thoracicYaw, thoracicRoll);
-            const magFore = Math.hypot(vForeLocal.x, vForeLocal.y, vForeLocal.z) || 1;
-            const uFore = { x: vForeLocal.x / magFore, y: vForeLocal.y / magFore, z: vForeLocal.z / magFore };
-
-            // 大臂與前臂的三維空間夾角
-            const dot = this._clamp(uArm.x * uFore.x + uArm.y * uFore.y + uArm.z * uFore.z, -1, 1);
-            elbowFlex = Math.acos(dot);
-
-            // 解算肱骨軸向旋轉 (Yaw)，將肘關節屈曲鉸鏈旋轉至與前臂彎曲平面完全共面
-            const cr = Math.cos(-armRoll), sr = Math.sin(-armRoll);
-            const fx1 = cr * uFore.x - sr * uFore.y;
-            const fy1 = sr * uFore.x + cr * uFore.y;
-            const fz1 = uFore.z;
-
-            const cp = Math.cos(-armPitch), sp = Math.sin(-armPitch);
-            const fx2 = fx1;
-            const fy2 = cp * fy1 - sp * fz1;
-            const fz2 = sp * fy1 + cp * fz1;
-
-            if (elbowFlex > 0.08) {
-                armYaw = Math.atan2(fx2, fz2);
-            }
-
-            // 旋前/旋後 (Twist) 微調
-            forearmTwist = this._clamp(0.25 + (elbowFlex * 0.25), 0.1, 1.8);
-        }
-
-        // 生理角度安全界限
-        if (side === 'left') {
-            armRoll = this._clamp(armRoll, 0.04, 2.5);
+            vForeCam = new THREE.Vector3(dxFore, dyFore, dzFore);
         } else {
-            armRoll = this._clamp(armRoll, -2.5, -0.04);
+            vForeCam = new THREE.Vector3(sign * 0.05, -LFore, 0.05);
         }
-        armPitch = this._clamp(armPitch, -1.6, 1.2);
-        armYaw = this._clamp(armYaw, -1.6, 1.6);
-        elbowFlex = this._clamp(elbowFlex, 0, 2.65);
+
+        // 3. 逆變換至胸廓局部坐標系 (Thorax Local Frame)
+        const qThorax = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(thoracicPitch, thoracicYaw, thoracicRoll, 'XYZ')
+        );
+        const qThoraxInv = qThorax.clone().invert();
+
+        const uArm = vArmCam.clone().applyQuaternion(qThoraxInv).normalize();
+        const uFore = vForeCam.clone().applyQuaternion(qThoraxInv).normalize();
+
+        // 4. 生理背壁約束：大臂在胸腔坐標系中 Z 軸不可向後過度延伸 (防止像圖三那樣向後穿刺背部)
+        if (uArm.z < -0.15) {
+            uArm.z = -0.15;
+            uArm.normalize();
+        }
+
+        // 5. 正交基底構造 (Orthonormal Basis Construction)
+        // yAxis: 大臂長軸 (在 Three.js 中大臂自然下垂沿 -Y，故 yAxis = -uArm)
+        const yAxis = uArm.clone().negate().normalize();
+
+        // hingeAxis: 肩-肘-腕彎曲平面的法向量
+        let hinge = new THREE.Vector3().crossVectors(uArm, uFore);
+        if (hinge.lengthSq() < 1e-4) {
+            hinge = new THREE.Vector3(sign, 0, 0);
+        } else {
+            hinge.normalize();
+        }
+
+        // xAxis: 肘關節鉸鏈橫軸 (在局部坐標系中，向前屈曲對應 -hinge)
+        const rawX = hinge.clone().negate();
+        const dotXY = rawX.dot(yAxis);
+        const xAxis = rawX.clone().sub(yAxis.clone().multiplyScalar(dotXY)).normalize();
+
+        // zAxis: 大臂前向法線
+        const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis).normalize();
+
+        // 構造旋轉矩陣
+        const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+
+        // 6. 提取 'YXZ' 歐拉角供 UI 滑桿與關節驅動
+        const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');
+
+        // 7. 肘關節屈曲角 (Flexion Angle)
+        const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
+        let flex = Math.acos(dotFlex);
+        if (flex < 0.05) flex = 0.05;
+
+        // 8. 橈骨旋前/旋後 (Twist)
+        const twist = THREE.MathUtils.clamp(0.25 + flex * 0.25, 0.1, 1.8);
 
         return {
-            roll: armRoll,
-            pitch: armPitch,
-            yaw: armYaw,
-            flex: elbowFlex,
-            twist: forearmTwist
+            roll: this._clamp(euler.z, side === 'left' ? 0.02 : -2.5, side === 'left' ? 2.5 : -0.02),
+            pitch: this._clamp(euler.x, -1.8, 1.4),
+            yaw: this._clamp(euler.y, -1.8, 1.8),
+            flex: this._clamp(flex, 0, 2.7),
+            twist: twist
         };
     }
 

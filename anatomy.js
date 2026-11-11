@@ -834,23 +834,26 @@ export class AnatomicalTorso {
             jL.rotation.z = safeRollL;
 
             if (this.shoulderGirdle.left.clavicle) {
-                this.shoulderGirdle.left.clavicle.rotation.z = safeRollL * 0.15;
-                this.shoulderGirdle.left.clavicle.rotation.y = -leftArmPitch * 0.1;
+                // 生理肩肱節律 (Scapulohumeral Rhythm: 只有在外展超過 ~45° 時鎖骨才自然微抬)
+                const elevL = Math.max(0, safeRollL - 0.75) * 0.12;
+                this.shoulderGirdle.left.clavicle.rotation.z = elevL;
+                this.shoulderGirdle.left.clavicle.rotation.y = -leftArmPitch * 0.05;
             }
         }
 
         // 6. 右大臂肱骨
         if (this.shoulderGirdle.right.humerusJoint) {
             const jR = this.shoulderGirdle.right.humerusJoint;
-            const safeRollR = Math.min(-0.04, rightArmRoll);
+            const safeRollR = Math.min(-0.02, rightArmRoll);
             jR.rotation.order = 'YXZ';
             jR.rotation.x = rightArmPitch;
             jR.rotation.y = rightArmYaw;
             jR.rotation.z = safeRollR;
 
             if (this.shoulderGirdle.right.clavicle) {
-                this.shoulderGirdle.right.clavicle.rotation.z = safeRollR * 0.15;
-                this.shoulderGirdle.right.clavicle.rotation.y = -rightArmPitch * 0.1;
+                const elevR = Math.min(0, safeRollR + 0.75) * 0.12;
+                this.shoulderGirdle.right.clavicle.rotation.z = elevR;
+                this.shoulderGirdle.right.clavicle.rotation.y = -rightArmPitch * 0.05;
             }
         }
 
