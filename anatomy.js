@@ -1155,7 +1155,7 @@ export class AnatomicalTorso {
         // 5. 左大臂肱骨
         if (this.shoulderGirdle.left.humerusJoint) {
             const jL = this.shoulderGirdle.left.humerusJoint;
-            const safeRollL = Math.max(0.08, leftArmRoll);
+            const safeRollL = leftArmRoll;
             jL.rotation.order = 'YXZ';
             jL.rotation.x = leftArmPitch;
             jL.rotation.y = leftArmYaw;
@@ -1172,7 +1172,7 @@ export class AnatomicalTorso {
         // 6. 右大臂肱骨
         if (this.shoulderGirdle.right.humerusJoint) {
             const jR = this.shoulderGirdle.right.humerusJoint;
-            const safeRollR = Math.min(-0.08, rightArmRoll);
+            const safeRollR = rightArmRoll;
             jR.rotation.order = 'YXZ';
             jR.rotation.x = rightArmPitch;
             jR.rotation.y = rightArmYaw;
