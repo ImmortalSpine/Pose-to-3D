@@ -48,15 +48,17 @@ export class AnatomicalTorso {
         this.ribsRight = [];
         this.sternum = null;
 
-        // 肩帶與上肢 (含大臂肱骨、前臂尺骨與橈骨)
+        // 肩帶與上肢 (含大臂肱骨、前臂尺骨與橈骨、手腕與掌指骨)
         this.shoulderGirdle = {
             left: {
                 clavicle: null, scapula: null, humerus: null, humerusJoint: null,
-                elbowJoint: null, ulna: null, radiusGroup: null, radiusMesh: null
+                elbowJoint: null, ulna: null, radiusGroup: null, radiusMesh: null,
+                handGroup: null, handMesh: null, handJoints: null, currentGesture: 'relaxed'
             },
             right: {
                 clavicle: null, scapula: null, humerus: null, humerusJoint: null,
-                elbowJoint: null, ulna: null, radiusGroup: null, radiusMesh: null
+                elbowJoint: null, ulna: null, radiusGroup: null, radiusMesh: null,
+                handGroup: null, handMesh: null, handJoints: null, currentGesture: 'relaxed'
             }
         };
 
@@ -246,7 +248,20 @@ export class AnatomicalTorso {
         elbowJoint.add(radiusGroup);
         this.shoulderGirdle[side].radiusGroup = radiusGroup;
 
-        // 初始化平行旋後姿態的橈骨
+        // 8. 手掌骨骼系統 (Carpals, Metacarpals, Phalanges)
+        // 依附於肘關節坐標系，並於 _updateRadiusMesh 中與橈骨遠端 pEnd 動態旋轉翻轉緊密鎖定
+        const handGroup = new THREE.Group();
+        handGroup.name = `Hand_Group_${side}`;
+        elbowJoint.add(handGroup);
+        this.shoulderGirdle[side].handGroup = handGroup;
+
+        // 建立完整手部骨骼結構與指節關節鏈
+        const handData = this._buildHandMesh(side, 'relaxed');
+        handGroup.add(handData.mesh);
+        this.shoulderGirdle[side].handMesh = handData.mesh;
+        this.shoulderGirdle[side].handJoints = handData.joints;
+
+        // 初始化平行旋後姿態的橈骨與手掌
         this._updateRadiusMesh(side, 0.2); // 預設微旋前
 
         // 標記關鍵解剖骨點
@@ -379,6 +394,316 @@ export class AnatomicalTorso {
 
         radiusGroup.add(group);
         this.shoulderGirdle[side].radiusMesh = group;
+
+        // 5. 手掌系統動態定位與前旋/後旋同步 (Hand Dynamic Coupling)
+        // 手腕關節面直接緊扣橈骨遠端 (Radiocarpal Joint)，掌心與五指隨橈骨旋前/旋後動態翻轉！
+        const handGroup = this.shoulderGirdle[side].handGroup;
+        if (handGroup) {
+            // 手腕關節線位於橈骨遠端下緣，留 0.35 單位生理關節間隙
+            handGroup.position.set(distalX, -radiusLen - 0.35, distalZ);
+            // 手掌沿前臂長軸隨橈骨遠端旋轉角完全同步旋轉 (旋後 twist=0: 掌心向前; 旋前 twist=PI: 掌心向後)
+            handGroup.rotation.y = twistAngle;
+        }
+    }
+
+    /**
+     * 建立完整手部骨骼系統 (8塊腕骨 Carpals、5根掌骨 Metacarpals、14節指骨 Phalanges)
+     * 並構建關節鏈以支援自然放鬆 (Relaxed)、勝利剪刀手 (Peace)、握拳 (Fist)、平展 (Open) 等藝用手勢姿態
+     */
+    _buildHandMesh(side, gesture = 'relaxed') {
+        const sign = (side === 'left') ? 1 : -1;
+        const group = new THREE.Group();
+        group.name = `Hand_${side}`;
+
+        // -------------------------------------------------------------
+        // 1. 腕骨群 (Carpal Bones - 8塊腕骨構成的穹窿腕弓 Carpal Arch)
+        // -------------------------------------------------------------
+        const carpalGroup = new THREE.Group();
+        carpalGroup.name = `Carpals_${side}`;
+        group.add(carpalGroup);
+
+        // 近側列 (Proximal row): 舟狀骨、月狀骨、三角骨、豆狀骨
+        // (1) 舟狀骨 (Scaphoid): 橈側承重主力，呈彎舟狀
+        const scaphoidGeo = new THREE.CylinderGeometry(0.20, 0.23, 0.58, 8);
+        const scaphoidMesh = new THREE.Mesh(scaphoidGeo, this.materials.bone);
+        scaphoidMesh.rotation.z = sign * 0.35;
+        scaphoidMesh.rotation.y = 0.2;
+        scaphoidMesh.position.set(sign * 0.38, -0.38, 0.0);
+        carpalGroup.add(scaphoidMesh);
+
+        // 舟狀骨粗隆 (Scaphoid Tubercle - 大魚際肌起點，掌側骨點)
+        const scaphoidTubercleGeo = new THREE.SphereGeometry(0.16, 8, 8);
+        const scaphoidTubercleMesh = new THREE.Mesh(scaphoidTubercleGeo, this.materials.boneHighlight);
+        scaphoidTubercleMesh.position.set(sign * 0.46, -0.48, 0.26);
+        carpalGroup.add(scaphoidTubercleMesh);
+
+        // (2) 月狀骨 (Lunate): 位於橈腕關節正中切凹處，呈半月形
+        const lunateGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.50, 8);
+        const lunateMesh = new THREE.Mesh(lunateGeo, this.materials.bone);
+        lunateMesh.rotation.x = Math.PI * 0.5;
+        lunateMesh.position.set(sign * 0.02, -0.34, -0.02);
+        carpalGroup.add(lunateMesh);
+
+        // (3) 三角骨 (Triquetrum): 位於尺側，呈錐形
+        const triquetrumGeo = new THREE.BoxGeometry(0.35, 0.44, 0.38);
+        const triquetrumMesh = new THREE.Mesh(triquetrumGeo, this.materials.bone);
+        triquetrumMesh.position.set(-sign * 0.38, -0.38, -0.05);
+        carpalGroup.add(triquetrumMesh);
+
+        // (4) 豆狀骨 (Pisiform - 極其重要的藝用表面骨點，位於手腕尺側掌面最突出處！)
+        const pisiformGeo = new THREE.SphereGeometry(0.20, 10, 10);
+        const pisiformMesh = new THREE.Mesh(pisiformGeo, this.materials.boneHighlight);
+        pisiformMesh.scale.set(1.0, 1.25, 0.9);
+        pisiformMesh.position.set(-sign * 0.44, -0.52, 0.30);
+        carpalGroup.add(pisiformMesh);
+        this._addLandmark(`Pisiform_${side}`, pisiformMesh.position.clone(), group);
+
+        // 遠側列 (Distal row): 大多角骨、小多角骨、頭狀骨、鉤骨
+        // (5) 大多角骨 (Trapezium): 具備馬鞍狀關節面，連接第一掌骨實現拇指對掌
+        const trapeziumGeo = new THREE.BoxGeometry(0.38, 0.40, 0.40);
+        const trapeziumMesh = new THREE.Mesh(trapeziumGeo, this.materials.bone);
+        trapeziumMesh.position.set(sign * 0.48, -0.72, 0.12);
+        carpalGroup.add(trapeziumMesh);
+
+        // (6) 小多角骨 (Trapezoid): 楔形嵌入第二掌骨底
+        const trapezoidGeo = new THREE.BoxGeometry(0.30, 0.40, 0.34);
+        const trapezoidMesh = new THREE.Mesh(trapezoidGeo, this.materials.bone);
+        trapezoidMesh.position.set(sign * 0.24, -0.75, 0.02);
+        carpalGroup.add(trapezoidMesh);
+
+        // (7) 頭狀骨 (Capitate - 最大的腕骨，腕弓拱頂石，支撐第三掌骨)
+        const capitateGeo = new THREE.BoxGeometry(0.42, 0.50, 0.42);
+        const capitateMesh = new THREE.Mesh(capitateGeo, this.materials.bone);
+        capitateMesh.position.set(sign * 0.02, -0.78, 0.04);
+        carpalGroup.add(capitateMesh);
+
+        // (8) 鉤骨 (Hamate): 支撐第四、五掌骨
+        const hamateGeo = new THREE.BoxGeometry(0.38, 0.44, 0.38);
+        const hamateMesh = new THREE.Mesh(hamateGeo, this.materials.bone);
+        hamateMesh.position.set(-sign * 0.30, -0.75, 0.0);
+        carpalGroup.add(hamateMesh);
+
+        // 鉤骨鉤 (Hook of Hamate - 掌側突出骨鉤)
+        const hamateHookGeo = new THREE.ConeGeometry(0.10, 0.30, 6);
+        const hamateHookMesh = new THREE.Mesh(hamateHookGeo, this.materials.boneHighlight);
+        hamateHookMesh.rotation.x = Math.PI * 0.5;
+        hamateHookMesh.position.set(-sign * 0.30, -0.80, 0.25);
+        carpalGroup.add(hamateHookMesh);
+
+        // -------------------------------------------------------------
+        // 2. 掌骨群 (Metacarpals 1 to 5)
+        // -------------------------------------------------------------
+        const mcGroup = new THREE.Group();
+        mcGroup.name = `Metacarpals_${side}`;
+        group.add(mcGroup);
+
+        const mcConfigs = [
+            { name: 'Thumb',  base: new THREE.Vector3(sign * 0.48, -0.75, 0.14),  len: 1.60, latDeg: sign * 36, palmarDeg: 22, radShaft: 0.16, headScale: 0.22 },
+            { name: 'Index',  base: new THREE.Vector3(sign * 0.26, -0.82, 0.02),  len: 2.10, latDeg: sign * 6,  palmarDeg: 4,  radShaft: 0.14, headScale: 0.22 },
+            { name: 'Middle', base: new THREE.Vector3(sign * 0.02, -0.85, 0.04),  len: 2.25, latDeg: 0,         palmarDeg: 2,  radShaft: 0.15, headScale: 0.24 },
+            { name: 'Ring',   base: new THREE.Vector3(-sign * 0.18, -0.82, 0.02), len: 2.05, latDeg: -sign * 5, palmarDeg: 4,  radShaft: 0.13, headScale: 0.21 },
+            { name: 'Little', base: new THREE.Vector3(-sign * 0.36, -0.75, -0.02),len: 1.75, latDeg: -sign * 12,palmarDeg: 6,  radShaft: 0.12, headScale: 0.20 },
+        ];
+
+        const mcpJoints = {};
+
+        mcConfigs.forEach(mc => {
+            const sRad = THREE.MathUtils.degToRad(mc.latDeg);
+            const pRad = THREE.MathUtils.degToRad(mc.palmarDeg);
+            const dx = Math.sin(sRad);
+            const dz = Math.sin(pRad);
+            const dy = -Math.sqrt(Math.max(0.001, 1.0 - dx * dx - dz * dz));
+            const dir = new THREE.Vector3(dx, dy, dz).normalize();
+
+            const mcpPos = new THREE.Vector3().copy(mc.base).addScaledVector(dir, mc.len);
+            mcpJoints[mc.name] = { mcpPos, dir, mc };
+
+            // 掌骨骨幹 (Metacarpal Shaft: 微具掌側凹曲度的管狀骨)
+            const midP = new THREE.Vector3().copy(mc.base).addScaledVector(dir, mc.len * 0.5);
+            midP.z += (mc.name === 'Thumb' ? 0.08 : 0.04); // 掌側生理弧度
+            const mcCurve = new THREE.CatmullRomCurve3([mc.base, midP, mcpPos]);
+            const shaftGeo = new THREE.TubeGeometry(mcCurve, 8, mc.radShaft, 8, false);
+            const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
+            shaftMesh.castShadow = true;
+            mcGroup.add(shaftMesh);
+
+            // 掌骨頭 (MCP Knuckle: 拳頭握緊時突出的指節骨點)
+            const knuckleGeo = new THREE.SphereGeometry(mc.headScale, 10, 10);
+            const knuckleMesh = new THREE.Mesh(knuckleGeo, this.materials.boneHighlight);
+            knuckleMesh.position.copy(mcpPos);
+            mcGroup.add(knuckleMesh);
+
+            if (mc.name === 'Thumb' || mc.name === 'Index' || mc.name === 'Middle') {
+                this._addLandmark(`MCP_${mc.name}_${side}`, mcpPos.clone(), group);
+            }
+        });
+
+        // -------------------------------------------------------------
+        // 3. 指骨群 (Phalanges - 拇指2節，食/中/無名/小指各3節，共14節)
+        // 構建層級旋轉關節鏈 (MCP -> PIP -> DIP)，支援動態曲折手勢
+        // -------------------------------------------------------------
+        const phalangesGroup = new THREE.Group();
+        phalangesGroup.name = `Phalanges_${side}`;
+        group.add(phalangesGroup);
+
+        const fingerConfigs = [
+            { name: 'Thumb',  pLen: 1.05, mLen: 0,    dLen: 0.80, pRad: 0.14, dRad: 0.12, tuft: [0.22, 0.18, 0.12] },
+            { name: 'Index',  pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
+            { name: 'Middle', pLen: 1.15, mLen: 0.75, dLen: 0.55, pRad: 0.14, mRad: 0.12, dRad: 0.10, tuft: [0.19, 0.15, 0.09] },
+            { name: 'Ring',   pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
+            { name: 'Little', pLen: 0.80, mLen: 0.52, dLen: 0.40, pRad: 0.11, mRad: 0.09, dRad: 0.07, tuft: [0.15, 0.12, 0.07] },
+        ];
+
+        const joints = {};
+
+        fingerConfigs.forEach(fc => {
+            const { mcpPos, dir } = mcpJoints[fc.name];
+
+            // 掌指關節 (MCP Joint Group)
+            const mcpJoint = new THREE.Group();
+            mcpJoint.name = `MCP_Joint_${fc.name}_${side}`;
+            mcpJoint.position.copy(mcpPos);
+            // 朝向指骨延伸向量
+            mcpJoint.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
+
+            if (fc.name === 'Thumb') {
+                // 拇指對掌生理偏轉角 (Opposition)
+                mcpJoint.rotation.y += sign * 0.55;
+                mcpJoint.rotation.z += sign * 0.45;
+            }
+
+            phalangesGroup.add(mcpJoint);
+
+            // 近節指骨 (Proximal Phalanx)
+            const pShaftGeo = new THREE.CylinderGeometry(fc.pRad * 0.85, fc.pRad, fc.pLen, 8);
+            const pShaftMesh = new THREE.Mesh(pShaftGeo, this.materials.bone);
+            pShaftMesh.position.set(0, -fc.pLen * 0.5, 0);
+            mcpJoint.add(pShaftMesh);
+
+            // 近端指間關節 (PIP Joint Group / 拇指為 IP 關節)
+            const pipJoint = new THREE.Group();
+            pipJoint.name = `PIP_Joint_${fc.name}_${side}`;
+            pipJoint.position.set(0, -fc.pLen, 0);
+            mcpJoint.add(pipJoint);
+
+            const pipKnuckleGeo = new THREE.SphereGeometry(fc.pRad * 1.1, 8, 8);
+            const pipKnuckleMesh = new THREE.Mesh(pipKnuckleGeo, this.materials.boneHighlight);
+            pipJoint.add(pipKnuckleMesh);
+
+            let dipJoint = null;
+
+            if (fc.mLen > 0) {
+                // 2-5 指具備中節指骨 (Middle Phalanx)
+                const mShaftGeo = new THREE.CylinderGeometry(fc.mRad * 0.85, fc.mRad, fc.mLen, 8);
+                const mShaftMesh = new THREE.Mesh(mShaftGeo, this.materials.bone);
+                mShaftMesh.position.set(0, -fc.mLen * 0.5, 0);
+                pipJoint.add(mShaftMesh);
+
+                // 遠端指間關節 (DIP Joint Group)
+                dipJoint = new THREE.Group();
+                dipJoint.name = `DIP_Joint_${fc.name}_${side}`;
+                dipJoint.position.set(0, -fc.mLen, 0);
+                pipJoint.add(dipJoint);
+
+                const dipKnuckleGeo = new THREE.SphereGeometry(fc.mRad * 1.05, 8, 8);
+                const dipKnuckleMesh = new THREE.Mesh(dipKnuckleGeo, this.materials.boneHighlight);
+                dipJoint.add(dipKnuckleMesh);
+
+                // 遠節指骨 (Distal Phalanx)
+                const dShaftGeo = new THREE.CylinderGeometry(fc.dRad * 0.8, fc.dRad, fc.dLen, 8);
+                const dShaftMesh = new THREE.Mesh(dShaftGeo, this.materials.bone);
+                dShaftMesh.position.set(0, -fc.dLen * 0.5, 0);
+                dipJoint.add(dShaftMesh);
+
+                // 指甲粗隆 / 指尖膨大部 (Ungual Tuberosity)
+                const tuftGeo = new THREE.BoxGeometry(...fc.tuft);
+                const tuftMesh = new THREE.Mesh(tuftGeo, this.materials.boneHighlight);
+                tuftMesh.position.set(0, -fc.dLen, 0);
+                dipJoint.add(tuftMesh);
+            } else {
+                // 拇指僅有遠節指骨
+                const dShaftGeo = new THREE.CylinderGeometry(fc.dRad * 0.85, fc.dRad, fc.dLen, 8);
+                const dShaftMesh = new THREE.Mesh(dShaftGeo, this.materials.bone);
+                dShaftMesh.position.set(0, -fc.dLen * 0.5, 0);
+                pipJoint.add(dShaftMesh);
+
+                const tuftGeo = new THREE.BoxGeometry(...fc.tuft);
+                const tuftMesh = new THREE.Mesh(tuftGeo, this.materials.boneHighlight);
+                tuftMesh.position.set(0, -fc.dLen, 0);
+                pipJoint.add(tuftMesh);
+            }
+
+            joints[fc.name] = { mcpJoint, pipJoint, dipJoint, name: fc.name };
+        });
+
+        // 應用手勢初始姿態
+        this._applyHandGestureDirect(joints, side, gesture);
+
+        return { mesh: group, joints };
+    }
+
+    /**
+     * 驅動手部關節鏈達成各種藝用姿態 (Relaxed, Peace/Victory, Fist, Open)
+     */
+    _applyHandGestureDirect(joints, side, gesture = 'relaxed') {
+        const sign = (side === 'left') ? 1 : -1;
+        const GESTURES = {
+            relaxed: { // 自然放鬆微屈曲手勢
+                Thumb:  { mcp: 0.15, pip: 0.22, dip: 0.15, spread: 0 },
+                Index:  { mcp: 0.15, pip: 0.25, dip: 0.15, spread: 0 },
+                Middle: { mcp: 0.20, pip: 0.32, dip: 0.18, spread: 0 },
+                Ring:   { mcp: 0.25, pip: 0.38, dip: 0.20, spread: 0 },
+                Little: { mcp: 0.30, pip: 0.45, dip: 0.22, spread: 0 }
+            },
+            peace: { // 剪刀手 / 勝利手勢 (食指與中指伸直呈V字張開，拇指與無名指小指彎曲緊握)
+                Thumb:  { mcp: 0.70, pip: 1.05, dip: 0.60, spread: 0 },
+                Index:  { mcp: 0.02, pip: 0.04, dip: 0.02, spread: sign * 0.10 },  // 伸直微外張
+                Middle: { mcp: 0.02, pip: 0.04, dip: 0.02, spread: -sign * 0.10 }, // 伸直微內張
+                Ring:   { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },             // 緊密屈曲
+                Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }              // 緊密屈曲
+            },
+            open: { // 五指伸展張開
+                Thumb:  { mcp: 0.05, pip: 0.05, dip: 0.05, spread: sign * 0.15 },
+                Index:  { mcp: 0.00, pip: 0.00, dip: 0.00, spread: sign * 0.08 },
+                Middle: { mcp: 0.00, pip: 0.00, dip: 0.00, spread: 0 },
+                Ring:   { mcp: 0.00, pip: 0.00, dip: 0.00, spread: -sign * 0.08 },
+                Little: { mcp: 0.00, pip: 0.00, dip: 0.00, spread: -sign * 0.15 }
+            },
+            fist: { // 緊密握拳 (拳頭姿態)
+                Thumb:  { mcp: 0.95, pip: 1.35, dip: 0.90, spread: 0 },
+                Index:  { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },
+                Middle: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
+                Ring:   { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
+                Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }
+            }
+        };
+
+        const config = GESTURES[gesture] || GESTURES.relaxed;
+
+        Object.keys(joints).forEach(fingerName => {
+            const j = joints[fingerName];
+            const angles = config[fingerName] || { mcp: 0, pip: 0, dip: 0, spread: 0 };
+
+            if (j.mcpJoint) {
+                // X 軸負向旋轉即為掌側屈曲 (Flexion)
+                j.mcpJoint.rotation.x = -angles.mcp;
+                if (angles.spread !== undefined) {
+                    j.mcpJoint.rotation.z = angles.spread;
+                }
+            }
+            if (j.pipJoint) {
+                j.pipJoint.rotation.x = -angles.pip;
+            }
+            if (j.dipJoint) {
+                j.dipJoint.rotation.x = -angles.dip;
+            }
+        });
+    }
+
+    setHandGesture(side, gesture) {
+        if (!this.shoulderGirdle[side] || !this.shoulderGirdle[side].handJoints) return;
+        this.shoulderGirdle[side].currentGesture = gesture;
+        this._applyHandGestureDirect(this.shoulderGirdle[side].handJoints, side, gesture);
     }
 
     _buildPelvis() {
@@ -795,7 +1120,10 @@ export class AnatomicalTorso {
         leftElbowFlex = 0.2,
         leftForearmTwist = 0.3,
         rightElbowFlex = 0.2,
-        rightForearmTwist = 0.3
+        rightForearmTwist = 0.3,
+        // 手部姿態手勢 (Relaxed, Peace, Fist, Open)
+        leftHandGesture = null,
+        rightHandGesture = null
     }) {
         // 1. 骨盆整體單元旋轉
         this.pelvisUnit.rotation.x = pelvisPitch;
@@ -868,6 +1196,14 @@ export class AnatomicalTorso {
             this.shoulderGirdle.right.elbowJoint.rotation.x = -rightElbowFlex;
             this._updateRadiusMesh('right', rightForearmTwist);
         }
+
+        // 9. 手部手勢更新
+        if (leftHandGesture) {
+            this.setHandGesture('left', leftHandGesture);
+        }
+        if (rightHandGesture) {
+            this.setHandGesture('right', rightHandGesture);
+        }
     }
 
     toggleLandmarks(visible) {
@@ -898,8 +1234,19 @@ export class AnatomicalTorso {
 
     toggleForearms(visible) {
         ['left', 'right'].forEach(side => {
-            if (this.shoulderGirdle[side].elbowJoint) {
-                this.shoulderGirdle[side].elbowJoint.visible = visible;
+            if (this.shoulderGirdle[side].ulna) {
+                this.shoulderGirdle[side].ulna.visible = visible;
+            }
+            if (this.shoulderGirdle[side].radiusGroup) {
+                this.shoulderGirdle[side].radiusGroup.visible = visible;
+            }
+        });
+    }
+
+    toggleHands(visible) {
+        ['left', 'right'].forEach(side => {
+            if (this.shoulderGirdle[side].handGroup) {
+                this.shoulderGirdle[side].handGroup.visible = visible;
             }
         });
     }

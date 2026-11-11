@@ -125,6 +125,13 @@
                     </label>
                 </div>
                 <div class="toggle-row">
+                    <span>手部骨骼 (腕骨、掌骨、指骨)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleHands" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
                     <span>骨盆系統 (髂/坐/恥/薦/尾骨)</span>
                     <label class="toggle-switch">
                         <input type="checkbox" id="togglePelvis" checked>
@@ -139,8 +146,9 @@
                     </label>
                 </div>
                 <div class="info-callout">
-                    <b>肩帶解剖約束：</b><br>
-                    鎖骨內側咬合於胸骨柄，外側端與肩胛骨肩峰相接；肩胛岡斜貫背部；肱骨頭精確納於關節盂內，隨肩肱節律自然聯動。
+                    <b>前臂與手掌解剖聯動：</b><br>
+                    • 尺骨為肘部樞紐軸心；橈骨隨前臂<b>旋前/旋後 (Pronation/Supination)</b>跨越尺骨剪刀交叉。<br>
+                    • <b>手掌 (腕骨、掌骨、指骨)</b>牢固嵌合於橈骨遠端，掌心與五指隨橈骨旋前/旋後動態翻轉。
                 </div>
             </div>
 
@@ -249,6 +257,18 @@
 
                 <div class="control-row">
                     <div class="control-label-wrap">
+                        <span>右手手勢 (Right Hand Gesture)</span>
+                    </div>
+                    <select class="form-select" id="selectRightHandGesture" style="width: 100%; background: #1a1a24; color: #eee; border: 1px solid #3d3d52; padding: 6px 10px; border-radius: 6px; margin-top: 4px; font-size: 13px;">
+                        <option value="relaxed">自然放鬆微弧 (Relaxed)</option>
+                        <option value="peace">勝利剪刀手 (Peace / YA)</option>
+                        <option value="fist">握拳姿態 (Fist)</option>
+                        <option value="open">張開平展 (Open Palm)</option>
+                    </select>
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
                         <span>左臂外展/內收 (Left Arm Roll)</span>
                         <span class="control-val" id="valLeftArmRoll">7°</span>
                     </div>
@@ -285,6 +305,18 @@
                         <span class="control-val" id="valLeftForearmTwist">20°</span>
                     </div>
                     <input type="range" class="range-slider" id="sliderLeftForearmTwist" min="0" max="180" value="20">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左手手勢 (Left Hand Gesture)</span>
+                    </div>
+                    <select class="form-select" id="selectLeftHandGesture" style="width: 100%; background: #1a1a24; color: #eee; border: 1px solid #3d3d52; padding: 6px 10px; border-radius: 6px; margin-top: 4px; font-size: 13px;">
+                        <option value="relaxed">自然放鬆微弧 (Relaxed)</option>
+                        <option value="peace">勝利剪刀手 (Peace / YA)</option>
+                        <option value="fist">握拳姿態 (Fist)</option>
+                        <option value="open">張開平展 (Open Palm)</option>
+                    </select>
                 </div>
             </div>
         </aside>

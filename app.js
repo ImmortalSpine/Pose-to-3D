@@ -40,11 +40,13 @@ class App {
             leftArmYaw: 0,
             leftElbowFlex: 0.15,
             leftForearmTwist: 0.35,
+            leftHandGesture: 'relaxed',
             rightArmPitch: 0,
             rightArmRoll: -0.12,
             rightArmYaw: 0,
             rightElbowFlex: 0.15,
-            rightForearmTwist: 0.35
+            rightForearmTwist: 0.35,
+            rightHandGesture: 'relaxed'
         };
         this.aiPoseBackup = { ...this.currentPose };
 
@@ -169,6 +171,9 @@ class App {
         document.getElementById('toggleForearms').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleForearms(e.target.checked);
         });
+        document.getElementById('toggleHands').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleHands(e.target.checked);
+        });
         document.getElementById('togglePelvis').addEventListener('change', (e) => {
             this.anatomicalTorso.togglePelvis(e.target.checked);
         });
@@ -220,6 +225,23 @@ class App {
         this._bindSlider('sliderLeftArmYaw', 'valLeftArmYaw', 'leftArmYaw');
         this._bindSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', 'leftElbowFlex');
         this._bindSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', 'leftForearmTwist');
+
+        // 手部手勢選擇器
+        const selRightGest = document.getElementById('selectRightHandGesture');
+        if (selRightGest) {
+            selRightGest.addEventListener('change', (e) => {
+                this.currentPose.rightHandGesture = e.target.value;
+                this.anatomicalTorso.setHandGesture('right', e.target.value);
+            });
+        }
+
+        const selLeftGest = document.getElementById('selectLeftHandGesture');
+        if (selLeftGest) {
+            selLeftGest.addEventListener('change', (e) => {
+                this.currentPose.leftHandGesture = e.target.value;
+                this.anatomicalTorso.setHandGesture('left', e.target.value);
+            });
+        }
 
         // 重置為 AI 姿態
         document.getElementById('btnResetPose').addEventListener('click', () => {
@@ -277,6 +299,16 @@ class App {
         setSlider('sliderLeftArmYaw', 'valLeftArmYaw', this.currentPose.leftArmYaw);
         setSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', this.currentPose.leftElbowFlex);
         setSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', this.currentPose.leftForearmTwist);
+
+        const selRG = document.getElementById('selectRightHandGesture');
+        if (selRG && this.currentPose.rightHandGesture) {
+            selRG.value = this.currentPose.rightHandGesture;
+        }
+
+        const selLG = document.getElementById('selectLeftHandGesture');
+        if (selLG && this.currentPose.leftHandGesture) {
+            selLG.value = this.currentPose.leftHandGesture;
+        }
     }
 
     _setCameraView(view) {
@@ -331,7 +363,7 @@ class App {
                         this._draw2DLandmarks();
                     }
 
-                    this.statusText.textContent = "✅ 姿態識別完成！已連動鎖骨、肩胛骨與肱骨";
+                    this.statusText.textContent = "✅ 姿態識別完成！已連動鎖骨、肩胛骨、肱骨與手部前旋後旋";
                 } else {
                     this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
                 }
@@ -487,7 +519,9 @@ class App {
                 rightArmRoll: -1.15, // 右手高抬
                 rightArmYaw: 0,
                 rightElbowFlex: 1.85, // 右肘屈曲比耶
-                rightForearmTwist: 0.4
+                rightForearmTwist: 0.4,
+                rightHandGesture: 'peace',
+                leftHandGesture: 'relaxed'
             };
         } else {
             ctx.fillText("範例 B：側彎對抗 (Contrapposto)", 40, 60);
@@ -512,7 +546,9 @@ class App {
                 rightArmRoll: -0.3,
                 rightArmYaw: 0,
                 rightElbowFlex: 0.5,
-                rightForearmTwist: 0.3
+                rightForearmTwist: 0.3,
+                rightHandGesture: 'relaxed',
+                leftHandGesture: 'relaxed'
             };
         }
 

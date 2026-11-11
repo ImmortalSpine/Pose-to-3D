@@ -166,6 +166,20 @@ export class TorsoPoseEstimator {
         let rightElbowFlex = rightArmPose.flex;
         let rightForearmTwist = rightArmPose.twist;
 
+        // 12. 手勢自動分析 (判斷是否為剪刀手/舉手手勢)
+        let rightHandGesture = 'relaxed';
+        let leftHandGesture = 'relaxed';
+        if (rightWrist && rightShoulder && rightElbow) {
+            if (rightWrist.y < rightShoulder.y + 0.15 && rightElbow.y > rightWrist.y) {
+                rightHandGesture = 'peace';
+            }
+        }
+        if (leftWrist && leftShoulder && leftElbow) {
+            if (leftWrist.y < leftShoulder.y + 0.15 && leftElbow.y > leftWrist.y) {
+                leftHandGesture = 'peace';
+            }
+        }
+
         // 鏡像反轉
         if (this.isMirrored) {
             thoracicRoll = -thoracicRoll;
@@ -194,6 +208,10 @@ export class TorsoPoseEstimator {
             const tempTwist = leftForearmTwist;
             leftForearmTwist = rightForearmTwist;
             rightForearmTwist = tempTwist;
+
+            const tempGest = leftHandGesture;
+            leftHandGesture = rightHandGesture;
+            rightHandGesture = tempGest;
         }
 
         return {
@@ -213,11 +231,13 @@ export class TorsoPoseEstimator {
             leftArmYaw: this._clamp(leftArmYaw, -1.8, 1.8),
             leftElbowFlex: this._clamp(leftElbowFlex, 0, 2.7),
             leftForearmTwist: this._clamp(leftForearmTwist, 0, Math.PI),
+            leftHandGesture: leftHandGesture,
             rightArmPitch: this._clamp(rightArmPitch, -1.8, 1.4),
             rightArmRoll: this._clamp(rightArmRoll, -2.5, -0.02),
             rightArmYaw: this._clamp(rightArmYaw, -1.8, 1.8),
             rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
+            rightHandGesture: rightHandGesture,
             landmarks2D: {
                 leftShoulder, rightShoulder,
                 leftElbow, rightElbow,
@@ -377,11 +397,13 @@ export class TorsoPoseEstimator {
             leftArmYaw: 0,
             leftElbowFlex: 0.35,
             leftForearmTwist: 0.4,
+            leftHandGesture: 'relaxed',
             rightArmPitch: -0.45, // 前屈抬手
             rightArmRoll: -0.65,
             rightArmYaw: 0.35,
             rightElbowFlex: 1.85, // 屈肘貼頸
             rightForearmTwist: 0.3,
+            rightHandGesture: 'peace',
             landmarks2D: null
         };
     }
