@@ -367,10 +367,26 @@
 
                 <div class="control-row">
                     <div class="control-label-wrap">
-                        <span>右踝曲屈 (Right Ankle Pitch)</span>
+                        <span>右踝曲屈 (Right Ankle Pitch / 踮腳)</span>
                         <span class="control-val" id="valRightAnklePitch">-2°</span>
                     </div>
-                    <input type="range" class="range-slider" id="sliderRightAnklePitch" min="-45" max="45" value="-2">
+                    <input type="range" class="range-slider" id="sliderRightAnklePitch" min="-45" max="75" value="-2">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>右腳尖朝向 (Right Ankle Yaw / 內外八)</span>
+                        <span class="control-val" id="valRightAnkleYaw">-7°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightAnkleYaw" min="-75" max="75" value="-7">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>右足側傾 (Right Ankle Roll / 內外翻)</span>
+                        <span class="control-val" id="valRightAnkleRoll">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightAnkleRoll" min="-40" max="40" value="0">
                 </div>
 
                 <!-- 左下肢骨骼控制 -->
@@ -400,17 +416,33 @@
 
                 <div class="control-row">
                     <div class="control-label-wrap">
-                        <span>左踝曲屈 (Left Ankle Pitch)</span>
+                        <span>左踝曲屈 (Left Ankle Pitch / 踮腳)</span>
                         <span class="control-val" id="valLeftAnklePitch">-2°</span>
                     </div>
-                    <input type="range" class="range-slider" id="sliderLeftAnklePitch" min="-45" max="45" value="-2">
+                    <input type="range" class="range-slider" id="sliderLeftAnklePitch" min="-45" max="75" value="-2">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左腳尖朝向 (Left Ankle Yaw / 內外八)</span>
+                        <span class="control-val" id="valLeftAnkleYaw">7°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftAnkleYaw" min="-75" max="75" value="7">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左足側傾 (Left Ankle Roll / 內外翻)</span>
+                        <span class="control-val" id="valLeftAnkleRoll">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftAnkleRoll" min="-40" max="40" value="0">
                 </div>
             </div>
         </aside>
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=2.6"></script>
+    <script type="module" src="app.js?v=2.7"></script>
 </body>
 </html>
 

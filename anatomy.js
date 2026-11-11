@@ -1508,8 +1508,10 @@ export class AnatomicalTorso {
         leftKneeFlex = 0,
         rightKneeFlex = 0,
         leftAnklePitch = 0,
+        leftAnkleYaw = 0,
         leftAnkleRoll = 0,
         rightAnklePitch = 0,
+        rightAnkleYaw = 0,
         rightAnkleRoll = 0
     }) {
         // 1. 骨盆整體單元旋轉
@@ -1604,7 +1606,9 @@ export class AnatomicalTorso {
             this.lowerLimbs.left.kneeJoint.rotation.x = leftKneeFlex;
         }
         if (this.lowerLimbs.left.ankleJoint) {
+            this.lowerLimbs.left.ankleJoint.rotation.order = 'YXZ';
             this.lowerLimbs.left.ankleJoint.rotation.x = leftAnklePitch;
+            this.lowerLimbs.left.ankleJoint.rotation.y = leftAnkleYaw;
             this.lowerLimbs.left.ankleJoint.rotation.z = leftAnkleRoll;
         }
 
@@ -1620,7 +1624,9 @@ export class AnatomicalTorso {
             this.lowerLimbs.right.kneeJoint.rotation.x = rightKneeFlex;
         }
         if (this.lowerLimbs.right.ankleJoint) {
+            this.lowerLimbs.right.ankleJoint.rotation.order = 'YXZ';
             this.lowerLimbs.right.ankleJoint.rotation.x = rightAnklePitch;
+            this.lowerLimbs.right.ankleJoint.rotation.y = rightAnkleYaw;
             this.lowerLimbs.right.ankleJoint.rotation.z = rightAnkleRoll;
         }
     }

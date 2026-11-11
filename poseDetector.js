@@ -374,12 +374,12 @@ export class TorsoPoseEstimator {
 
         // 14. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝)
         const leftLegPose = this._solveLegKinematics(
-            leftHip, leftKnee, leftAnkle, leftFootIndex, 'left',
+            leftHip, leftKnee, leftAnkle, leftFootIndex, leftHeel, 'left',
             pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
         );
 
         const rightLegPose = this._solveLegKinematics(
-            rightHip, rightKnee, rightAnkle, rightFootIndex, 'right',
+            rightHip, rightKnee, rightAnkle, rightFootIndex, rightHeel, 'right',
             pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
         );
 
@@ -388,6 +388,7 @@ export class TorsoPoseEstimator {
         let leftHipYaw = leftLegPose.yaw;
         let leftKneeFlex = leftLegPose.kneeFlex;
         let leftAnklePitch = leftLegPose.anklePitch;
+        let leftAnkleYaw = leftLegPose.ankleYaw;
         let leftAnkleRoll = leftLegPose.ankleRoll;
 
         let rightHipPitch = rightLegPose.pitch;
@@ -395,6 +396,7 @@ export class TorsoPoseEstimator {
         let rightHipYaw = rightLegPose.yaw;
         let rightKneeFlex = rightLegPose.kneeFlex;
         let rightAnklePitch = rightLegPose.anklePitch;
+        let rightAnkleYaw = rightLegPose.ankleYaw;
         let rightAnkleRoll = rightLegPose.ankleRoll;
 
         // 鏡像反轉
@@ -454,6 +456,10 @@ export class TorsoPoseEstimator {
             leftAnklePitch = rightAnklePitch;
             rightAnklePitch = tempAnkPitch;
 
+            const tempAnkYaw = leftAnkleYaw;
+            leftAnkleYaw = -rightAnkleYaw;
+            rightAnkleYaw = -tempAnkYaw;
+
             const tempAnkRoll = leftAnkleRoll;
             leftAnkleRoll = -rightAnkleRoll;
             rightAnkleRoll = -tempAnkRoll;
@@ -487,14 +493,16 @@ export class TorsoPoseEstimator {
             leftHipRoll: this._clamp(leftHipRoll, -0.6, 1.2),
             leftHipYaw: this._clamp(leftHipYaw, -0.8, 0.8),
             leftKneeFlex: this._clamp(leftKneeFlex, 0, 2.4),
-            leftAnklePitch: this._clamp(leftAnklePitch, -0.8, 0.8),
-            leftAnkleRoll: this._clamp(leftAnkleRoll, -0.5, 0.5),
+            leftAnklePitch: this._clamp(leftAnklePitch, -0.8, 1.3),
+            leftAnkleYaw: this._clamp(leftAnkleYaw, -1.3, 1.3),
+            leftAnkleRoll: this._clamp(leftAnkleRoll, -0.7, 0.7),
             rightHipPitch: this._clamp(rightHipPitch, -1.5, 1.8),
             rightHipRoll: this._clamp(rightHipRoll, -1.2, 0.6),
             rightHipYaw: this._clamp(rightHipYaw, -0.8, 0.8),
             rightKneeFlex: this._clamp(rightKneeFlex, 0, 2.4),
-            rightAnklePitch: this._clamp(rightAnklePitch, -0.8, 0.8),
-            rightAnkleRoll: this._clamp(rightAnkleRoll, -0.5, 0.5),
+            rightAnklePitch: this._clamp(rightAnklePitch, -0.8, 1.3),
+            rightAnkleYaw: this._clamp(rightAnkleYaw, -1.3, 1.3),
+            rightAnkleRoll: this._clamp(rightAnkleRoll, -0.7, 0.7),
             landmarks2D: {
                 leftShoulder, rightShoulder,
                 leftElbow, rightElbow,
@@ -719,10 +727,13 @@ export class TorsoPoseEstimator {
      * 3. 嚴格人體生理約束：
      *    - 膝關節鉸鏈單向後折 (Knee Flexion >= 0，絕不向前反折/脫臼)
      *    - 股骨內外翻 (Abduction/Adduction) 與 旋轉 (Internal/External Rotation)
-     * 4. 踝關節 (Ankle Mortise) 地面平衡與屈曲補償
+     * 4. 踝關節 3D 空間姿態解算：
+     *    - 腳尖朝向 (Ankle Yaw / 內外八 / 側向轉向)
+     *    - 腳背屈曲 (Ankle Pitch / 踮腳 / 垂足 / 貼地)
+     *    - 距下關節接地翻轉 (Subtalar Ground-Leveling Roll / 內翻/外翻平貼地面)
      */
     _solveLegKinematics(
-        hip, knee, ankle, footIndex, side,
+        hip, knee, ankle, footIndex, heel, side,
         pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
     ) {
         const sign = (side === 'left') ? 1.0 : -1.0;
@@ -734,6 +745,7 @@ export class TorsoPoseEstimator {
                 yaw: 0,
                 kneeFlex: 0.05,
                 anklePitch: -0.02,
+                ankleYaw: sign * 0.12,
                 ankleRoll: 0
             };
         }
@@ -794,37 +806,79 @@ export class TorsoPoseEstimator {
             flex = 0.02; // 消除反折
         }
 
-        // 預設正向法線 (面朝人體前方 +Z)
-        let zDef = new THREE.Vector3(0, 0, 1);
-        const dotZDefY = zDef.dot(yAxis);
-        zDef.sub(yAxis.clone().multiplyScalar(dotZDefY)).normalize();
-        if (zDef.lengthSq() < 1e-4) {
-            zDef = new THREE.Vector3(0, 1, 0).cross(yAxis).normalize();
+        // 正向法線 zAxis (人體前方 +Z 在垂直於股骨長軸切平面上的正交投影，確保髕骨始終面朝前方)
+        let zAxis = new THREE.Vector3(0, 0, 1);
+        const dotZY = zAxis.dot(yAxis);
+        zAxis.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
+        if (zAxis.lengthSq() < 1e-4) {
+            zAxis = new THREE.Vector3(0, 1, 0);
         }
-
-        // 實測小腿屈曲法線 (屈曲時小腿正交投影反向為髕骨朝向)
-        const uTibiaOrth = uTibia.clone().sub(uFemur.clone().multiplyScalar(dotFlex));
-        let zMeas = uTibiaOrth.clone().negate().normalize();
-        if (zMeas.lengthSq() < 1e-4) {
-            zMeas = zDef.clone();
-        }
-
-        const w = THREE.MathUtils.clamp((flex - 0.1) / 0.25, 0.0, 1.0);
-        const zAxis = zDef.clone().lerp(zMeas, w).normalize();
         const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
 
         const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
         const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');
 
-        // 5. 踝關節補償 (腳掌維持水平貼地或踮腳)
-        let anklePitch = -flex * 0.65 - euler.x * 0.45;
-        let ankleRoll = -euler.z * 0.45;
+        // 5. 踝關節與足部三維運動學 (Ankle & Foot 3D Kinematics)
+        let ankleYaw = sign * 0.12; // 預設微外八 ~7°
+        let anklePitch = -0.02;
+        let ankleRoll = -euler.z * 0.35;
 
-        if (footIndex && ankle) {
-            const dyFoot = -(footIndex.y - ankle.y);
-            if (dyFoot < -0.04) {
-                anklePitch += this._clamp(-dyFoot * 2.2, 0, 0.7);
-            }
+        if (ankle && (footIndex || heel)) {
+            // A. 相機平面投影向量 (Screen X-Y)
+            const toePt = footIndex || ankle;
+            const refPt = heel || ankle;
+            const dxFoot = toePt.x - refPt.x;
+            const dyFoot = -(toePt.y - refPt.y); // Three.js 向上為正
+            const lFoot2D = Math.hypot(dxFoot, dyFoot);
+
+            const LFoot = scale * 0.42; // 足部長度約為軀幹高度的 42%
+
+            // B. 深度推估 (Pythagorean Depth)
+            const rawDzFoot = Math.sqrt(Math.max(0, LFoot * LFoot - lFoot2D * lFoot2D));
+            const mpDzFoot = -((toePt.z || 0) - (refPt.z || 0));
+            // 人體足尖正常朝前 (+Z)，除非深度差顯著為負
+            const zSignFoot = (mpDzFoot < -0.06) ? -0.5 : 0.85;
+            const dzFoot = (lFoot2D < LFoot * 0.95) ? (rawDzFoot * zSignFoot) : 0.05 * LFoot;
+
+            const vFootCam = new THREE.Vector3(dxFoot, dyFoot, dzFoot);
+
+            // C. 變換至骨盆局部坐標系
+            const vFootPelvis = vFootCam.clone().applyQuaternion(qPelvisInv).normalize();
+
+            // D. 計算脛骨在骨盆坐標系中的三維旋轉 (qTibia)
+            const qHip = new THREE.Quaternion().setFromEuler(
+                new THREE.Euler(euler.x, euler.y, euler.z, 'YXZ')
+            );
+            const qKnee = new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(1, 0, 0), flex
+            );
+            const qTibia = qHip.clone().multiply(qKnee);
+            const qTibiaInv = qTibia.clone().invert();
+
+            // E. 將足部向量逆變換至踝關節 (小腿脛骨下端) 局部坐標系
+            const uFootLocal = vFootPelvis.clone().applyQuaternion(qTibiaInv).normalize();
+
+            // F. 解算踝關節 Yaw (腳尖內八/外八) 與 Pitch (腳背屈曲/踮腳/垂足)
+            ankleYaw = Math.atan2(uFootLocal.x, uFootLocal.z);
+            const horiz = Math.hypot(uFootLocal.x, uFootLocal.z);
+            anklePitch = Math.atan2(-uFootLocal.y, horiz);
+
+            // G. 腳底平貼地面補償 (Ground Leveling Roll for Subtalar Joint)
+            const qPreRoll = qTibia.clone()
+                .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), ankleYaw))
+                .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), anklePitch));
+
+            // 足底橫軸 (Local X) 與垂直軸 (Local Y) 在骨盆/世界空間中的朝向
+            const vLateral = new THREE.Vector3(1, 0, 0).applyQuaternion(qPreRoll);
+            const vUp = new THREE.Vector3(0, 1, 0).applyQuaternion(qPreRoll);
+
+            // 計算使足底橫軸平貼水平地面 (Y=0) 的旋前/旋後 (Roll)
+            let groundRoll = Math.atan2(-vLateral.y, vUp.y);
+
+            // 當腳離地高抬或大角度踮腳時，平滑衰減貼地補償，維持生理自然休止位
+            const isGrounded = (anklePitch < 0.45) && (flex < 0.7);
+            const groundWeight = isGrounded ? THREE.MathUtils.clamp(1.0 - (anklePitch - 0.15) / 0.3, 0.0, 1.0) : 0.0;
+            ankleRoll = groundRoll * groundWeight;
         }
 
         return {
@@ -832,8 +886,9 @@ export class TorsoPoseEstimator {
             roll: this._clamp(euler.z, side === 'left' ? -0.6 : -1.2, side === 'left' ? 1.2 : 0.6),
             yaw: this._clamp(euler.y, -0.8, 0.8),
             kneeFlex: this._clamp(flex, 0, 2.4),
-            anklePitch: this._clamp(anklePitch, -0.8, 0.8),
-            ankleRoll: this._clamp(ankleRoll, -0.5, 0.5)
+            anklePitch: this._clamp(anklePitch, -0.8, 1.3),
+            ankleYaw: this._clamp(ankleYaw, -1.3, 1.3),
+            ankleRoll: this._clamp(ankleRoll, -0.7, 0.7)
         };
     }
 
@@ -955,12 +1010,14 @@ export class TorsoPoseEstimator {
             leftHipYaw: 0,
             leftKneeFlex: 0.12,
             leftAnklePitch: -0.06,
+            leftAnkleYaw: 0.12,
             leftAnkleRoll: 0,
             rightHipPitch: -0.08,
             rightHipRoll: -0.08,
             rightHipYaw: 0,
             rightKneeFlex: 0.08,
             rightAnklePitch: -0.04,
+            rightAnkleYaw: -0.12,
             rightAnkleRoll: 0,
             landmarks2D: null
         };

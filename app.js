@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=2.6';
-import { TorsoPoseEstimator } from './poseDetector.js?v=2.6';
+import { AnatomicalTorso } from './anatomy.js?v=2.7';
+import { TorsoPoseEstimator } from './poseDetector.js?v=2.7';
 
 class App {
     constructor() {
@@ -53,12 +53,14 @@ class App {
             leftHipYaw: 0,
             leftKneeFlex: 0.08,
             leftAnklePitch: -0.04,
+            leftAnkleYaw: 0.12,
             leftAnkleRoll: 0,
             rightHipPitch: 0,
             rightHipRoll: -0.08,
             rightHipYaw: 0,
             rightKneeFlex: 0.08,
             rightAnklePitch: -0.04,
+            rightAnkleYaw: -0.12,
             rightAnkleRoll: 0
         };
         this.aiPoseBackup = { ...this.currentPose };
@@ -269,11 +271,15 @@ class App {
         this._bindSlider('sliderRightHipRoll', 'valRightHipRoll', 'rightHipRoll');
         this._bindSlider('sliderRightKneeFlex', 'valRightKneeFlex', 'rightKneeFlex');
         this._bindSlider('sliderRightAnklePitch', 'valRightAnklePitch', 'rightAnklePitch');
+        this._bindSlider('sliderRightAnkleYaw', 'valRightAnkleYaw', 'rightAnkleYaw');
+        this._bindSlider('sliderRightAnkleRoll', 'valRightAnkleRoll', 'rightAnkleRoll');
 
         this._bindSlider('sliderLeftHipPitch', 'valLeftHipPitch', 'leftHipPitch');
         this._bindSlider('sliderLeftHipRoll', 'valLeftHipRoll', 'leftHipRoll');
         this._bindSlider('sliderLeftKneeFlex', 'valLeftKneeFlex', 'leftKneeFlex');
         this._bindSlider('sliderLeftAnklePitch', 'valLeftAnklePitch', 'leftAnklePitch');
+        this._bindSlider('sliderLeftAnkleYaw', 'valLeftAnkleYaw', 'leftAnkleYaw');
+        this._bindSlider('sliderLeftAnkleRoll', 'valLeftAnkleRoll', 'leftAnkleRoll');
 
         // 手部手勢選擇器
         const selRightGest = document.getElementById('selectRightHandGesture');
@@ -353,11 +359,15 @@ class App {
         setSlider('sliderRightHipRoll', 'valRightHipRoll', this.currentPose.rightHipRoll);
         setSlider('sliderRightKneeFlex', 'valRightKneeFlex', this.currentPose.rightKneeFlex);
         setSlider('sliderRightAnklePitch', 'valRightAnklePitch', this.currentPose.rightAnklePitch);
+        setSlider('sliderRightAnkleYaw', 'valRightAnkleYaw', this.currentPose.rightAnkleYaw);
+        setSlider('sliderRightAnkleRoll', 'valRightAnkleRoll', this.currentPose.rightAnkleRoll);
 
         setSlider('sliderLeftHipPitch', 'valLeftHipPitch', this.currentPose.leftHipPitch);
         setSlider('sliderLeftHipRoll', 'valLeftHipRoll', this.currentPose.leftHipRoll);
         setSlider('sliderLeftKneeFlex', 'valLeftKneeFlex', this.currentPose.leftKneeFlex);
         setSlider('sliderLeftAnklePitch', 'valLeftAnklePitch', this.currentPose.leftAnklePitch);
+        setSlider('sliderLeftAnkleYaw', 'valLeftAnkleYaw', this.currentPose.leftAnkleYaw);
+        setSlider('sliderLeftAnkleRoll', 'valLeftAnkleRoll', this.currentPose.leftAnkleRoll);
 
         const selRG = document.getElementById('selectRightHandGesture');
         if (selRG && this.currentPose.rightHandGesture) {
@@ -563,8 +573,8 @@ class App {
         if (lm.leftHand2D) drawHandSkeleton(lm.leftHand2D);
         if (lm.rightHand2D) drawHandSkeleton(lm.rightHand2D);
 
-        // 7. 雙腿與足部連線 (Hip -> Knee -> Ankle -> Toe)
-        const drawLeg = (pHip, pKnee, pAnkle, pToe) => {
+        // 7. 雙腿與足部連線 (Hip -> Knee -> Ankle -> Heel -> Toe)
+        const drawLeg = (pHip, pKnee, pAnkle, pHeel, pToe) => {
             if (!pKnee) return;
             ctx.strokeStyle = '#9d4edd';
             ctx.lineWidth = 3;
@@ -573,7 +583,11 @@ class App {
             ctx.lineTo(pKnee.x, pKnee.y);
             if (pAnkle) {
                 ctx.lineTo(pAnkle.x, pAnkle.y);
-                if (pToe) {
+                if (pHeel && pToe) {
+                    ctx.lineTo(pHeel.x, pHeel.y);
+                    ctx.lineTo(pToe.x, pToe.y);
+                    ctx.lineTo(pAnkle.x, pAnkle.y);
+                } else if (pToe) {
                     ctx.lineTo(pToe.x, pToe.y);
                 }
             }
@@ -581,6 +595,7 @@ class App {
 
             this._drawPoint(ctx, pKnee, '#c77dff', 5);
             if (pAnkle) this._drawPoint(ctx, pAnkle, '#e0aaff', 4.5);
+            if (pHeel) this._drawPoint(ctx, pHeel, '#ff9e00', 3.5);
             if (pToe) this._drawPoint(ctx, pToe, '#ffd166', 3.5);
         };
 
@@ -589,6 +604,7 @@ class App {
                 pLH,
                 toScreen(lm.leftKnee),
                 lm.leftAnkle ? toScreen(lm.leftAnkle) : null,
+                lm.leftHeel ? toScreen(lm.leftHeel) : null,
                 lm.leftFootIndex ? toScreen(lm.leftFootIndex) : null
             );
         }
@@ -597,6 +613,7 @@ class App {
                 pRH,
                 toScreen(lm.rightKnee),
                 lm.rightAnkle ? toScreen(lm.rightAnkle) : null,
+                lm.rightHeel ? toScreen(lm.rightHeel) : null,
                 lm.rightFootIndex ? toScreen(lm.rightFootIndex) : null
             );
         }
