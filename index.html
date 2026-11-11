@@ -6,10 +6,9 @@
     <title>AnatoPose 3D - 藝用脊椎與肋骨姿態還原系統</title>
     <link rel="stylesheet" href="style.css">
 
-    <!-- MediaPipe Pose & Hands (瀏覽器端高效全身姿勢與手部 21 節點檢測) -->
+    <!-- MediaPipe Holistic (官方推薦統一拓撲架構：整合全身 33 節點與雙手各 21 節點，徹底消除多腳本 WASM/WebGL 記憶體衝突) -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js" crossorigin="anonymous"></script>
 
     <!-- Import Map 支援 ES Module Three.js 與 OrbitControls -->
     <script type="importmap">

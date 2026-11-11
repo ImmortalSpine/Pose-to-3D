@@ -363,7 +363,7 @@ class App {
                         this._draw2DLandmarks();
                     }
 
-                    this.statusText.textContent = "✅ 姿態與手勢識別完成！已由 MediaPipe Hands 21 骨節解算手掌法向與手勢";
+                    this.statusText.textContent = "✅ 姿態與手勢識別完成！MediaPipe Holistic 全身與手掌 21 骨節解算手掌法向與手勢";
                 } else {
                     this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
                 }

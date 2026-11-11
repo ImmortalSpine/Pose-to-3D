@@ -13,15 +13,30 @@ import * as THREE from 'three';
 export class TorsoPoseEstimator {
     constructor() {
         this.detectorReady = false;
+        this.holistic = null;
         this.poseDetector = null;
-        this.handsDetector = null;
         this.isMirrored = false;
         this._initMediaPipe();
     }
 
     async _initMediaPipe() {
         try {
-            if (window.Pose) {
+            if (window.Holistic) {
+                this.holistic = new window.Holistic({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`
+                });
+                this.holistic.setOptions({
+                    modelComplexity: 1,
+                    smoothLandmarks: true,
+                    enableSegmentation: false,
+                    smoothSegmentation: false,
+                    refineFaceLandmarks: false,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                this.detectorReady = true;
+                console.log("[AnatoPose] MediaPipe Holistic (Unified Full-body & Hands) Engine initialized.");
+            } else if (window.Pose) {
                 this.poseDetector = new window.Pose({
                     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
                 });
@@ -36,53 +51,82 @@ export class TorsoPoseEstimator {
                 this.detectorReady = true;
                 console.log("[AnatoPose] MediaPipe Pose Engine initialized.");
             }
-
-            if (window.Hands) {
-                this.handsDetector = new window.Hands({
-                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-                });
-                this.handsDetector.setOptions({
-                    maxNumHands: 2,
-                    modelComplexity: 1,
-                    minDetectionConfidence: 0.45,
-                    minTrackingConfidence: 0.45
-                });
-                console.log("[AnatoPose] MediaPipe Hands (21 Landmarks) Engine initialized.");
-            }
         } catch (err) {
             console.warn("[AnatoPose] MediaPipe init error:", err);
         }
     }
 
     async estimateFromImage(imageElement) {
-        if (!this.poseDetector) {
-            return this._heuristicImageAnalysis();
-        }
+        // 1. 若 Holistic 整合引擎就緒，使用單一安全推論管線 (零並發衝突，原子化同時返回軀幹 33 點與雙手各 21 點)
+        if (this.holistic) {
+            return new Promise((resolve) => {
+                let finished = false;
+                const timeout = setTimeout(() => {
+                    if (!finished) {
+                        finished = true;
+                        console.warn("[AnatoPose] Holistic detection timeout (7s), falling back.");
+                        resolve(null);
+                    }
+                }, 7000);
 
-        // 1. 全身 Pose 偵測
-        const posePromise = new Promise((resolve) => {
-            this.poseDetector.onResults((results) => resolve(results));
-            this.poseDetector.send({ image: imageElement }).catch(() => resolve(null));
-        });
-
-        // 2. 雙手 21 節點 Hands 偵測 (並發非同步執行)
-        let handsPromise = Promise.resolve(null);
-        if (this.handsDetector) {
-            handsPromise = new Promise((resolve) => {
-                const timeout = setTimeout(() => resolve(null), 1500); // 1.5s 安全超時保護
-                this.handsDetector.onResults((results) => {
-                    clearTimeout(timeout);
-                    resolve(results);
+                this.holistic.onResults((results) => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        try {
+                            const pose = this._processLandmarks(results);
+                            resolve(pose);
+                        } catch (err) {
+                            console.error("[AnatoPose] Landmark processing error:", err);
+                            resolve(null);
+                        }
+                    }
                 });
-                this.handsDetector.send({ image: imageElement }).catch(() => resolve(null));
+
+                this.holistic.send({ image: imageElement }).catch((err) => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        console.error("[AnatoPose] Holistic send error:", err);
+                        resolve(null);
+                    }
+                });
             });
         }
 
-        const [poseResults, handsResults] = await Promise.all([posePromise, handsPromise]);
-        return this._processLandmarks(poseResults, handsResults);
+        // 2. 備用 Pose 引擎
+        if (this.poseDetector) {
+            return new Promise((resolve) => {
+                let finished = false;
+                const timeout = setTimeout(() => {
+                    if (!finished) {
+                        finished = true;
+                        resolve(null);
+                    }
+                }, 6000);
+
+                this.poseDetector.onResults((results) => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        resolve(this._processLandmarks(results));
+                    }
+                });
+
+                this.poseDetector.send({ image: imageElement }).catch(() => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        resolve(null);
+                    }
+                });
+            });
+        }
+
+        return this._heuristicImageAnalysis();
     }
 
-    _processLandmarks(results, handsResults = null) {
+    _processLandmarks(results) {
         if (!results || !results.poseLandmarks || results.poseLandmarks.length === 0) {
             return null;
         }
@@ -200,23 +244,30 @@ export class TorsoPoseEstimator {
         let rightElbowFlex = rightArmPose.flex;
         let rightForearmTwist = rightArmPose.twist;
 
-        // 12. MediaPipe Hands (21 骨節) 手掌 3D 法向量與精確手勢解算
+        // 12. MediaPipe Holistic 雙手 21 骨節手掌 3D 法向量與精確手勢解算
         let matchedLeftHand = null;
         let matchedRightHand = null;
         let rightHandGesture = 'relaxed';
         let leftHandGesture = 'relaxed';
 
-        if (handsResults && handsResults.multiHandLandmarks && handsResults.multiHandLandmarks.length > 0) {
-            handsResults.multiHandLandmarks.forEach(handLm => {
-                const w = handLm[0];
-                const dL = Math.hypot(w.x - leftWrist.x, w.y - leftWrist.y);
-                const dR = Math.hypot(w.x - rightWrist.x, w.y - rightWrist.y);
-                if (dL < dR && dL < 0.28) {
-                    matchedLeftHand = handLm;
-                } else if (dR <= dL && dR < 0.28) {
-                    matchedRightHand = handLm;
-                }
-            });
+        // 從 Holistic 單一推論結果中直接提取左右手 21 節點
+        if (results.leftHandLandmarks && results.leftHandLandmarks.length >= 21) {
+            matchedLeftHand = results.leftHandLandmarks;
+        }
+        if (results.rightHandLandmarks && results.rightHandLandmarks.length >= 21) {
+            matchedRightHand = results.rightHandLandmarks;
+        }
+
+        // 拓撲距離校驗 (避免極端側身或背身時左右手標籤被顛倒)
+        if (matchedLeftHand && leftWrist && rightWrist) {
+            const wL = matchedLeftHand[0];
+            const dLL = Math.hypot(wL.x - leftWrist.x, wL.y - leftWrist.y);
+            const dLR = Math.hypot(wL.x - rightWrist.x, wL.y - rightWrist.y);
+            if (dLR < dLL && (!matchedRightHand || dLR < 0.15)) {
+                const temp = matchedLeftHand;
+                matchedLeftHand = matchedRightHand;
+                matchedRightHand = temp;
+            }
         }
 
         if (matchedLeftHand) {
