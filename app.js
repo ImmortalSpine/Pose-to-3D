@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=2.3';
-import { TorsoPoseEstimator } from './poseDetector.js?v=2.3';
+import { AnatomicalTorso } from './anatomy.js?v=2.4';
+import { TorsoPoseEstimator } from './poseDetector.js?v=2.4';
 
 class App {
     constructor() {
@@ -375,7 +375,6 @@ class App {
 
         const dist = 48;
         const targetY = -4.0;
-        const targetY = 4.0;
         switch (view) {
             case 'front':
                 this.camera.position.set(0, targetY, dist);
