@@ -211,9 +211,13 @@ class App {
         this._bindSlider('sliderLumbarPitch', 'valLumbarPitch', 'lumbarPitch');
         this._bindSlider('sliderNeckPitch', 'valNeckPitch', 'cervicalPitch');
         this._bindSlider('sliderRightArmRoll', 'valRightArmRoll', 'rightArmRoll');
+        this._bindSlider('sliderRightArmPitch', 'valRightArmPitch', 'rightArmPitch');
+        this._bindSlider('sliderRightArmYaw', 'valRightArmYaw', 'rightArmYaw');
         this._bindSlider('sliderRightElbowFlex', 'valRightElbowFlex', 'rightElbowFlex');
         this._bindSlider('sliderRightForearmTwist', 'valRightForearmTwist', 'rightForearmTwist');
         this._bindSlider('sliderLeftArmRoll', 'valLeftArmRoll', 'leftArmRoll');
+        this._bindSlider('sliderLeftArmPitch', 'valLeftArmPitch', 'leftArmPitch');
+        this._bindSlider('sliderLeftArmYaw', 'valLeftArmYaw', 'leftArmYaw');
         this._bindSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', 'leftElbowFlex');
         this._bindSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', 'leftForearmTwist');
 
@@ -264,9 +268,13 @@ class App {
         setSlider('sliderLumbarPitch', 'valLumbarPitch', this.currentPose.lumbarPitch);
         setSlider('sliderNeckPitch', 'valNeckPitch', this.currentPose.cervicalPitch);
         setSlider('sliderRightArmRoll', 'valRightArmRoll', this.currentPose.rightArmRoll);
+        setSlider('sliderRightArmPitch', 'valRightArmPitch', this.currentPose.rightArmPitch);
+        setSlider('sliderRightArmYaw', 'valRightArmYaw', this.currentPose.rightArmYaw);
         setSlider('sliderRightElbowFlex', 'valRightElbowFlex', this.currentPose.rightElbowFlex);
         setSlider('sliderRightForearmTwist', 'valRightForearmTwist', this.currentPose.rightForearmTwist);
         setSlider('sliderLeftArmRoll', 'valLeftArmRoll', this.currentPose.leftArmRoll);
+        setSlider('sliderLeftArmPitch', 'valLeftArmPitch', this.currentPose.leftArmPitch);
+        setSlider('sliderLeftArmYaw', 'valLeftArmYaw', this.currentPose.leftArmYaw);
         setSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', this.currentPose.leftElbowFlex);
         setSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', this.currentPose.leftForearmTwist);
     }

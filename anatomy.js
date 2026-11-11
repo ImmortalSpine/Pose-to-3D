@@ -223,6 +223,7 @@ export class AnatomicalTorso {
         ghJoint.add(humerusMesh);
         this.shoulderGirdle[side].humerus = humerusMesh;
         this.shoulderGirdle[side].humerusJoint = ghJoint;
+        ghJoint.rotation.order = 'YXZ';
         ghJoint.rotation.z = sign * 0.12; // 預設自然微提攜角
 
         // 5. 肘關節 (Elbow / Humeroulnar Hinge Joint)
@@ -826,39 +827,42 @@ export class AnatomicalTorso {
         // 5. 左大臂肱骨
         if (this.shoulderGirdle.left.humerusJoint) {
             const jL = this.shoulderGirdle.left.humerusJoint;
-            const safeRollL = Math.max(0.06, leftArmRoll);
+            const safeRollL = Math.max(0.04, leftArmRoll);
+            jL.rotation.order = 'YXZ';
             jL.rotation.x = leftArmPitch;
             jL.rotation.y = leftArmYaw;
             jL.rotation.z = safeRollL;
 
             if (this.shoulderGirdle.left.clavicle) {
-                this.shoulderGirdle.left.clavicle.rotation.z = -safeRollL * 0.15;
+                this.shoulderGirdle.left.clavicle.rotation.z = safeRollL * 0.15;
+                this.shoulderGirdle.left.clavicle.rotation.y = -leftArmPitch * 0.1;
             }
         }
 
         // 6. 右大臂肱骨
         if (this.shoulderGirdle.right.humerusJoint) {
             const jR = this.shoulderGirdle.right.humerusJoint;
-            const safeRollR = Math.min(-0.06, rightArmRoll);
+            const safeRollR = Math.min(-0.04, rightArmRoll);
+            jR.rotation.order = 'YXZ';
             jR.rotation.x = rightArmPitch;
             jR.rotation.y = rightArmYaw;
             jR.rotation.z = safeRollR;
 
             if (this.shoulderGirdle.right.clavicle) {
-                this.shoulderGirdle.right.clavicle.rotation.z = -safeRollR * 0.15;
+                this.shoulderGirdle.right.clavicle.rotation.z = safeRollR * 0.15;
+                this.shoulderGirdle.right.clavicle.rotation.y = -rightArmPitch * 0.1;
             }
         }
 
-        // 7. 左前臂肘關節屈曲與橈骨翻轉交叉
+        // 7. 左前臂肘關節屈曲與橈骨翻轉交叉 (向前屈曲，X軸負向旋轉)
         if (this.shoulderGirdle.left.elbowJoint) {
-            // 肘關節向前屈曲 (X軸旋轉)
-            this.shoulderGirdle.left.elbowJoint.rotation.x = leftElbowFlex;
+            this.shoulderGirdle.left.elbowJoint.rotation.x = -leftElbowFlex;
             this._updateRadiusMesh('left', leftForearmTwist);
         }
 
-        // 8. 右前臂肘關節屈曲與橈骨翻轉交叉
+        // 8. 右前臂肘關節屈曲與橈骨翻轉交叉 (向前屈曲，X軸負向旋轉)
         if (this.shoulderGirdle.right.elbowJoint) {
-            this.shoulderGirdle.right.elbowJoint.rotation.x = rightElbowFlex;
+            this.shoulderGirdle.right.elbowJoint.rotation.x = -rightElbowFlex;
             this._updateRadiusMesh('right', rightForearmTwist);
         }
     }
