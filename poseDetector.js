@@ -63,6 +63,11 @@ export class TorsoPoseEstimator {
     }
 
     async estimateFromImage(imageElement) {
+        if (!imageElement) return null;
+        const imgW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 1;
+        const imgH = imageElement.naturalHeight || imageElement.videoHeight || imageElement.height || 1;
+        this.aspectRatio = imgW / imgH;
+
         // 確保 MediaPipe 底層 WASM 與模型已完全加載就緒
         if (this.readyPromise) {
             await this.readyPromise;
@@ -175,6 +180,8 @@ export class TorsoPoseEstimator {
         const leftFootIndex = lm[31];
         const rightFootIndex = lm[32];
 
+        const ar = this.aspectRatio || 1.0;
+
         // 1. 中點計算
         const midShoulder = {
             x: (leftShoulder.x + rightShoulder.x) * 0.5,
@@ -186,18 +193,18 @@ export class TorsoPoseEstimator {
             y: (leftHip.y + rightHip.y) * 0.5
         };
 
-        // 2. 雙肩水平寬度與跨度
-        const shoulderDx = leftShoulder.x - rightShoulder.x;
+        // 2. 雙肩水平寬度與跨度 (經影像長寬比各向同性修正)
+        const shoulderDx = (leftShoulder.x - rightShoulder.x) * ar;
         const shoulderDy = leftShoulder.y - rightShoulder.y;
         const shoulderSpan = Math.hypot(shoulderDx, shoulderDy);
 
         // 3. 軀幹縱向中心軸 (Spine Vector) 與 軀幹高度 (Torso Height)
-        const spineDx = midShoulder.x - midHip.x;
+        const spineDx = (midShoulder.x - midHip.x) * ar;
         const spineDy = midShoulder.y - midHip.y;
         const torsoHeight = Math.hypot(spineDx, spineDy) || 0.001;
 
         // 4. 骨盆幾何跨度
-        const hipDx = leftHip.x - rightHip.x;
+        const hipDx = (leftHip.x - rightHip.x) * ar;
         const hipDy = leftHip.y - rightHip.y;
         const hipSpan = Math.hypot(hipDx, hipDy);
 
@@ -296,26 +303,26 @@ export class TorsoPoseEstimator {
         // 判定手部姿態類型 (前置手 / 插腰手 / 體側垂手)
         const checkFrontOfPelvis = (w) => {
             if (!w || !leftHip || !rightHip) return false;
-            const minX = Math.min(leftHip.x, rightHip.x) - 0.05;
-            const maxX = Math.max(leftHip.x, rightHip.x) + 0.05;
+            const minX = Math.min(leftHip.x, rightHip.x) - 0.05 / ar;
+            const maxX = Math.max(leftHip.x, rightHip.x) + 0.05 / ar;
             const midY = (leftHip.y + rightHip.y) * 0.5;
             return (w.x >= minX && w.x <= maxX && w.y >= (midY - 0.38 * torsoHeight));
         };
 
         const checkHandOnHip = (s, e, w, side) => {
             if (!s || !e || !w) return false;
-            const elbowFlared = (side === 'left') ? (e.x - s.x) : (s.x - e.x);
-            const wristInward = (side === 'left') ? (e.x - w.x) : (w.x - e.x);
-            const armDx = e.x - s.x;
+            const elbowFlared = (side === 'left') ? ((e.x - s.x) * ar) : ((s.x - e.x) * ar);
+            const wristInward = (side === 'left') ? ((e.x - w.x) * ar) : ((w.x - e.x) * ar);
+            const armDx = (e.x - s.x) * ar;
             const armDy = e.y - s.y;
-            const foreDx = w.x - e.x;
+            const foreDx = (w.x - e.x) * ar;
             const foreDy = w.y - e.y;
             const dot = armDx * foreDx + armDy * foreDy;
             const lA = Math.hypot(armDx, armDy);
             const lF = Math.hypot(foreDx, foreDy);
             const flexAngle = Math.acos(Math.max(-1, Math.min(1, dot / (lA * lF + 1e-5))));
-            const atWaistHeight = (w.y >= s.y + 0.30 * torsoHeight && w.y <= (leftHip ? leftHip.y + 0.15 * torsoHeight : s.y + 0.9 * torsoHeight));
-            return (elbowFlared > 0.065 && wristInward > 0.06 && flexAngle > 0.70 && atWaistHeight);
+            const atWaistHeight = (w.y >= s.y + 0.25 * torsoHeight && w.y <= (leftHip ? leftHip.y + 0.20 * torsoHeight : s.y + 0.95 * torsoHeight));
+            return (elbowFlared > 0.045 && wristInward > 0.04 && flexAngle > 0.65 && atWaistHeight);
         };
 
         const isLeftHandOnHip = checkHandOnHip(leftShoulder, leftElbow, activeLeftWrist, 'left');
@@ -489,20 +496,20 @@ export class TorsoPoseEstimator {
             rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
             rightHandGesture: rightHandGesture,
-            leftHipPitch: this._clamp(leftHipPitch, -1.5, 1.8),
-            leftHipRoll: this._clamp(leftHipRoll, -0.6, 1.2),
-            leftHipYaw: this._clamp(leftHipYaw, -0.8, 0.8),
+            leftHipPitch: this._clamp(leftHipPitch, -0.65, 0.95),
+            leftHipRoll: this._clamp(leftHipRoll, -0.30, 0.65),
+            leftHipYaw: this._clamp(leftHipYaw, -0.65, 0.65),
             leftKneeFlex: this._clamp(leftKneeFlex, 0, 2.4),
-            leftAnklePitch: this._clamp(leftAnklePitch, -0.8, 1.3),
-            leftAnkleYaw: this._clamp(leftAnkleYaw, -1.3, 1.3),
-            leftAnkleRoll: this._clamp(leftAnkleRoll, -0.7, 0.7),
-            rightHipPitch: this._clamp(rightHipPitch, -1.5, 1.8),
-            rightHipRoll: this._clamp(rightHipRoll, -1.2, 0.6),
-            rightHipYaw: this._clamp(rightHipYaw, -0.8, 0.8),
+            leftAnklePitch: this._clamp(leftAnklePitch, -0.50, 0.75),
+            leftAnkleYaw: this._clamp(leftAnkleYaw, -0.60, 0.60),
+            leftAnkleRoll: this._clamp(leftAnkleRoll, -0.25, 0.25),
+            rightHipPitch: this._clamp(rightHipPitch, -0.65, 0.95),
+            rightHipRoll: this._clamp(rightHipRoll, -0.65, 0.30),
+            rightHipYaw: this._clamp(rightHipYaw, -0.65, 0.65),
             rightKneeFlex: this._clamp(rightKneeFlex, 0, 2.4),
-            rightAnklePitch: this._clamp(rightAnklePitch, -0.8, 1.3),
-            rightAnkleYaw: this._clamp(rightAnkleYaw, -1.3, 1.3),
-            rightAnkleRoll: this._clamp(rightAnkleRoll, -0.7, 0.7),
+            rightAnklePitch: this._clamp(rightAnklePitch, -0.50, 0.75),
+            rightAnkleYaw: this._clamp(rightAnkleYaw, -0.60, 0.60),
+            rightAnkleRoll: this._clamp(rightAnkleRoll, -0.25, 0.25),
             landmarks2D: {
                 leftShoulder, rightShoulder,
                 leftElbow, rightElbow,
@@ -523,11 +530,14 @@ export class TorsoPoseEstimator {
     /**
      * 完整上肢 3D 正交基底逆向運動學解算器 (Two-Bone Orthonormal IK Solver)
      * 1. 忠實保持相機 2D 骨骼傾角 (Screen-Space Fidelity)，絕不暴力竄改肘、腕關節 2D 坐標
-     * 2. 構造 [X_hinge, Y_shaft, Z_front] 嚴格正交基底，消除軸向耦合與 180° 翻轉奇異性
+     * 2. 嚴格 [X_hinge, Y_shaft, Z_flex] 正交基底：
+     *    - 大臂沿 -Y_local
+     *    - 肘關節屈曲向前臂彎折平面投影，驅動 elbowJoint.rotation.x = -flex 100% 精確對齊手腕
+     *    - 消除軸向耦合與 180° 翻轉奇異性
      * 3. 人體肌肉與服裝外輪廓防穿插 (Biomechanical Clearance)：
-     *    - 僅向前推進深度 (Z 軸)，消除骨盆、裙面、肋下穿刺，100% 保持相機視角下的手臂角度
+     *    - 僅在胸腹骨盆區域推進深度 (Z 軸)，保持相機視角下的手臂角度
      *    - 大臂後壁與側肋防穿插限制
-     * 4. 輸出 'YXZ' 歐拉角，與 3D 骨骼及右側控制滑桿精確同步
+     * 4. 歐拉角相位解包僅於真正過頂抬手 (uArm.y > 0.15) 啟用，徹底消除下垂手/插腰手翻轉為衝天翅膀之 Bug
      */
     _solveArmKinematics(
         shoulder, elbow, wrist, side,
@@ -537,6 +547,7 @@ export class TorsoPoseEstimator {
         isFrontOfPelvis = false, isHandOnHip = false
     ) {
         const sign = (side === 'left') ? 1.0 : -1.0;
+        const ar = this.aspectRatio || 1.0;
 
         if (!elbow || !shoulder) {
             return {
@@ -548,8 +559,8 @@ export class TorsoPoseEstimator {
             };
         }
 
-        // 1. 相機平面投影向量 (Screen X-Y)
-        const dxArm = elbow.x - shoulder.x;
+        // 1. 相機平面投影向量 (Screen X-Y，經各向同性修正)
+        const dxArm = (elbow.x - shoulder.x) * ar;
         const dyArm = -(elbow.y - shoulder.y); // Three.js 向上為正
         const lArm2D = Math.hypot(dxArm, dyArm);
 
@@ -560,23 +571,23 @@ export class TorsoPoseEstimator {
         // 2. 解剖深度推估 (Pythagorean Depth)
         const rawDzArm = Math.sqrt(Math.max(0, LArm * LArm - lArm2D * lArm2D));
         const mpDz = -((elbow.z || 0) - (shoulder.z || 0));
-        let zSignArm = isFrontOfPelvis ? 0.35 : (mpDz < -0.05 ? -0.2 : 0.6);
-        if (isHandOnHip) zSignArm = 0.35;
-        const dzArm = rawDzArm * zSignArm;
+        let zSignArm = isFrontOfPelvis ? 0.30 : (mpDz < -0.05 ? -0.15 : 0.40);
+        if (isHandOnHip) zSignArm = 0.25;
+        const dzArm = (lArm2D < LArm * 0.95) ? (rawDzArm * zSignArm) : 0.02 * LArm;
 
         const vArmCam = new THREE.Vector3(dxArm, dyArm, dzArm);
 
         // 前臂相機向量 (保留相機平面的真實投影傾角)
         let vForeCam;
         if (wrist) {
-            const dxFore = wrist.x - elbow.x;
+            const dxFore = (wrist.x - elbow.x) * ar;
             const dyFore = -(wrist.y - elbow.y);
             const lFore2D = Math.hypot(dxFore, dyFore);
             const rawDzFore = Math.sqrt(Math.max(0, LFore * LFore - lFore2D * lFore2D));
             const mpDzFore = -((wrist.z || 0) - (elbow.z || 0));
-            let zSignFore = isFrontOfPelvis ? 0.65 : (mpDzFore < -0.08 ? 0.2 : 0.75);
-            if (isHandOnHip) zSignFore = 0.45;
-            const dzFore = rawDzFore * zSignFore;
+            let zSignFore = isFrontOfPelvis ? 0.45 : (mpDzFore < -0.05 ? -0.15 : 0.45);
+            if (isHandOnHip) zSignFore = 0.30;
+            const dzFore = (lFore2D < LFore * 0.95) ? (rawDzFore * zSignFore) : 0.02 * LFore;
 
             vForeCam = new THREE.Vector3(dxFore, dyFore, dzFore);
         } else {
@@ -594,8 +605,8 @@ export class TorsoPoseEstimator {
 
         // 4. 生理防穿插約束與人體肌肉外輪廓包絡面 (Biomechanical Clearance)
         // A. 後背壁防穿透：大臂在胸腔坐標系中 Z 軸不可向後過度延伸
-        if (uArm.z < -0.15) {
-            uArm.z = -0.15;
+        if (uArm.z < -0.22) {
+            uArm.z = -0.22;
             uArm.normalize();
         }
 
@@ -603,8 +614,8 @@ export class TorsoPoseEstimator {
         const pShoulderLocal = new THREE.Vector3(sign * 6.5, 8.8, -0.6);
         let pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
 
-        if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 5.2 && uArm.z < 0.5) {
-            pElbowLocal.x = sign * 5.2;
+        if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.8 && uArm.z < 0.5) {
+            pElbowLocal.x = sign * 4.8;
             uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
             pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
         }
@@ -612,34 +623,34 @@ export class TorsoPoseEstimator {
         // C. 前臂與手腕人體肌肉防穿插 (純向前推進深度 Z，100% 保證相機正視角的 2D 傾角不變形)
         let pWristLocal = pElbowLocal.clone().addScaledVector(uFore, 7.4);
 
-        if (pWristLocal.y < -1.5 && Math.abs(pWristLocal.x) < 5.4) {
-            // 骨盆、大腿肌肉與裙面前側深度防線 (Z >= 3.25)
-            if (pWristLocal.z < 3.25) {
-                pWristLocal.z = 3.25;
+        if (pWristLocal.y < -1.5 && Math.abs(pWristLocal.x) < 5.2) {
+            // 骨盆、大腿肌肉與裙面前側深度防線 (Z >= 1.8)
+            if (pWristLocal.z < 1.8) {
+                pWristLocal.z = 1.8;
                 uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
             }
         } else if (pWristLocal.y >= -1.5 && pWristLocal.y <= 3.0) {
             // 腰側與腹前區
             if (Math.abs(pWristLocal.x) < 4.8) {
-                if (pWristLocal.z < 3.4) {
-                    pWristLocal.z = 3.4;
+                if (pWristLocal.z < 2.0) {
+                    pWristLocal.z = 2.0;
                     uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
                 }
             } else if (Math.abs(pWristLocal.x) <= 5.8) {
-                if (pWristLocal.z < 1.6) {
-                    pWristLocal.z = 1.8;
+                if (pWristLocal.z < 1.2) {
+                    pWristLocal.z = 1.4;
                     uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
                 }
             }
         } else if (pWristLocal.y > 3.0 && Math.abs(pWristLocal.x) < 4.5) {
             // 胸大肌前側防線
-            if (pWristLocal.z < 4.2 && pWristLocal.z > -0.5) {
-                pWristLocal.z = 4.2;
+            if (pWristLocal.z < 2.2 && pWristLocal.z > -0.5) {
+                pWristLocal.z = 2.2;
                 uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
             }
         }
 
-        // 5. 嚴密正交基底構造 (Mathematically Exact Orthonormal Basis)
+        // 5. 嚴密正交基底構造 (Two-Bone Orthonormal Basis)
         // yAxis: 大臂反向長軸 (在 Three.js 中大臂自然下垂沿 -Y，故 yAxis = -uArm)
         const yAxis = uArm.clone().negate().normalize();
 
@@ -647,16 +658,31 @@ export class TorsoPoseEstimator {
         const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
         const flex = Math.acos(dotFlex);
 
-        // 正向法線 zAxis (人體前方 +Z 在垂直於大臂長軸的切平面上的正交投影)
-        let zAxis = new THREE.Vector3(0, 0, 1);
-        const dotZY = zAxis.dot(yAxis);
-        zAxis.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
-        if (zAxis.lengthSq() < 1e-4) {
-            zAxis = new THREE.Vector3(0, 1, 0);
+        // 前臂屈曲垂直向量 (uFore 在垂直於 uArm 切平面上的正交分量)
+        const uForePerp = uFore.clone().sub(uArm.clone().multiplyScalar(dotFlex));
+        const lPerp = uForePerp.length();
+
+        // 正向法線預設 zDef (手臂筆直時，肘窩 cubital fossa 面向身體正前方 +Z)
+        let zDef = new THREE.Vector3(0, 0, 1);
+        const dotZY = zDef.dot(yAxis);
+        zDef.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
+        if (zDef.lengthSq() < 1e-4) {
+            zDef = new THREE.Vector3(0, 1, 0);
+        }
+
+        // 當肘關節屈曲時，zAxis 嚴格對準前臂屈曲方向，使 elbowJoint.rotation.x = -flex 精確導引前臂指向手腕
+        let zAxis;
+        if (lPerp > 0.05 && flex > 0.08) {
+            const zFlex = uForePerp.clone().normalize();
+            const t = THREE.MathUtils.clamp((flex - 0.08) / 0.15, 0.0, 1.0);
+            zAxis = zDef.clone().multiplyScalar(1.0 - t).addScaledVector(zFlex, t).normalize();
+        } else {
+            zAxis = zDef;
         }
 
         // xAxis: 肘關節鉸鏈橫軸 (保證右手法則正交基底)
         const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+        zAxis.crossVectors(xAxis, yAxis).normalize();
 
         // 構造旋轉矩陣並提取 'YXZ' 歐拉角
         const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
@@ -684,7 +710,7 @@ export class TorsoPoseEstimator {
         }
 
         if (!isFrontOfPelvis && !isHandOnHip && thumb && pinky) {
-            const latDiff = (side === 'left') ? (thumb.x - pinky.x) : (pinky.x - thumb.x);
+            const latDiff = (side === 'left') ? ((thumb.x - pinky.x) * ar) : ((pinky.x - thumb.x) * ar);
             const twistBias = THREE.MathUtils.clamp(-latDiff * 3.5, -0.65, 0.65);
             twist += twistBias;
         }
@@ -693,22 +719,18 @@ export class TorsoPoseEstimator {
 
         // 7. 歐拉角相位解包與生理極限約束 (Phase Unwrapping & Anatomical Clamping)
         let roll = euler.z;
-        if (side === 'right') {
-            // 右臂外展/高抬為負向旋轉 (0 -> -90° -> -180°)
-            // 當大臂抬起或過頂時，atan2 可能翻轉至正半周 (+90° ~ +180°)
-            // 進行相位解包以維持連續負角度 (-180° ~ -200°)
-            if (roll > Math.PI * 0.5) {
+        const isArmRaisedOverhead = (uArm.y > 0.15); // 僅在大臂真正抬過肩膀水準線時才需解包過頂角
+        if (isArmRaisedOverhead) {
+            if (side === 'right' && roll > Math.PI * 0.5) {
                 roll -= 2 * Math.PI;
             }
-            roll = this._clamp(roll, -3.23, 0.85); // 支援直挺挺衝天舉手 (-185°) 至跨胸內收 (+48°)
-        } else {
-            // 左臂外展/高抬為正向旋轉 (0 -> +90° -> +180°)
-            // 當大臂抬起或過頂時，atan2 可能翻轉至負半周 (-90° ~ -180°)
-            // 進行相位解包以維持連續正角度 (+180° ~ +200°)
-            if (roll < -Math.PI * 0.5) {
+            if (side === 'left' && roll < -Math.PI * 0.5) {
                 roll += 2 * Math.PI;
             }
-            roll = this._clamp(roll, -0.85, 3.23); // 支援跨胸內收 (-48°) 至直挺挺衝天舉手 (+185°)
+            roll = this._clamp(roll, side === 'right' ? -3.23 : -0.85, side === 'right' ? 0.85 : 3.23);
+        } else {
+            // 正常下垂、橫擺、側身或插腰姿態：維持解剖學自然角度範圍，絕不反向解包翻轉
+            roll = this._clamp(roll, side === 'right' ? -1.85 : -0.75, side === 'right' ? 0.75 : 1.85);
         }
 
         return {
@@ -726,17 +748,18 @@ export class TorsoPoseEstimator {
      * 2. 忠實保持相機 2D 投影角度 (Screen-Space Vector Tracking)
      * 3. 嚴格人體生理約束：
      *    - 膝關節鉸鏈單向後折 (Knee Flexion >= 0，絕不向前反折/脫臼)
-     *    - 股骨內外翻 (Abduction/Adduction) 與 旋轉 (Internal/External Rotation)
+     *    - 髕骨面朝膝關節屈曲反向 (+Z_local)，消除膝蓋側面外擴畸變
      * 4. 踝關節 3D 空間姿態解算：
      *    - 腳尖朝向 (Ankle Yaw / 內外八 / 側向轉向)
      *    - 腳背屈曲 (Ankle Pitch / 踮腳 / 垂足 / 貼地)
-     *    - 距下關節接地翻轉 (Subtalar Ground-Leveling Roll / 內翻/外翻平貼地面)
+     *    - 距下關節接地翻轉 (Subtalar Ground-Leveling Roll / 內翻/外翻平貼地面，約束於 ±12.5°)
      */
     _solveLegKinematics(
         hip, knee, ankle, footIndex, heel, side,
         pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
     ) {
         const sign = (side === 'left') ? 1.0 : -1.0;
+        const ar = this.aspectRatio || 1.0;
 
         if (!hip || !knee) {
             return {
@@ -750,8 +773,8 @@ export class TorsoPoseEstimator {
             };
         }
 
-        // 1. 相機平面投影向量 (Screen X-Y)
-        const dxFemur = knee.x - hip.x;
+        // 1. 相機平面投影向量 (Screen X-Y，經各向同性修正)
+        const dxFemur = (knee.x - hip.x) * ar;
         const dyFemur = -(knee.y - hip.y); // Three.js 向上為正
         const lFemur2D = Math.hypot(dxFemur, dyFemur);
 
@@ -762,25 +785,27 @@ export class TorsoPoseEstimator {
         // 2. 解剖深度推估 (Pythagorean Depth)
         const rawDzFemur = Math.sqrt(Math.max(0, LFemur * LFemur - lFemur2D * lFemur2D));
         const mpDzFemur = -((knee.z || 0) - (hip.z || 0));
-        const dzFemur = rawDzFemur * (Math.abs(mpDzFemur) > 0.02 ? Math.sign(mpDzFemur) : 0.0) * 0.7;
+        const dzFemur = (lFemur2D < LFemur * 0.95)
+            ? this._clamp(rawDzFemur * mpDzFemur * 0.5, -0.35 * LFemur, 0.35 * LFemur)
+            : 0.0;
 
         const vFemurCam = new THREE.Vector3(dxFemur, dyFemur, dzFemur);
 
         // 小腿 (Tibia & Fibula) 相機向量
         let vTibiaCam;
         if (ankle) {
-            const dxShin = ankle.x - knee.x;
+            const dxShin = (ankle.x - knee.x) * ar;
             const dyShin = -(ankle.y - knee.y);
             const lShin2D = Math.hypot(dxShin, dyShin);
             const rawDzShin = Math.sqrt(Math.max(0, LTibia * LTibia - lShin2D * lShin2D));
             const mpDzShin = -((ankle.z || 0) - (knee.z || 0));
-            // 人體小腿在自然彎曲或站姿下，通常向後折疊 (-Z)
-            const zSignShin = (Math.abs(mpDzShin) > 0.02) ? Math.sign(mpDzShin) : -0.5;
-            const dzShin = rawDzShin * zSignShin * 0.7;
+            // 人體小腿彎曲必然向後 (-Z)，絕不允許向前反折
+            const zShinMag = Math.max(0.15, Math.min(0.85, Math.abs(mpDzShin)));
+            const dzShin = (lShin2D < LTibia * 0.95) ? (-rawDzShin * zShinMag) : -0.05 * LTibia;
 
             vTibiaCam = new THREE.Vector3(dxShin, dyShin, dzShin);
         } else {
-            vTibiaCam = new THREE.Vector3(sign * 0.02, -LTibia, -0.05);
+            vTibiaCam = new THREE.Vector3(sign * 0.02, -LTibia, -0.05 * LTibia);
         }
 
         // 3. 逆變換至骨盆局部坐標系 (Pelvis Local Frame)
@@ -799,21 +824,37 @@ export class TorsoPoseEstimator {
         // 膝關節屈曲角度 (Flexion)
         const dotFlex = THREE.MathUtils.clamp(uFemur.dot(uTibia), -1.0, 1.0);
         let flex = Math.acos(dotFlex);
+        flex = this._clamp(flex, 0.02, 2.4);
 
-        // 人體膝蓋只能向後彎曲 (flex >= 0)，絕不允許向前反折
-        const isBackwardFlex = (uTibia.z - uFemur.z) <= 0.05;
-        if (!isBackwardFlex) {
-            flex = 0.02; // 消除反折
+        // 脛骨垂直分量 (uTibia 在垂直於 uFemur 切平面上的正交分量)
+        const uTibiaPerp = uTibia.clone().sub(uFemur.clone().multiplyScalar(dotFlex));
+        const lTibiaPerp = uTibiaPerp.length();
+
+        // 髕骨預設法向 (站立時面朝前方，微帶約 4° 生理外展)
+        let zDef = new THREE.Vector3(sign * 0.08, 0.0, 0.99).normalize();
+        const dotZY = zDef.dot(yAxis);
+        zDef.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
+        if (zDef.lengthSq() < 1e-4) {
+            zDef = new THREE.Vector3(0, 0, 1);
         }
 
-        // 正向法線 zAxis (人體前方 +Z 在垂直於股骨長軸切平面上的正交投影，確保髕骨始終面朝前方)
-        let zAxis = new THREE.Vector3(0, 0, 1);
-        const dotZY = zAxis.dot(yAxis);
-        zAxis.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
-        if (zAxis.lengthSq() < 1e-4) {
-            zAxis = new THREE.Vector3(0, 1, 0);
+        // 髕骨方向：膝蓋向後折疊 (-Z)，故髕骨 (+Z_local) 指向脛骨屈曲反方向
+        let zAxis;
+        if (lTibiaPerp > 0.05 && flex > 0.08) {
+            const zKnee = uTibiaPerp.clone().negate().normalize();
+            if (zKnee.z < 0) {
+                // 若檢測噪聲導致髕骨倒插骨盆內部，回退至預設前向
+                zAxis = zDef;
+            } else {
+                const t = THREE.MathUtils.clamp((flex - 0.08) / 0.18, 0.0, 1.0);
+                zAxis = zDef.clone().multiplyScalar(1.0 - t).addScaledVector(zKnee, t).normalize();
+            }
+        } else {
+            zAxis = zDef;
         }
+
         const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+        zAxis.crossVectors(xAxis, yAxis).normalize();
 
         const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
         const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');
@@ -821,13 +862,13 @@ export class TorsoPoseEstimator {
         // 5. 踝關節與足部三維運動學 (Ankle & Foot 3D Kinematics)
         let ankleYaw = sign * 0.12; // 預設微外八 ~7°
         let anklePitch = -0.02;
-        let ankleRoll = -euler.z * 0.35;
+        let ankleRoll = 0;
 
         if (ankle && (footIndex || heel)) {
-            // A. 相機平面投影向量 (Screen X-Y)
+            // A. 相機平面投影向量 (Screen X-Y，經各向同性修正)
             const toePt = footIndex || ankle;
             const refPt = heel || ankle;
-            const dxFoot = toePt.x - refPt.x;
+            const dxFoot = (toePt.x - refPt.x) * ar;
             const dyFoot = -(toePt.y - refPt.y); // Three.js 向上為正
             const lFoot2D = Math.hypot(dxFoot, dyFoot);
 
@@ -836,9 +877,8 @@ export class TorsoPoseEstimator {
             // B. 深度推估 (Pythagorean Depth)
             const rawDzFoot = Math.sqrt(Math.max(0, LFoot * LFoot - lFoot2D * lFoot2D));
             const mpDzFoot = -((toePt.z || 0) - (refPt.z || 0));
-            // 人體足尖正常朝前 (+Z)，除非深度差顯著為負
-            const zSignFoot = (mpDzFoot < -0.06) ? -0.5 : 0.85;
-            const dzFoot = (lFoot2D < LFoot * 0.95) ? (rawDzFoot * zSignFoot) : 0.05 * LFoot;
+            const zSignFoot = (mpDzFoot < -0.06) ? -0.3 : 0.85;
+            const dzFoot = (lFoot2D < LFoot * 0.95) ? (rawDzFoot * zSignFoot) : 0.10 * LFoot;
 
             const vFootCam = new THREE.Vector3(dxFoot, dyFoot, dzFoot);
 
@@ -874,6 +914,8 @@ export class TorsoPoseEstimator {
 
             // 計算使足底橫軸平貼水平地面 (Y=0) 的旋前/旋後 (Roll)
             let groundRoll = Math.atan2(-vLateral.y, vUp.y);
+            // 嚴格人體距下關節生理內翻/外翻極限 (不超過 ±12.5°)
+            groundRoll = this._clamp(groundRoll, -0.22, 0.22);
 
             // 當腳離地高抬或大角度踮腳時，平滑衰減貼地補償，維持生理自然休止位
             const isGrounded = (anklePitch < 0.45) && (flex < 0.7);
@@ -882,13 +924,13 @@ export class TorsoPoseEstimator {
         }
 
         return {
-            pitch: this._clamp(euler.x, -1.5, 1.8),
-            roll: this._clamp(euler.z, side === 'left' ? -0.6 : -1.2, side === 'left' ? 1.2 : 0.6),
-            yaw: this._clamp(euler.y, -0.8, 0.8),
-            kneeFlex: this._clamp(flex, 0, 2.4),
-            anklePitch: this._clamp(anklePitch, -0.8, 1.3),
-            ankleYaw: this._clamp(ankleYaw, -1.3, 1.3),
-            ankleRoll: this._clamp(ankleRoll, -0.7, 0.7)
+            pitch: this._clamp(euler.x, -0.55, 0.85),
+            roll: this._clamp(euler.z, side === 'left' ? -0.30 : -0.65, side === 'left' ? 0.65 : 0.30),
+            yaw: this._clamp(euler.y, -0.65, 0.65),
+            kneeFlex: this._clamp(flex, 0.02, 2.4),
+            anklePitch: this._clamp(anklePitch, -0.50, 0.75),
+            ankleYaw: this._clamp(ankleYaw, -0.60, 0.60),
+            ankleRoll: this._clamp(ankleRoll, -0.25, 0.25)
         };
     }
 
