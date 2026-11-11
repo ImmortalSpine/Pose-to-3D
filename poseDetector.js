@@ -294,9 +294,20 @@ export class TorsoPoseEstimator {
         const uArm = vArmCam.clone().applyQuaternion(qThoraxInv).normalize();
         const uFore = vForeCam.clone().applyQuaternion(qThoraxInv).normalize();
 
-        // 4. 生理背壁約束：大臂在胸腔坐標系中 Z 軸不可向後過度延伸 (防止像圖三那樣向後穿刺背部)
+        // 4. 生理防穿插約束 (Anti-Rib Penetration & Posterior Wall Clamp)
+        // A. 後背壁防穿透：大臂在胸腔坐標系中 Z 軸不可向後過度延伸 (防止側身時手臂向後穿刺背部)
         if (uArm.z < -0.15) {
             uArm.z = -0.15;
+            uArm.normalize();
+        }
+
+        // B. 肋骨防穿插約束：大臂在體側下垂時 (Z < 0.6)，大臂絕不能向內側過度內收刺穿肋骨
+        if (uArm.z < 0.6) {
+            if (side === 'left') {
+                uArm.x = Math.max(0.08, uArm.x);
+            } else {
+                uArm.x = Math.min(-0.08, uArm.x);
+            }
             uArm.normalize();
         }
 
@@ -304,13 +315,23 @@ export class TorsoPoseEstimator {
         // yAxis: 大臂長軸 (在 Three.js 中大臂自然下垂沿 -Y，故 yAxis = -uArm)
         const yAxis = uArm.clone().negate().normalize();
 
-        // hingeAxis: 肩-肘-腕彎曲平面的法向量
-        let hinge = new THREE.Vector3().crossVectors(uArm, uFore);
-        if (hinge.lengthSq() < 1e-4) {
-            hinge = new THREE.Vector3(sign, 0, 0);
+        // 6. 肘關節鉸鏈平滑融合 (Hinge Axis Smoothing)
+        // 當屈曲角度較小 (< 35°) 時，前臂微小雜訊會導致 (uArm x uFore) 出現極端跳動
+        // 此時將鉸鏈平滑過渡融合至自然橫向解剖軸 (sign, 0, 0)，徹底杜絕雞翅膀與自轉突變
+        const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
+        let flex = Math.acos(dotFlex);
+
+        let measuredHinge = new THREE.Vector3().crossVectors(uArm, uFore);
+        if (measuredHinge.lengthSq() < 1e-4) {
+            measuredHinge = new THREE.Vector3(sign, 0, 0);
         } else {
-            hinge.normalize();
+            measuredHinge.normalize();
         }
+
+        // 權重融合：flex < 15° 完全使用解剖橫軸；flex > 45° 完全使用測量彎曲軸
+        const hingeWeight = THREE.MathUtils.clamp((flex - 0.26) / 0.52, 0.0, 1.0);
+        const defaultHinge = new THREE.Vector3(sign, 0, 0);
+        const hinge = defaultHinge.clone().lerp(measuredHinge, hingeWeight).normalize();
 
         // xAxis: 肘關節鉸鏈橫軸 (在局部坐標系中，向前屈曲對應 -hinge)
         const rawX = hinge.clone().negate();
@@ -323,13 +344,8 @@ export class TorsoPoseEstimator {
         // 構造旋轉矩陣
         const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
 
-        // 6. 提取 'YXZ' 歐拉角供 UI 滑桿與關節驅動
+        // 7. 提取 'YXZ' 歐拉角供 UI 滑桿與關節驅動
         const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');
-
-        // 7. 肘關節屈曲角 (Flexion Angle)
-        const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
-        let flex = Math.acos(dotFlex);
-        if (flex < 0.05) flex = 0.05;
 
         // 8. 橈骨旋前/旋後 (Twist)
         const twist = THREE.MathUtils.clamp(0.25 + flex * 0.25, 0.1, 1.8);
