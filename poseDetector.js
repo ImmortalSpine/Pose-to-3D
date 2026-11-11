@@ -16,7 +16,7 @@ export class TorsoPoseEstimator {
         this.holistic = null;
         this.poseDetector = null;
         this.isMirrored = false;
-        this._initMediaPipe();
+        this.readyPromise = this._initMediaPipe();
     }
 
     async _initMediaPipe() {
@@ -27,13 +27,16 @@ export class TorsoPoseEstimator {
                 });
                 this.holistic.setOptions({
                     modelComplexity: 1,
-                    smoothLandmarks: true,
+                    smoothLandmarks: false, // 關鍵：單張靜態照片切勿開啟跨影格平滑，否則首次推論會被初始預設值拉扯失真！
                     enableSegmentation: false,
                     smoothSegmentation: false,
                     refineFaceLandmarks: false,
                     minDetectionConfidence: 0.5,
                     minTrackingConfidence: 0.5
                 });
+                if (this.holistic.initialize) {
+                    await this.holistic.initialize();
+                }
                 this.detectorReady = true;
                 console.log("[AnatoPose] MediaPipe Holistic (Unified Full-body & Hands) Engine initialized.");
             } else if (window.Pose) {
@@ -42,12 +45,15 @@ export class TorsoPoseEstimator {
                 });
                 this.poseDetector.setOptions({
                     modelComplexity: 1,
-                    smoothLandmarks: true,
+                    smoothLandmarks: false, // 靜態照片關閉跨影格平滑
                     enableSegmentation: false,
                     smoothSegmentation: false,
                     minDetectionConfidence: 0.5,
                     minTrackingConfidence: 0.5
                 });
+                if (this.poseDetector.initialize) {
+                    await this.poseDetector.initialize();
+                }
                 this.detectorReady = true;
                 console.log("[AnatoPose] MediaPipe Pose Engine initialized.");
             }
@@ -57,17 +63,27 @@ export class TorsoPoseEstimator {
     }
 
     async estimateFromImage(imageElement) {
+        // 確保 MediaPipe 底層 WASM 與模型已完全加載就緒
+        if (this.readyPromise) {
+            await this.readyPromise;
+        }
+
         // 1. 若 Holistic 整合引擎就緒，使用單一安全推論管線 (零並發衝突，原子化同時返回軀幹 33 點與雙手各 21 點)
         if (this.holistic) {
+            // 重置上一張圖片的殘留追蹤快取，保證每一張獨立圖片均以全新高精度檢測出發
+            if (this.holistic.reset) {
+                try { this.holistic.reset(); } catch (_) {}
+            }
+
             return new Promise((resolve) => {
                 let finished = false;
                 const timeout = setTimeout(() => {
                     if (!finished) {
                         finished = true;
-                        console.warn("[AnatoPose] Holistic detection timeout (7s), falling back.");
+                        console.warn("[AnatoPose] Holistic detection timeout (15s), falling back.");
                         resolve(null);
                     }
-                }, 7000);
+                }, 15000);
 
                 this.holistic.onResults((results) => {
                     if (!finished) {
@@ -96,6 +112,10 @@ export class TorsoPoseEstimator {
 
         // 2. 備用 Pose 引擎
         if (this.poseDetector) {
+            if (this.poseDetector.reset) {
+                try { this.poseDetector.reset(); } catch (_) {}
+            }
+
             return new Promise((resolve) => {
                 let finished = false;
                 const timeout = setTimeout(() => {
@@ -103,7 +123,7 @@ export class TorsoPoseEstimator {
                         finished = true;
                         resolve(null);
                     }
-                }, 6000);
+                }, 12000);
 
                 this.poseDetector.onResults((results) => {
                     if (!finished) {
