@@ -14,6 +14,7 @@ export class TorsoPoseEstimator {
     constructor() {
         this.detectorReady = false;
         this.poseDetector = null;
+        this.handsDetector = null;
         this.isMirrored = false;
         this._initMediaPipe();
     }
@@ -35,26 +36,53 @@ export class TorsoPoseEstimator {
                 this.detectorReady = true;
                 console.log("[AnatoPose] MediaPipe Pose Engine initialized.");
             }
+
+            if (window.Hands) {
+                this.handsDetector = new window.Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+                });
+                this.handsDetector.setOptions({
+                    maxNumHands: 2,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.45,
+                    minTrackingConfidence: 0.45
+                });
+                console.log("[AnatoPose] MediaPipe Hands (21 Landmarks) Engine initialized.");
+            }
         } catch (err) {
             console.warn("[AnatoPose] MediaPipe init error:", err);
         }
     }
 
     async estimateFromImage(imageElement) {
-        if (this.poseDetector) {
-            return new Promise((resolve) => {
-                this.poseDetector.onResults((results) => {
-                    const pose = this._processLandmarks(results);
-                    resolve(pose);
-                });
-                this.poseDetector.send({ image: imageElement });
-            });
-        } else {
+        if (!this.poseDetector) {
             return this._heuristicImageAnalysis();
         }
+
+        // 1. 全身 Pose 偵測
+        const posePromise = new Promise((resolve) => {
+            this.poseDetector.onResults((results) => resolve(results));
+            this.poseDetector.send({ image: imageElement }).catch(() => resolve(null));
+        });
+
+        // 2. 雙手 21 節點 Hands 偵測 (並發非同步執行)
+        let handsPromise = Promise.resolve(null);
+        if (this.handsDetector) {
+            handsPromise = new Promise((resolve) => {
+                const timeout = setTimeout(() => resolve(null), 1500); // 1.5s 安全超時保護
+                this.handsDetector.onResults((results) => {
+                    clearTimeout(timeout);
+                    resolve(results);
+                });
+                this.handsDetector.send({ image: imageElement }).catch(() => resolve(null));
+            });
+        }
+
+        const [poseResults, handsResults] = await Promise.all([posePromise, handsPromise]);
+        return this._processLandmarks(poseResults, handsResults);
     }
 
-    _processLandmarks(results) {
+    _processLandmarks(results, handsResults = null) {
         if (!results || !results.poseLandmarks || results.poseLandmarks.length === 0) {
             return null;
         }
@@ -172,17 +200,42 @@ export class TorsoPoseEstimator {
         let rightElbowFlex = rightArmPose.flex;
         let rightForearmTwist = rightArmPose.twist;
 
-        // 12. 手勢自動分析 (判斷是否為剪刀手/舉手手勢)
+        // 12. MediaPipe Hands (21 骨節) 手掌 3D 法向量與精確手勢解算
+        let matchedLeftHand = null;
+        let matchedRightHand = null;
         let rightHandGesture = 'relaxed';
         let leftHandGesture = 'relaxed';
-        if (rightWrist && rightShoulder && rightElbow) {
-            if (rightWrist.y < rightShoulder.y + 0.15 && rightElbow.y > rightWrist.y) {
-                rightHandGesture = 'peace';
-            }
+
+        if (handsResults && handsResults.multiHandLandmarks && handsResults.multiHandLandmarks.length > 0) {
+            handsResults.multiHandLandmarks.forEach(handLm => {
+                const w = handLm[0];
+                const dL = Math.hypot(w.x - leftWrist.x, w.y - leftWrist.y);
+                const dR = Math.hypot(w.x - rightWrist.x, w.y - rightWrist.y);
+                if (dL < dR && dL < 0.28) {
+                    matchedLeftHand = handLm;
+                } else if (dR <= dL && dR < 0.28) {
+                    matchedRightHand = handLm;
+                }
+            });
         }
-        if (leftWrist && leftShoulder && leftElbow) {
+
+        if (matchedLeftHand) {
+            const handSol = this._solveTwistAndGestureFromHand(matchedLeftHand, 'left');
+            leftForearmTwist = handSol.twist;
+            leftHandGesture = handSol.gesture;
+        } else if (leftWrist && leftShoulder && leftElbow) {
             if (leftWrist.y < leftShoulder.y + 0.15 && leftElbow.y > leftWrist.y) {
                 leftHandGesture = 'peace';
+            }
+        }
+
+        if (matchedRightHand) {
+            const handSol = this._solveTwistAndGestureFromHand(matchedRightHand, 'right');
+            rightForearmTwist = handSol.twist;
+            rightHandGesture = handSol.gesture;
+        } else if (rightWrist && rightShoulder && rightElbow) {
+            if (rightWrist.y < rightShoulder.y + 0.15 && rightElbow.y > rightWrist.y) {
+                rightHandGesture = 'peace';
             }
         }
 
@@ -218,6 +271,10 @@ export class TorsoPoseEstimator {
             const tempGest = leftHandGesture;
             leftHandGesture = rightHandGesture;
             rightHandGesture = tempGest;
+
+            const tempHand2D = matchedLeftHand;
+            matchedLeftHand = matchedRightHand;
+            matchedRightHand = tempHand2D;
         }
 
         return {
@@ -250,7 +307,9 @@ export class TorsoPoseEstimator {
                 leftWrist, rightWrist,
                 leftHip, rightHip,
                 midShoulder, midHip,
-                nose
+                nose,
+                leftHand2D: matchedLeftHand,
+                rightHand2D: matchedRightHand
             }
         };
     }
@@ -440,6 +499,67 @@ export class TorsoPoseEstimator {
             flex: this._clamp(flex, 0, 2.7),
             twist: twist
         };
+    }
+
+    /**
+     * 從 MediaPipe Hands 21 節點中，利用手腕(0)、食指根(5)、小指根(17)三點三維幾何外積解算手掌 3D 法向量與旋角
+     * 並精確辨識放鬆 (Relaxed)、比耶 (Peace)、握拳 (Fist)、平展 (Open)
+     */
+    _solveTwistAndGestureFromHand(hand, side) {
+        const p0 = hand[0];    // Wrist
+        const pIdx = hand[5];  // Index MCP
+        const pPnk = hand[17]; // Pinky MCP
+
+        // 螢幕空間向量 (Three.js 向上為正，深度向前為正)
+        const vIdx = new THREE.Vector3(pIdx.x - p0.x, -(pIdx.y - p0.y), -(pIdx.z - p0.z));
+        const vPnk = new THREE.Vector3(pPnk.x - p0.x, -(pPnk.y - p0.y), -(pPnk.z - p0.z));
+
+        // 手掌 3D 法向量 (Cross Product)
+        let palmNormal;
+        if (side === 'left') {
+            palmNormal = new THREE.Vector3().crossVectors(vIdx, vPnk).normalize();
+        } else {
+            palmNormal = new THREE.Vector3().crossVectors(vPnk, vIdx).normalize();
+        }
+
+        // palmNormal.z:
+        // > 0 表示掌心面向鏡頭 (Supination, twist -> 0)
+        // < 0 表示手背面向鏡頭 (Pronation, twist -> PI)
+        const nzClamped = THREE.MathUtils.clamp(palmNormal.z, -1.0, 1.0);
+        const twist = Math.acos(nzClamped);
+
+        // 手勢分類
+        const gesture = this._classifyHandGesture(hand);
+
+        return { twist, gesture, palmNormal };
+    }
+
+    /**
+     * 21 骨節手勢自動幾何辨識器
+     */
+    _classifyHandGesture(hand) {
+        const w = hand[0]; // Wrist
+
+        const isExtended = (tipIdx, mcpIdx) => {
+            const dTip = Math.hypot(hand[tipIdx].x - w.x, hand[tipIdx].y - w.y);
+            const dMcp = Math.hypot(hand[mcpIdx].x - w.x, hand[mcpIdx].y - w.y);
+            return dTip > (dMcp * 1.25);
+        };
+
+        const indexExt = isExtended(8, 5);
+        const middleExt = isExtended(12, 9);
+        const ringExt = isExtended(16, 13);
+        const pinkyExt = isExtended(20, 17);
+
+        if (indexExt && middleExt && !ringExt && !pinkyExt) {
+            return 'peace'; // 勝利剪刀手 (YA)
+        } else if (!indexExt && !middleExt && !ringExt && !pinkyExt) {
+            return 'fist';  // 握拳
+        } else if (indexExt && middleExt && ringExt && pinkyExt) {
+            return 'open';  // 張開平展
+        } else {
+            return 'relaxed'; // 自然放鬆
+        }
     }
 
     _heuristicImageAnalysis() {

@@ -363,7 +363,7 @@ class App {
                         this._draw2DLandmarks();
                     }
 
-                    this.statusText.textContent = "✅ 姿態識別完成！已連動鎖骨、肩胛骨、肱骨與手部前旋後旋";
+                    this.statusText.textContent = "✅ 姿態與手勢識別完成！已由 MediaPipe Hands 21 骨節解算手掌法向與手勢";
                 } else {
                     this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
                 }
@@ -472,6 +472,37 @@ class App {
         this._drawPoint(ctx, pRH, '#81b29a');
         this._drawPoint(ctx, pMS, '#f4a261', 6);
         this._drawPoint(ctx, pMH, '#f4a261', 6);
+
+        // 6. MediaPipe Hands 21 節點手骨骨架繪製
+        const drawHandSkeleton = (handLandmarks) => {
+            if (!handLandmarks || handLandmarks.length < 21) return;
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
+                [0, 5], [5, 6], [6, 7], [7, 8],       // Index
+                [5, 9], [9, 10], [10, 11], [11, 12],  // Middle
+                [9, 13], [13, 14], [14, 15], [15, 16],// Ring
+                [13, 17], [17, 18], [18, 19], [19, 20], // Pinky
+                [0, 17], [5, 17]                      // Palm base & arch
+            ];
+
+            ctx.strokeStyle = '#06d6a0';
+            ctx.lineWidth = 2;
+            connections.forEach(([i, j]) => {
+                const ptA = toScreen(handLandmarks[i]);
+                const ptB = toScreen(handLandmarks[j]);
+                ctx.beginPath();
+                ctx.moveTo(ptA.x, ptA.y);
+                ctx.lineTo(ptB.x, ptB.y);
+                ctx.stroke();
+            });
+
+            handLandmarks.forEach(pt => {
+                this._drawPoint(ctx, toScreen(pt), '#ffd166', 3.5);
+            });
+        };
+
+        if (lm.leftHand2D) drawHandSkeleton(lm.leftHand2D);
+        if (lm.rightHand2D) drawHandSkeleton(lm.rightHand2D);
     }
 
     _drawPoint(ctx, pt, color, radius = 5) {
