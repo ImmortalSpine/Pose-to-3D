@@ -146,6 +146,14 @@ export class TorsoPoseEstimator {
         const rightThumb = lm[22];
         const leftHip = lm[23];
         const rightHip = lm[24];
+        const leftKnee = lm[25];
+        const rightKnee = lm[26];
+        const leftAnkle = lm[27];
+        const rightAnkle = lm[28];
+        const leftHeel = lm[29];
+        const rightHeel = lm[30];
+        const leftFootIndex = lm[31];
+        const rightFootIndex = lm[32];
 
         // 1. 中點計算
         const midShoulder = {
@@ -344,6 +352,31 @@ export class TorsoPoseEstimator {
             }
         }
 
+        // 14. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝)
+        const leftLegPose = this._solveLegKinematics(
+            leftHip, leftKnee, leftAnkle, leftFootIndex, 'left',
+            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
+        );
+
+        const rightLegPose = this._solveLegKinematics(
+            rightHip, rightKnee, rightAnkle, rightFootIndex, 'right',
+            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
+        );
+
+        let leftHipPitch = leftLegPose.pitch;
+        let leftHipRoll = leftLegPose.roll;
+        let leftHipYaw = leftLegPose.yaw;
+        let leftKneeFlex = leftLegPose.kneeFlex;
+        let leftAnklePitch = leftLegPose.anklePitch;
+        let leftAnkleRoll = leftLegPose.ankleRoll;
+
+        let rightHipPitch = rightLegPose.pitch;
+        let rightHipRoll = rightLegPose.roll;
+        let rightHipYaw = rightLegPose.yaw;
+        let rightKneeFlex = rightLegPose.kneeFlex;
+        let rightAnklePitch = rightLegPose.anklePitch;
+        let rightAnkleRoll = rightLegPose.ankleRoll;
+
         // 鏡像反轉
         if (this.isMirrored) {
             thoracicRoll = -thoracicRoll;
@@ -380,6 +413,30 @@ export class TorsoPoseEstimator {
             const tempHand2D = matchedLeftHand;
             matchedLeftHand = matchedRightHand;
             matchedRightHand = tempHand2D;
+
+            const tempHipRoll = leftHipRoll;
+            leftHipRoll = -rightHipRoll;
+            rightHipRoll = -tempHipRoll;
+
+            const tempHipPitch = leftHipPitch;
+            leftHipPitch = rightHipPitch;
+            rightHipPitch = tempHipPitch;
+
+            const tempHipYaw = leftHipYaw;
+            leftHipYaw = -rightHipYaw;
+            rightHipYaw = -tempHipYaw;
+
+            const tempKneeFlex = leftKneeFlex;
+            leftKneeFlex = rightKneeFlex;
+            rightKneeFlex = tempKneeFlex;
+
+            const tempAnkPitch = leftAnklePitch;
+            leftAnklePitch = rightAnklePitch;
+            rightAnklePitch = tempAnkPitch;
+
+            const tempAnkRoll = leftAnkleRoll;
+            leftAnkleRoll = -rightAnkleRoll;
+            rightAnkleRoll = -tempAnkRoll;
         }
 
         return {
@@ -406,11 +463,27 @@ export class TorsoPoseEstimator {
             rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
             rightHandGesture: rightHandGesture,
+            leftHipPitch: this._clamp(leftHipPitch, -1.5, 1.8),
+            leftHipRoll: this._clamp(leftHipRoll, -0.6, 1.2),
+            leftHipYaw: this._clamp(leftHipYaw, -0.8, 0.8),
+            leftKneeFlex: this._clamp(leftKneeFlex, 0, 2.4),
+            leftAnklePitch: this._clamp(leftAnklePitch, -0.8, 0.8),
+            leftAnkleRoll: this._clamp(leftAnkleRoll, -0.5, 0.5),
+            rightHipPitch: this._clamp(rightHipPitch, -1.5, 1.8),
+            rightHipRoll: this._clamp(rightHipRoll, -1.2, 0.6),
+            rightHipYaw: this._clamp(rightHipYaw, -0.8, 0.8),
+            rightKneeFlex: this._clamp(rightKneeFlex, 0, 2.4),
+            rightAnklePitch: this._clamp(rightAnklePitch, -0.8, 0.8),
+            rightAnkleRoll: this._clamp(rightAnkleRoll, -0.5, 0.5),
             landmarks2D: {
                 leftShoulder, rightShoulder,
                 leftElbow, rightElbow,
                 leftWrist: activeLeftWrist, rightWrist: activeRightWrist,
                 leftHip, rightHip,
+                leftKnee, rightKnee,
+                leftAnkle, rightAnkle,
+                leftHeel, rightHeel,
+                leftFootIndex, rightFootIndex,
                 midShoulder, midHip,
                 nose,
                 leftHand2D: matchedLeftHand,
@@ -611,6 +684,131 @@ export class TorsoPoseEstimator {
     }
 
     /**
+     * 完整下肢 3D 正交基底逆向運動學解算器 (Two-Bone Orthonormal IK Solver for Lower Limbs)
+     * 1. 骨盆髖臼連接 (Acetabular Socket Alignment)
+     * 2. 忠實保持相機 2D 投影角度 (Screen-Space Vector Tracking)
+     * 3. 嚴格人體生理約束：
+     *    - 膝關節鉸鏈單向後折 (Knee Flexion >= 0，絕不向前反折/脫臼)
+     *    - 股骨內外翻 (Abduction/Adduction) 與 旋轉 (Internal/External Rotation)
+     * 4. 踝關節 (Ankle Mortise) 地面平衡與屈曲補償
+     */
+    _solveLegKinematics(
+        hip, knee, ankle, footIndex, side,
+        pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
+    ) {
+        const sign = (side === 'left') ? 1.0 : -1.0;
+
+        if (!hip || !knee) {
+            return {
+                pitch: 0,
+                roll: sign * 0.06,
+                yaw: 0,
+                kneeFlex: 0.05,
+                anklePitch: -0.02,
+                ankleRoll: 0
+            };
+        }
+
+        // 1. 相機平面投影向量 (Screen X-Y)
+        const dxFemur = knee.x - hip.x;
+        const dyFemur = -(knee.y - hip.y); // Three.js 向上為正
+        const lFemur2D = Math.hypot(dxFemur, dyFemur);
+
+        const scale = torsoHeight || 0.45;
+        const LFemur = scale * 0.65;
+        const LTibia = scale * 0.60;
+
+        // 2. 解剖深度推估 (Pythagorean Depth)
+        const rawDzFemur = Math.sqrt(Math.max(0, LFemur * LFemur - lFemur2D * lFemur2D));
+        const mpDzFemur = -((knee.z || 0) - (hip.z || 0));
+        const dzFemur = rawDzFemur * (Math.abs(mpDzFemur) > 0.02 ? Math.sign(mpDzFemur) : 0.0) * 0.7;
+
+        const vFemurCam = new THREE.Vector3(dxFemur, dyFemur, dzFemur);
+
+        // 小腿 (Tibia & Fibula) 相機向量
+        let vTibiaCam;
+        if (ankle) {
+            const dxShin = ankle.x - knee.x;
+            const dyShin = -(ankle.y - knee.y);
+            const lShin2D = Math.hypot(dxShin, dyShin);
+            const rawDzShin = Math.sqrt(Math.max(0, LTibia * LTibia - lShin2D * lShin2D));
+            const mpDzShin = -((ankle.z || 0) - (knee.z || 0));
+            // 人體小腿在自然彎曲或站姿下，通常向後折疊 (-Z)
+            const zSignShin = (Math.abs(mpDzShin) > 0.02) ? Math.sign(mpDzShin) : -0.5;
+            const dzShin = rawDzShin * zSignShin * 0.7;
+
+            vTibiaCam = new THREE.Vector3(dxShin, dyShin, dzShin);
+        } else {
+            vTibiaCam = new THREE.Vector3(sign * 0.02, -LTibia, -0.05);
+        }
+
+        // 3. 逆變換至骨盆局部坐標系 (Pelvis Local Frame)
+        const qPelvis = new THREE.Quaternion().setFromEuler(
+            new THREE.Euler(pelvisPitch, pelvisYaw, pelvisRoll, 'XYZ')
+        );
+        const qPelvisInv = qPelvis.clone().invert();
+
+        let uFemur = vFemurCam.clone().applyQuaternion(qPelvisInv).normalize();
+        let uTibia = vTibiaCam.clone().applyQuaternion(qPelvisInv).normalize();
+
+        // 4. 生理防穿插與正常站立角度約束
+        // 股骨在骨盆坐標系中下垂長軸 (Three.js 股骨自然下垂沿 -Y)
+        const yAxis = uFemur.clone().negate().normalize();
+
+        // 膝關節屈曲角度 (Flexion)
+        const dotFlex = THREE.MathUtils.clamp(uFemur.dot(uTibia), -1.0, 1.0);
+        let flex = Math.acos(dotFlex);
+
+        // 人體膝蓋只能向後彎曲 (flex >= 0)，絕不允許向前反折
+        const isBackwardFlex = (uTibia.z - uFemur.z) <= 0.05;
+        if (!isBackwardFlex) {
+            flex = 0.02; // 消除反折
+        }
+
+        // 預設正向法線 (面朝人體前方 +Z)
+        let zDef = new THREE.Vector3(0, 0, 1);
+        const dotZDefY = zDef.dot(yAxis);
+        zDef.sub(yAxis.clone().multiplyScalar(dotZDefY)).normalize();
+        if (zDef.lengthSq() < 1e-4) {
+            zDef = new THREE.Vector3(0, 1, 0).cross(yAxis).normalize();
+        }
+
+        // 實測小腿屈曲法線 (屈曲時小腿正交投影反向為髕骨朝向)
+        const uTibiaOrth = uTibia.clone().sub(uFemur.clone().multiplyScalar(dotFlex));
+        let zMeas = uTibiaOrth.clone().negate().normalize();
+        if (zMeas.lengthSq() < 1e-4) {
+            zMeas = zDef.clone();
+        }
+
+        const w = THREE.MathUtils.clamp((flex - 0.1) / 0.25, 0.0, 1.0);
+        const zAxis = zDef.clone().lerp(zMeas, w).normalize();
+        const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+
+        const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
+        const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');
+
+        // 5. 踝關節補償 (腳掌維持水平貼地或踮腳)
+        let anklePitch = -flex * 0.65 - euler.x * 0.45;
+        let ankleRoll = -euler.z * 0.45;
+
+        if (footIndex && ankle) {
+            const dyFoot = -(footIndex.y - ankle.y);
+            if (dyFoot < -0.04) {
+                anklePitch += this._clamp(-dyFoot * 2.2, 0, 0.7);
+            }
+        }
+
+        return {
+            pitch: this._clamp(euler.x, -1.5, 1.8),
+            roll: this._clamp(euler.z, side === 'left' ? -0.6 : -1.2, side === 'left' ? 1.2 : 0.6),
+            yaw: this._clamp(euler.y, -0.8, 0.8),
+            kneeFlex: this._clamp(flex, 0, 2.4),
+            anklePitch: this._clamp(anklePitch, -0.8, 0.8),
+            ankleRoll: this._clamp(ankleRoll, -0.5, 0.5)
+        };
+    }
+
+    /**
      * 從 MediaPipe Holistic 21 節點中，根據手指指向、食指-小指解剖橫軸關係解算手掌前後翻轉角
      * 並精確辨識放鬆 (Relaxed)、比耶 (Peace)、握拳 (Fist)、平展 (Open)
      */
@@ -723,6 +921,18 @@ export class TorsoPoseEstimator {
             rightElbowFlex: 1.85, // 屈肘貼頸
             rightForearmTwist: 0.3,
             rightHandGesture: 'peace',
+            leftHipPitch: 0.05,
+            leftHipRoll: 0.08,
+            leftHipYaw: 0,
+            leftKneeFlex: 0.12,
+            leftAnklePitch: -0.06,
+            leftAnkleRoll: 0,
+            rightHipPitch: -0.08,
+            rightHipRoll: -0.08,
+            rightHipYaw: 0,
+            rightKneeFlex: 0.08,
+            rightAnklePitch: -0.04,
+            rightAnkleRoll: 0,
             landmarks2D: null
         };
     }

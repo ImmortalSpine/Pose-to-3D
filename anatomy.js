@@ -62,6 +62,20 @@ export class AnatomicalTorso {
             }
         };
 
+        // 下肢骨骼系統 (含股骨、大轉子、髕骨、脛骨、腓骨、足部骨骼)
+        this.lowerLimbs = {
+            left: {
+                hipJoint: null, femur: null, patella: null,
+                kneeJoint: null, tibia: null, fibula: null,
+                ankleJoint: null, footGroup: null, footMesh: null
+            },
+            right: {
+                hipJoint: null, femur: null, patella: null,
+                kneeJoint: null, tibia: null, fibula: null,
+                ankleJoint: null, footGroup: null, footMesh: null
+            }
+        };
+
         // 頸椎骨節
         this.cervicalVertebrae = [];
         this.cervicalGroup = new THREE.Group();
@@ -170,6 +184,10 @@ export class AnatomicalTorso {
         this._buildUpperLimb('left');
         this._buildUpperLimb('right');
 
+        // 下肢系統 (髖關節、股骨、大轉子、髕骨、脛骨、腓骨、足骨)
+        this._buildLowerLimb('left');
+        this._buildLowerLimb('right');
+
         // 頸椎 (C7 -> C1)
         tParent.add(this.cervicalGroup);
         this.cervicalGroup.position.set(0, thoracicHeight, 0);
@@ -267,6 +285,362 @@ export class AnatomicalTorso {
         // 標記關鍵解剖骨點
         this._addLandmark(`Olecranon_${side}`, new THREE.Vector3(sign * 6.2, 1.5, -1.6), this.thoracicCageUnit);
         this._addLandmark(`AcromionPoint_${side}`, new THREE.Vector3(sign * 6.2, 10.0, -0.8), this.thoracicCageUnit);
+    }
+
+    /**
+     * 建立一側下肢骨骼鏈 (髖關節 -> 股骨/大轉子 -> 膝關節/髕骨 -> 脛骨/腓骨 -> 踝關節 -> 完整足骨)
+     */
+    _buildLowerLimb(side) {
+        const sign = (side === 'left') ? 1 : -1;
+
+        // 1. 髖關節 (Hip Joint / Acetabulofemoral Joint) - 坐標緊扣骨盆髖臼窩 (sign * 3.6, -3.4, 0.6)
+        const hipJoint = new THREE.Group();
+        hipJoint.name = `Hip_Joint_${side}`;
+        hipJoint.position.set(sign * 3.6, -3.4, 0.6);
+        this.pelvisUnit.add(hipJoint);
+        this.lowerLimbs[side].hipJoint = hipJoint;
+        hipJoint.rotation.order = 'YXZ';
+
+        // 2. 股骨總成 (Femur: 股骨頭、股骨頸、大轉子、小轉子、股骨幹、股骨內外側髁)
+        const femurMesh = this._createFemurMesh(side);
+        hipJoint.add(femurMesh);
+        this.lowerLimbs[side].femur = femurMesh;
+
+        // 3. 髕骨 (Patella - 膝蓋骨，位於股骨下端滑車面)
+        const femurLen = 10.5;
+        const patellaMesh = this._createPatellaMesh(side);
+        patellaMesh.position.set(0, -femurLen + 0.35, 0.72);
+        hipJoint.add(patellaMesh);
+        this.lowerLimbs[side].patella = patellaMesh;
+
+        // 4. 膝關節 (Knee Joint) - 單向橫軸鉸鏈 (屈曲向後折疊)
+        const kneeJoint = new THREE.Group();
+        kneeJoint.name = `Knee_Joint_${side}`;
+        kneeJoint.position.set(0, -femurLen, 0);
+        hipJoint.add(kneeJoint);
+        this.lowerLimbs[side].kneeJoint = kneeJoint;
+
+        // 5. 脛骨 (Tibia: 內側承重粗骨、脛骨粗隆、迎面骨前脊、內踝)
+        const tibiaMesh = this._createTibiaMesh(side);
+        kneeJoint.add(tibiaMesh);
+        this.lowerLimbs[side].tibia = tibiaMesh;
+
+        // 6. 腓骨 (Fibula: 外側細骨、腓骨頭、外踝)
+        const fibulaMesh = this._createFibulaMesh(side);
+        kneeJoint.add(fibulaMesh);
+        this.lowerLimbs[side].fibula = fibulaMesh;
+
+        // 7. 踝關節 (Ankle Joint / Mortise)
+        const tibiaLen = 9.6;
+        const ankleJoint = new THREE.Group();
+        ankleJoint.name = `Ankle_Joint_${side}`;
+        ankleJoint.position.set(-sign * 0.15, -tibiaLen, 0);
+        kneeJoint.add(ankleJoint);
+        this.lowerLimbs[side].ankleJoint = ankleJoint;
+        ankleJoint.rotation.order = 'YXZ';
+
+        // 8. 足部骨骼系統 (Foot: 距骨、跟骨結節、跗骨、5根蹠骨、14節趾骨)
+        const footData = this._buildFootMesh(side);
+        ankleJoint.add(footData.mesh);
+        this.lowerLimbs[side].footGroup = footData.mesh;
+        this.lowerLimbs[side].footMesh = footData.mesh;
+
+        // 關鍵解剖骨點標記 (Landmarks)
+        this._addLandmark(`GreaterTrochanter_${side}`, new THREE.Vector3(sign * 5.2, -4.2, 0.4), this.pelvisUnit);
+        this._addLandmark(`PatellaPoint_${side}`, new THREE.Vector3(sign * 3.6, -13.5, 1.3), this.pelvisUnit);
+        this._addLandmark(`FibulaHead_${side}`, new THREE.Vector3(sign * 4.6, -14.2, 0.1), this.pelvisUnit);
+        this._addLandmark(`MedialMalleolus_${side}`, new THREE.Vector3(sign * 3.1, -23.5, 0.3), this.pelvisUnit);
+        this._addLandmark(`LateralMalleolus_${side}`, new THREE.Vector3(sign * 4.5, -23.9, -0.1), this.pelvisUnit);
+    }
+
+    /**
+     * 建立股骨 (Femur: 大腿骨)
+     * 含股骨頭、股骨頸、大轉子 (Greater Trochanter)、小轉子、微前凸骨幹與雙髁
+     */
+    _createFemurMesh(side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const group = new THREE.Group();
+        group.name = `Femur_${side}`;
+
+        const femurLen = 10.5;
+
+        // 1. 股骨頭 (Femoral Head: 球體嵌合於髖臼)
+        const headGeo = new THREE.SphereGeometry(0.78, 16, 16);
+        const headMesh = new THREE.Mesh(headGeo, this.materials.bone);
+        headMesh.position.set(0, 0, 0);
+        group.add(headMesh);
+
+        // 2. 股骨頸 (Femoral Neck: 解剖頸幹角 ~126°，由股骨頭向外下方延伸)
+        const neckCurve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(sign * 0.7, -0.45, 0),
+            new THREE.Vector3(sign * 1.35, -0.9, 0)
+        ]);
+        const neckGeo = new THREE.TubeGeometry(neckCurve, 10, 0.46, 8, false);
+        const neckMesh = new THREE.Mesh(neckGeo, this.materials.bone);
+        neckMesh.castShadow = true;
+        group.add(neckMesh);
+
+        // 3. 大轉子 (Greater Trochanter - 關鍵藝用骨標誌)
+        // 位於股骨頸末端外側頂部，形成髖部最寬體表骨點
+        const trochanterGeo = new THREE.BoxGeometry(0.95, 1.35, 1.1);
+        const trochanterMesh = new THREE.Mesh(trochanterGeo, this.materials.boneHighlight);
+        trochanterMesh.position.set(sign * 1.7, -0.8, 0.05);
+        trochanterMesh.rotation.z = -sign * 0.15;
+        group.add(trochanterMesh);
+
+        // 轉子窩 (Trochanteric Fossa - 內側面凹窩)
+        const fossaGeo = new THREE.BoxGeometry(0.4, 0.6, 0.5);
+        const fossaMesh = new THREE.Mesh(fossaGeo, this.materials.bone);
+        fossaMesh.position.set(sign * 1.25, -1.0, -0.2);
+        group.add(fossaMesh);
+
+        // 4. 小轉子 (Lesser Trochanter - 內後側圓錐突起)
+        const lesserGeo = new THREE.ConeGeometry(0.35, 0.55, 8);
+        const lesserMesh = new THREE.Mesh(lesserGeo, this.materials.boneHighlight);
+        lesserMesh.rotation.z = sign * Math.PI * 0.45;
+        lesserMesh.rotation.x = -Math.PI * 0.35;
+        lesserMesh.position.set(sign * 0.7, -1.75, -0.45);
+        group.add(lesserMesh);
+
+        // 5. 股骨幹 (Femoral Shaft)
+        // 帶有生理前凸 (Anterior Bow) 與向內收斜向膝蓋的提攜角 (Q-angle)
+        const p0 = new THREE.Vector3(sign * 1.4, -1.2, 0);
+        const p1 = new THREE.Vector3(sign * 0.9, -femurLen * 0.35, 0.35);
+        const p2 = new THREE.Vector3(sign * 0.45, -femurLen * 0.68, 0.38);
+        const p3 = new THREE.Vector3(0, -femurLen + 0.85, 0);
+
+        const shaftCurve = new THREE.CatmullRomCurve3([p0, p1, p2, p3]);
+        const shaftGeo = new THREE.TubeGeometry(shaftCurve, 20, 0.42, 10, false);
+        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
+        shaftMesh.castShadow = true;
+        group.add(shaftMesh);
+
+        // 6. 股骨遠端膨大部與雙髁 (Femoral Distal Condyles)
+        // 內側髁 (Medial Condyle)
+        const medialCondyleGeo = new THREE.SphereGeometry(0.68, 12, 12);
+        const medialCondyleMesh = new THREE.Mesh(medialCondyleGeo, this.materials.bone);
+        medialCondyleMesh.scale.set(0.75, 1.0, 1.25);
+        medialCondyleMesh.position.set(-sign * 0.55, -femurLen, -0.15);
+        group.add(medialCondyleMesh);
+
+        // 外側髁 (Lateral Condyle)
+        const lateralCondyleGeo = new THREE.SphereGeometry(0.65, 12, 12);
+        const lateralCondyleMesh = new THREE.Mesh(lateralCondyleGeo, this.materials.bone);
+        lateralCondyleMesh.scale.set(0.72, 1.0, 1.2);
+        lateralCondyleMesh.position.set(sign * 0.55, -femurLen, -0.15);
+        group.add(lateralCondyleMesh);
+
+        // 髕骨滑車槽 (Patellar Surface - 前側凹槽)
+        const trochleaGeo = new THREE.CylinderGeometry(0.55, 0.65, 0.95, 10);
+        const trochleaMesh = new THREE.Mesh(trochleaGeo, this.materials.bone);
+        trochleaMesh.rotation.z = Math.PI * 0.5;
+        trochleaMesh.position.set(0, -femurLen + 0.35, 0.25);
+        group.add(trochleaMesh);
+
+        return group;
+    }
+
+    /**
+     * 建立髕骨 (Patella - 倒心形膝蓋骨籽骨)
+     */
+    _createPatellaMesh(side) {
+        const group = new THREE.Group();
+        group.name = `Patella_${side}`;
+
+        const patellaShape = new THREE.Shape();
+        patellaShape.moveTo(-0.45, 0.55);
+        patellaShape.lineTo(0.45, 0.55);
+        patellaShape.lineTo(0.40, 0.0);
+        patellaShape.lineTo(0.0, -0.6); // 髕骨尖 (Apex) 朝下
+        patellaShape.lineTo(-0.40, 0.0);
+        patellaShape.closePath();
+
+        const extrudeSettings = { depth: 0.32, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.1, bevelThickness: 0.1 };
+        const patellaGeo = new THREE.ExtrudeGeometry(patellaShape, extrudeSettings);
+        const patellaMesh = new THREE.Mesh(patellaGeo, this.materials.boneHighlight);
+        patellaMesh.position.set(0, 0, -0.15);
+        patellaMesh.castShadow = true;
+        group.add(patellaMesh);
+
+        return group;
+    }
+
+    /**
+     * 建立脛骨 (Tibia - 內側粗大承重骨)
+     * 含脛骨平台、脛骨粗隆、前脊迎面骨與內踝 (Medial Malleolus)
+     */
+    _createTibiaMesh(side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const group = new THREE.Group();
+        group.name = `Tibia_${side}`;
+
+        const tibiaLen = 9.6;
+
+        // 1. 脛骨平台 (Tibial Plateau: 承接股骨雙髁)
+        const plateauGeo = new THREE.CylinderGeometry(0.85, 0.78, 0.65, 14);
+        const plateauMesh = new THREE.Mesh(plateauGeo, this.materials.bone);
+        plateauMesh.scale.set(1.25, 1.0, 1.0);
+        plateauMesh.position.set(-sign * 0.1, -0.32, 0);
+        group.add(plateauMesh);
+
+        // 髁間隆起 (Intercondylar Eminence - 中央棘)
+        const spineGeo = new THREE.ConeGeometry(0.2, 0.45, 6);
+        const spineMesh = new THREE.Mesh(spineGeo, this.materials.boneHighlight);
+        spineMesh.position.set(-sign * 0.1, 0.15, 0);
+        group.add(spineMesh);
+
+        // 2. 脛骨粗隆 (Tibial Tuberosity - 髕韌帶附著點，前側凸起)
+        const tuberosityGeo = new THREE.BoxGeometry(0.55, 0.75, 0.65);
+        const tuberosityMesh = new THREE.Mesh(tuberosityGeo, this.materials.boneHighlight);
+        tuberosityMesh.position.set(-sign * 0.1, -0.85, 0.55);
+        group.add(tuberosityMesh);
+
+        // 3. 脛骨幹 (Shaft) 與前脊迎面骨 (Anterior Crest)
+        const p0 = new THREE.Vector3(-sign * 0.1, -0.65, 0.1);
+        const p1 = new THREE.Vector3(-sign * 0.08, -tibiaLen * 0.45, 0.22);
+        const p2 = new THREE.Vector3(-sign * 0.15, -tibiaLen, 0.05);
+
+        const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
+        const shaftGeo = new THREE.TubeGeometry(curve, 18, 0.40, 8, false);
+        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
+        shaftMesh.castShadow = true;
+        group.add(shaftMesh);
+
+        // 脛骨前脊骨線 (迎面骨銳利前緣)
+        const crestP0 = new THREE.Vector3(-sign * 0.1, -1.0, 0.55);
+        const crestP1 = new THREE.Vector3(-sign * 0.08, -tibiaLen * 0.5, 0.42);
+        const crestP2 = new THREE.Vector3(-sign * 0.22, -tibiaLen * 0.88, 0.25);
+        const crestCurve = new THREE.CatmullRomCurve3([crestP0, crestP1, crestP2]);
+        const crestGeo = new THREE.TubeGeometry(crestCurve, 12, 0.12, 6, false);
+        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
+        group.add(crestMesh);
+
+        // 4. 內踝 (Medial Malleolus - 內側腳踝凸起)
+        const malleolusGeo = new THREE.BoxGeometry(0.52, 0.85, 0.75);
+        const malleolusMesh = new THREE.Mesh(malleolusGeo, this.materials.boneHighlight);
+        malleolusMesh.position.set(-sign * 0.6, -tibiaLen - 0.25, 0.05);
+        group.add(malleolusMesh);
+
+        // 下關節面 (Inferior Articular Surface)
+        const articularGeo = new THREE.BoxGeometry(0.85, 0.35, 0.85);
+        const articularMesh = new THREE.Mesh(articularGeo, this.materials.bone);
+        articularMesh.position.set(-sign * 0.15, -tibiaLen - 0.15, 0.05);
+        group.add(articularMesh);
+
+        return group;
+    }
+
+    /**
+     * 建立腓骨 (Fibula - 外側細長輔助骨)
+     * 含腓骨頭 (Fibular Head) 與外踝 (Lateral Malleolus)
+     */
+    _createFibulaMesh(side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const group = new THREE.Group();
+        group.name = `Fibula_${side}`;
+
+        const tibiaLen = 9.6;
+
+        // 1. 腓骨頭 (Fibular Head - 膝蓋外下方圓球狀骨點)
+        const headGeo = new THREE.SphereGeometry(0.38, 10, 10);
+        const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
+        headMesh.position.set(sign * 0.95, -0.65, -0.2);
+        group.add(headMesh);
+
+        // 2. 腓骨幹 (Shaft - 細長管狀骨)
+        const p0 = new THREE.Vector3(sign * 0.95, -0.85, -0.2);
+        const p1 = new THREE.Vector3(sign * 0.92, -tibiaLen * 0.5, -0.15);
+        const p2 = new THREE.Vector3(sign * 0.85, -tibiaLen * 0.92, -0.18);
+
+        const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
+        const shaftGeo = new THREE.TubeGeometry(curve, 16, 0.18, 6, false);
+        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
+        shaftMesh.castShadow = true;
+        group.add(shaftMesh);
+
+        // 3. 外踝 (Lateral Malleolus - 外側腳踝凸起，比內踝更低、更靠後)
+        const malleolusGeo = new THREE.BoxGeometry(0.48, 0.95, 0.72);
+        const malleolusMesh = new THREE.Mesh(malleolusGeo, this.materials.boneHighlight);
+        malleolusMesh.position.set(sign * 0.85, -tibiaLen - 0.55, -0.15);
+        group.add(malleolusMesh);
+
+        return group;
+    }
+
+    /**
+     * 建立完整足部骨骼系統 (Foot Skeleton)
+     * 含距骨 (Talus)、跟骨結節 (Calcaneus)、跗骨群 (Tarsals)、5 根蹠骨 (Metatarsals) 與 14 節趾骨 (Phalanges)
+     */
+    _buildFootMesh(side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const group = new THREE.Group();
+        group.name = `Foot_${side}`;
+
+        // 1. 距骨 (Talus - 鞍狀滑車，嵌合於內外踝之間)
+        const talusGeo = new THREE.BoxGeometry(0.9, 0.7, 1.1);
+        const talusMesh = new THREE.Mesh(talusGeo, this.materials.bone);
+        talusMesh.position.set(0, -0.35, 0.1);
+        group.add(talusMesh);
+
+        // 2. 跟骨 (Calcaneus - 足跟結節，向後突出承受體重)
+        const heelGeo = new THREE.BoxGeometry(0.95, 0.9, 1.9);
+        const heelMesh = new THREE.Mesh(heelGeo, this.materials.boneHighlight);
+        heelMesh.position.set(-sign * 0.05, -0.95, -0.85);
+        heelMesh.castShadow = true;
+        group.add(heelMesh);
+
+        // 3. 跗骨群 (Tarsals - 舟狀骨、骰骨、三塊楔狀骨形成足縱弓)
+        const tarsalGeo = new THREE.BoxGeometry(1.25, 0.65, 1.2);
+        const tarsalMesh = new THREE.Mesh(tarsalGeo, this.materials.bone);
+        tarsalMesh.position.set(0, -0.65, 1.15);
+        group.add(tarsalMesh);
+
+        // 4. 蹠骨 (5 Metatarsal Bones - 呈弧形放射狀分佈)
+        const metatarsalWidths = [0.22, 0.18, 0.17, 0.16, 0.18];
+        const metatarsalLengths = [1.8, 2.05, 1.95, 1.85, 1.75];
+
+        for (let i = 0; i < 5; i++) {
+            const rayX = -sign * 0.45 + (sign * i * 0.22);
+            const w = metatarsalWidths[i];
+            const len = metatarsalLengths[i];
+
+            const p0 = new THREE.Vector3(rayX * 0.85, -0.65, 1.6);
+            const p1 = new THREE.Vector3(rayX, -0.85, 1.6 + len);
+
+            const mCurve = new THREE.CatmullRomCurve3([p0, p1]);
+            const mGeo = new THREE.TubeGeometry(mCurve, 6, w, 6, false);
+            const mMesh = new THREE.Mesh(mGeo, this.materials.bone);
+            group.add(mMesh);
+
+            // 蹠骨頭 (Metatarsal Head - 蹠趾關節)
+            const headGeo = new THREE.SphereGeometry(w * 1.25, 8, 8);
+            const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
+            headMesh.position.copy(p1);
+            group.add(headMesh);
+
+            // 5. 趾骨群 (Phalanges - 大拇趾 2 節，其餘各 3 節)
+            const phalanCount = (i === 0) ? 2 : 3;
+            let pPrev = p1.clone();
+            const segLen = (i === 0) ? 0.48 : 0.32;
+
+            for (let ph = 0; ph < phalanCount; ph++) {
+                const pNext = pPrev.clone().add(new THREE.Vector3(0, -0.05, segLen));
+                const pCurv = new THREE.CatmullRomCurve3([pPrev, pNext]);
+                const pGeo = new THREE.TubeGeometry(pCurv, 4, w * 0.85, 6, false);
+                const pMesh = new THREE.Mesh(pGeo, this.materials.bone);
+                group.add(pMesh);
+                pPrev = pNext;
+            }
+        }
+
+        // 第五蹠骨粗隆 (Tuberosity of 5th Metatarsal - 腳外側體表骨點)
+        const tub5Geo = new THREE.SphereGeometry(0.25, 6, 6);
+        const tub5Mesh = new THREE.Mesh(tub5Geo, this.materials.boneHighlight);
+        tub5Mesh.position.set(sign * 0.65, -0.8, 1.7);
+        group.add(tub5Mesh);
+
+        return { mesh: group };
     }
 
     /**
@@ -1123,7 +1497,20 @@ export class AnatomicalTorso {
         rightForearmTwist = 0.3,
         // 手部姿態手勢 (Relaxed, Peace, Fist, Open)
         leftHandGesture = null,
-        rightHandGesture = null
+        rightHandGesture = null,
+        // 下肢骨骼姿態 (髖關節、膝關節屈曲、踝關節)
+        leftHipPitch = 0,
+        leftHipRoll = 0,
+        leftHipYaw = 0,
+        rightHipPitch = 0,
+        rightHipRoll = 0,
+        rightHipYaw = 0,
+        leftKneeFlex = 0,
+        rightKneeFlex = 0,
+        leftAnklePitch = 0,
+        leftAnkleRoll = 0,
+        rightAnklePitch = 0,
+        rightAnkleRoll = 0
     }) {
         // 1. 骨盆整體單元旋轉
         this.pelvisUnit.rotation.x = pelvisPitch;
@@ -1204,6 +1591,38 @@ export class AnatomicalTorso {
         if (rightHandGesture) {
             this.setHandGesture('right', rightHandGesture);
         }
+
+        // 10. 左下肢 (髖關節、膝關節屈曲、踝關節)
+        if (this.lowerLimbs.left.hipJoint) {
+            const hL = this.lowerLimbs.left.hipJoint;
+            hL.rotation.order = 'YXZ';
+            hL.rotation.x = leftHipPitch;
+            hL.rotation.y = leftHipYaw;
+            hL.rotation.z = leftHipRoll;
+        }
+        if (this.lowerLimbs.left.kneeJoint) {
+            this.lowerLimbs.left.kneeJoint.rotation.x = leftKneeFlex;
+        }
+        if (this.lowerLimbs.left.ankleJoint) {
+            this.lowerLimbs.left.ankleJoint.rotation.x = leftAnklePitch;
+            this.lowerLimbs.left.ankleJoint.rotation.z = leftAnkleRoll;
+        }
+
+        // 11. 右下肢 (髖關節、膝關節屈曲、踝關節)
+        if (this.lowerLimbs.right.hipJoint) {
+            const hR = this.lowerLimbs.right.hipJoint;
+            hR.rotation.order = 'YXZ';
+            hR.rotation.x = rightHipPitch;
+            hR.rotation.y = rightHipYaw;
+            hR.rotation.z = rightHipRoll;
+        }
+        if (this.lowerLimbs.right.kneeJoint) {
+            this.lowerLimbs.right.kneeJoint.rotation.x = rightKneeFlex;
+        }
+        if (this.lowerLimbs.right.ankleJoint) {
+            this.lowerLimbs.right.ankleJoint.rotation.x = rightAnklePitch;
+            this.lowerLimbs.right.ankleJoint.rotation.z = rightAnkleRoll;
+        }
     }
 
     toggleLandmarks(visible) {
@@ -1256,5 +1675,35 @@ export class AnatomicalTorso {
             const bonyPelvis = this.pelvisUnit.getObjectByName("Bony_Pelvis");
             if (bonyPelvis) bonyPelvis.visible = visible;
         }
+    }
+
+    toggleFemurs(visible) {
+        ['left', 'right'].forEach(side => {
+            if (this.lowerLimbs[side].femur) {
+                this.lowerLimbs[side].femur.visible = visible;
+            }
+            if (this.lowerLimbs[side].patella) {
+                this.lowerLimbs[side].patella.visible = visible;
+            }
+        });
+    }
+
+    toggleLowerLegs(visible) {
+        ['left', 'right'].forEach(side => {
+            if (this.lowerLimbs[side].tibia) {
+                this.lowerLimbs[side].tibia.visible = visible;
+            }
+            if (this.lowerLimbs[side].fibula) {
+                this.lowerLimbs[side].fibula.visible = visible;
+            }
+        });
+    }
+
+    toggleFeet(visible) {
+        ['left', 'right'].forEach(side => {
+            if (this.lowerLimbs[side].footGroup) {
+                this.lowerLimbs[side].footGroup.visible = visible;
+            }
+        });
     }
 }

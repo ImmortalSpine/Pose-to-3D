@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=2.2';
-import { TorsoPoseEstimator } from './poseDetector.js?v=2.2';
+import { AnatomicalTorso } from './anatomy.js?v=2.3';
+import { TorsoPoseEstimator } from './poseDetector.js?v=2.3';
 
 class App {
     constructor() {
@@ -22,7 +22,7 @@ class App {
         this.lastLandmarks2D = null;
         this.originalImageElement = null;
 
-        // 當前姿態狀態 (含骨盆、脊椎、胸廓與左右肱骨)
+        // 當前姿態狀態 (含骨盆、脊椎、胸廓、左右肱骨、前臂雙骨與下肢骨骼)
         this.currentPose = {
             pelvisRoll: 0,
             pelvisPitch: 0,
@@ -46,7 +46,20 @@ class App {
             rightArmYaw: 0,
             rightElbowFlex: 0.15,
             rightForearmTwist: 1.48, // 生理休息位半旋前 (85°)，掌心對準大腿
-            rightHandGesture: 'relaxed'
+            rightHandGesture: 'relaxed',
+            // 下肢骨骼系統姿態
+            leftHipPitch: 0,
+            leftHipRoll: 0.08,
+            leftHipYaw: 0,
+            leftKneeFlex: 0.08,
+            leftAnklePitch: -0.04,
+            leftAnkleRoll: 0,
+            rightHipPitch: 0,
+            rightHipRoll: -0.08,
+            rightHipYaw: 0,
+            rightKneeFlex: 0.08,
+            rightAnklePitch: -0.04,
+            rightAnkleRoll: 0
         };
         this.aiPoseBackup = { ...this.currentPose };
 
@@ -70,7 +83,7 @@ class App {
         const height = Math.max(this.viewportArea.clientHeight, 300);
         const aspect = width / height;
         this.camera = new THREE.PerspectiveCamera(38, aspect, 0.1, 1000);
-        this.camera.position.set(0, 5.0, 38);
+        this.camera.position.set(0, -3.0, 48);
 
         this.renderer = new THREE.WebGLRenderer({
             canvas: this.canvas,
@@ -85,8 +98,8 @@ class App {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
-        this.controls.target.set(0, 4.0, 0); // 居中聚焦在全軀幹 (胸廓+骨盆)
-        this.controls.maxDistance = 75;
+        this.controls.target.set(0, -4.0, 0); // 居中聚焦在全人體骨骼中心
+        this.controls.maxDistance = 85;
         this.controls.minDistance = 6;
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
@@ -110,12 +123,12 @@ class App {
         fillLight.position.set(0, -10, 15);
         this.scene.add(fillLight);
 
-        // 地面
-        const groundGeo = new THREE.PlaneGeometry(100, 100);
+        // 地面 (位置設定於腳掌底部 Y = -25.5)
+        const groundGeo = new THREE.PlaneGeometry(120, 120);
         const groundMat = new THREE.ShadowMaterial({ opacity: 0.25 });
         const ground = new THREE.Mesh(groundGeo, groundMat);
         ground.rotation.x = -Math.PI / 2;
-        ground.position.y = -4.5;
+        ground.position.y = -25.5;
         ground.receiveShadow = true;
         this.scene.add(ground);
     }
@@ -177,6 +190,15 @@ class App {
         document.getElementById('togglePelvis').addEventListener('change', (e) => {
             this.anatomicalTorso.togglePelvis(e.target.checked);
         });
+        document.getElementById('toggleFemurs').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleFemurs(e.target.checked);
+        });
+        document.getElementById('toggleLowerLegs').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleLowerLegs(e.target.checked);
+        });
+        document.getElementById('toggleFeet').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleFeet(e.target.checked);
+        });
         document.getElementById('toggleLandmarks').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleLandmarks(e.target.checked);
         });
@@ -203,6 +225,22 @@ class App {
             this.currentPose.leftArmRoll = -this.currentPose.rightArmRoll;
             this.currentPose.rightArmRoll = -tempArm;
 
+            const tempHip = this.currentPose.leftHipRoll;
+            this.currentPose.leftHipRoll = -this.currentPose.rightHipRoll;
+            this.currentPose.rightHipRoll = -tempHip;
+
+            const tempHipP = this.currentPose.leftHipPitch;
+            this.currentPose.leftHipPitch = this.currentPose.rightHipPitch;
+            this.currentPose.rightHipPitch = tempHipP;
+
+            const tempKnee = this.currentPose.leftKneeFlex;
+            this.currentPose.leftKneeFlex = this.currentPose.rightKneeFlex;
+            this.currentPose.rightKneeFlex = tempKnee;
+
+            const tempAnk = this.currentPose.leftAnklePitch;
+            this.currentPose.leftAnklePitch = this.currentPose.rightAnklePitch;
+            this.currentPose.rightAnklePitch = tempAnk;
+
             this.anatomicalTorso.setTorsoPose(this.currentPose);
             this._updateSlidersUI();
         });
@@ -225,6 +263,17 @@ class App {
         this._bindSlider('sliderLeftArmYaw', 'valLeftArmYaw', 'leftArmYaw');
         this._bindSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', 'leftElbowFlex');
         this._bindSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', 'leftForearmTwist');
+
+        // 下肢骨骼滑桿
+        this._bindSlider('sliderRightHipPitch', 'valRightHipPitch', 'rightHipPitch');
+        this._bindSlider('sliderRightHipRoll', 'valRightHipRoll', 'rightHipRoll');
+        this._bindSlider('sliderRightKneeFlex', 'valRightKneeFlex', 'rightKneeFlex');
+        this._bindSlider('sliderRightAnklePitch', 'valRightAnklePitch', 'rightAnklePitch');
+
+        this._bindSlider('sliderLeftHipPitch', 'valLeftHipPitch', 'leftHipPitch');
+        this._bindSlider('sliderLeftHipRoll', 'valLeftHipRoll', 'leftHipRoll');
+        this._bindSlider('sliderLeftKneeFlex', 'valLeftKneeFlex', 'leftKneeFlex');
+        this._bindSlider('sliderLeftAnklePitch', 'valLeftAnklePitch', 'leftAnklePitch');
 
         // 手部手勢選擇器
         const selRightGest = document.getElementById('selectRightHandGesture');
@@ -300,6 +349,16 @@ class App {
         setSlider('sliderLeftElbowFlex', 'valLeftElbowFlex', this.currentPose.leftElbowFlex);
         setSlider('sliderLeftForearmTwist', 'valLeftForearmTwist', this.currentPose.leftForearmTwist);
 
+        setSlider('sliderRightHipPitch', 'valRightHipPitch', this.currentPose.rightHipPitch);
+        setSlider('sliderRightHipRoll', 'valRightHipRoll', this.currentPose.rightHipRoll);
+        setSlider('sliderRightKneeFlex', 'valRightKneeFlex', this.currentPose.rightKneeFlex);
+        setSlider('sliderRightAnklePitch', 'valRightAnklePitch', this.currentPose.rightAnklePitch);
+
+        setSlider('sliderLeftHipPitch', 'valLeftHipPitch', this.currentPose.leftHipPitch);
+        setSlider('sliderLeftHipRoll', 'valLeftHipRoll', this.currentPose.leftHipRoll);
+        setSlider('sliderLeftKneeFlex', 'valLeftKneeFlex', this.currentPose.leftKneeFlex);
+        setSlider('sliderLeftAnklePitch', 'valLeftAnklePitch', this.currentPose.leftAnklePitch);
+
         const selRG = document.getElementById('selectRightHandGesture');
         if (selRG && this.currentPose.rightHandGesture) {
             selRG.value = this.currentPose.rightHandGesture;
@@ -314,7 +373,8 @@ class App {
     _setCameraView(view) {
         document.querySelectorAll('.gizmo-btn').forEach(b => b.classList.remove('active'));
 
-        const dist = 38;
+        const dist = 48;
+        const targetY = -4.0;
         const targetY = 4.0;
         switch (view) {
             case 'front':
@@ -503,6 +563,44 @@ class App {
 
         if (lm.leftHand2D) drawHandSkeleton(lm.leftHand2D);
         if (lm.rightHand2D) drawHandSkeleton(lm.rightHand2D);
+
+        // 7. 雙腿與足部連線 (Hip -> Knee -> Ankle -> Toe)
+        const drawLeg = (pHip, pKnee, pAnkle, pToe) => {
+            if (!pKnee) return;
+            ctx.strokeStyle = '#9d4edd';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(pHip.x, pHip.y);
+            ctx.lineTo(pKnee.x, pKnee.y);
+            if (pAnkle) {
+                ctx.lineTo(pAnkle.x, pAnkle.y);
+                if (pToe) {
+                    ctx.lineTo(pToe.x, pToe.y);
+                }
+            }
+            ctx.stroke();
+
+            this._drawPoint(ctx, pKnee, '#c77dff', 5);
+            if (pAnkle) this._drawPoint(ctx, pAnkle, '#e0aaff', 4.5);
+            if (pToe) this._drawPoint(ctx, pToe, '#ffd166', 3.5);
+        };
+
+        if (lm.leftKnee) {
+            drawLeg(
+                pLH,
+                toScreen(lm.leftKnee),
+                lm.leftAnkle ? toScreen(lm.leftAnkle) : null,
+                lm.leftFootIndex ? toScreen(lm.leftFootIndex) : null
+            );
+        }
+        if (lm.rightKnee) {
+            drawLeg(
+                pRH,
+                toScreen(lm.rightKnee),
+                lm.rightAnkle ? toScreen(lm.rightAnkle) : null,
+                lm.rightFootIndex ? toScreen(lm.rightFootIndex) : null
+            );
+        }
     }
 
     _drawPoint(ctx, pt, color, radius = 5) {
@@ -552,7 +650,19 @@ class App {
                 rightElbowFlex: 1.85, // 右肘屈曲比耶
                 rightForearmTwist: 0.35,
                 rightHandGesture: 'peace',
-                leftHandGesture: 'relaxed'
+                leftHandGesture: 'relaxed',
+                leftHipPitch: 0.05,
+                leftHipRoll: 0.08,
+                leftHipYaw: 0,
+                leftKneeFlex: 0.05,
+                leftAnklePitch: -0.02,
+                leftAnkleRoll: 0,
+                rightHipPitch: -0.08,
+                rightHipRoll: -0.08,
+                rightHipYaw: 0,
+                rightKneeFlex: 0.08,
+                rightAnklePitch: -0.04,
+                rightAnkleRoll: 0
             };
         } else {
             ctx.fillText("範例 B：側彎對抗 (Contrapposto)", 40, 60);
@@ -579,7 +689,19 @@ class App {
                 rightElbowFlex: 0.5,
                 rightForearmTwist: 1.48,
                 rightHandGesture: 'relaxed',
-                leftHandGesture: 'relaxed'
+                leftHandGesture: 'relaxed',
+                leftHipPitch: -0.05,
+                leftHipRoll: 0.16,
+                leftHipYaw: 0,
+                leftKneeFlex: 0.04, // 承重腿直立
+                leftAnklePitch: -0.02,
+                leftAnkleRoll: 0.06,
+                rightHipPitch: 0.15,
+                rightHipRoll: -0.12,
+                rightHipYaw: 0,
+                rightKneeFlex: 0.35, // 游離放鬆腿屈膝
+                rightAnklePitch: -0.12,
+                rightAnkleRoll: -0.04
             };
         }
 

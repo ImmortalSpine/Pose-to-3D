@@ -139,6 +139,27 @@
                     </label>
                 </div>
                 <div class="toggle-row">
+                    <span>股骨與大轉子 (Femur & Trochanter)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleFemurs" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
+                    <span>小腿雙骨 (脛骨迎面骨 & 腓骨)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleLowerLegs" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
+                    <span>足部骨骼 (距骨、跟骨結節、蹠趾骨)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleFeet" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
                     <span>關鍵藝用骨點 (Landmarks)</span>
                     <label class="toggle-switch">
                         <input type="checkbox" id="toggleLandmarks">
@@ -146,9 +167,9 @@
                     </label>
                 </div>
                 <div class="info-callout">
-                    <b>前臂與手掌解剖聯動：</b><br>
-                    • 尺骨為肘部樞紐軸心；橈骨隨前臂<b>旋前/旋後 (Pronation/Supination)</b>跨越尺骨剪刀交叉。<br>
-                    • <b>手掌 (腕骨、掌骨、指骨)</b>牢固嵌合於橈骨遠端，掌心與五指隨橈骨旋前/旋後動態翻轉。
+                    <b>前臂與下肢自然解剖連動：</b><br>
+                    • 橈骨隨前臂<b>旋前/旋後 (Pronation/Supination)</b>跨越尺骨剪刀交叉，手掌同步旋動。<br>
+                    • <b>下肢骨骼系統</b>：髖臼承接股骨頭，大轉子形成髖部最寬體表骨點；膝關節髕骨滑車單向後折；脛骨前脊迎面骨與內外踝嵌合足弓與跟骨結節。
                 </div>
             </div>
 
@@ -318,12 +339,78 @@
                         <option value="open">張開平展 (Open Palm)</option>
                     </select>
                 </div>
+
+                <!-- 右下肢骨骼控制 -->
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>右髖前屈/後伸 (Right Hip Pitch)</span>
+                        <span class="control-val" id="valRightHipPitch">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightHipPitch" min="-70" max="90" value="0">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>右腿外展/內收 (Right Hip Roll)</span>
+                        <span class="control-val" id="valRightHipRoll">-5°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightHipRoll" min="-65" max="35" value="-5">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>右膝後屈 (Right Knee Flex)</span>
+                        <span class="control-val" id="valRightKneeFlex">5°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightKneeFlex" min="0" max="135" value="5">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>右踝曲屈 (Right Ankle Pitch)</span>
+                        <span class="control-val" id="valRightAnklePitch">-2°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderRightAnklePitch" min="-45" max="45" value="-2">
+                </div>
+
+                <!-- 左下肢骨骼控制 -->
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左髖前屈/後伸 (Left Hip Pitch)</span>
+                        <span class="control-val" id="valLeftHipPitch">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftHipPitch" min="-70" max="90" value="0">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左腿外展/內收 (Left Hip Roll)</span>
+                        <span class="control-val" id="valLeftHipRoll">5°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftHipRoll" min="-35" max="65" value="5">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左膝後屈 (Left Knee Flex)</span>
+                        <span class="control-val" id="valLeftKneeFlex">5°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftKneeFlex" min="0" max="135" value="5">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>左踝曲屈 (Left Ankle Pitch)</span>
+                        <span class="control-val" id="valLeftAnklePitch">-2°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderLeftAnklePitch" min="-45" max="45" value="-2">
+                </div>
             </div>
         </aside>
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=2.2"></script>
+    <script type="module" src="app.js?v=2.3"></script>
 </body>
 </html>
 
