@@ -1,0 +1,523 @@
+/**
+ * AnatoPose 3D - Main Application Controller (Upper Limb & Shoulder Girdle Edition)
+ */
+
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { AnatomicalTorso } from './anatomy.js';
+import { TorsoPoseEstimator } from './poseDetector.js';
+
+class App {
+    constructor() {
+        this.canvas = document.getElementById('canvas3d');
+        this.viewportArea = document.getElementById('viewportArea');
+        this.referenceImage = document.getElementById('referenceImage');
+        this.emptyPlaceholder = document.getElementById('emptyPlaceholder');
+        this.landmarkCanvas = document.getElementById('landmarkOverlayCanvas');
+        this.btnToggle2D = document.getElementById('btnToggle2DLandmarks');
+        this.statusText = document.getElementById('statusText');
+        this.statusPill = document.getElementById('statusPill');
+
+        this.show2DLandmarks = true;
+        this.lastLandmarks2D = null;
+        this.originalImageElement = null;
+
+        // 當前姿態狀態 (含骨盆、脊椎、胸廓與左右肱骨)
+        this.currentPose = {
+            pelvisRoll: 0,
+            pelvisPitch: 0,
+            pelvisYaw: 0,
+            thoracicPitch: 0,
+            thoracicYaw: 0,
+            thoracicRoll: 0,
+            lumbarPitch: 0,
+            lumbarRoll: 0,
+            lumbarYaw: 0,
+            cervicalPitch: 0,
+            cervicalYaw: 0,
+            leftArmPitch: 0,
+            leftArmRoll: 0.12,
+            leftArmYaw: 0,
+            rightArmPitch: 0,
+            rightArmRoll: -0.12,
+            rightArmYaw: 0
+        };
+        this.aiPoseBackup = { ...this.currentPose };
+
+        this._initThree();
+        this._initAnatomy();
+        this._initPoseEstimator();
+        this._initUI();
+
+        window.addEventListener('resize', () => this._onResize());
+        
+        const resizeObserver = new ResizeObserver(() => this._onResize());
+        resizeObserver.observe(this.viewportArea);
+
+        this._animate();
+    }
+
+    _initThree() {
+        this.scene = new THREE.Scene();
+
+        const width = Math.max(this.viewportArea.clientWidth, 300);
+        const height = Math.max(this.viewportArea.clientHeight, 300);
+        const aspect = width / height;
+        this.camera = new THREE.PerspectiveCamera(38, aspect, 0.1, 1000);
+        this.camera.position.set(0, 5.0, 38);
+
+        this.renderer = new THREE.WebGLRenderer({
+            canvas: this.canvas,
+            antialias: true,
+            alpha: true
+        });
+        this.renderer.setSize(width, height);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.shadowMap.enabled = true;
+        this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.enableDamping = true;
+        this.controls.dampingFactor = 0.05;
+        this.controls.target.set(0, 4.0, 0); // 居中聚焦在全軀幹 (胸廓+骨盆)
+        this.controls.maxDistance = 75;
+        this.controls.minDistance = 6;
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        this.scene.add(ambientLight);
+
+        // 主光
+        const keyLight = new THREE.DirectionalLight(0xfff5ea, 1.3);
+        keyLight.position.set(16, 25, 22);
+        keyLight.castShadow = true;
+        keyLight.shadow.mapSize.width = 2048;
+        keyLight.shadow.mapSize.height = 2048;
+        this.scene.add(keyLight);
+
+        // 輪廓光 (背光強調肩胛岡與棘突)
+        const rimLight = new THREE.DirectionalLight(0x90b0e0, 0.85);
+        rimLight.position.set(-16, 18, -16);
+        this.scene.add(rimLight);
+
+        // 輔光
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.35);
+        fillLight.position.set(0, -10, 15);
+        this.scene.add(fillLight);
+
+        // 地面
+        const groundGeo = new THREE.PlaneGeometry(100, 100);
+        const groundMat = new THREE.ShadowMaterial({ opacity: 0.25 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -4.5;
+        ground.receiveShadow = true;
+        this.scene.add(ground);
+    }
+
+    _initAnatomy() {
+        this.anatomicalTorso = new AnatomicalTorso();
+        this.scene.add(this.anatomicalTorso.rootGroup);
+    }
+
+    _initPoseEstimator() {
+        this.poseEstimator = new TorsoPoseEstimator();
+    }
+
+    _initUI() {
+        const fileInput = document.getElementById('fileInput');
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                this._handleImageFile(e.target.files[0]);
+            }
+        });
+
+        const dropZone = document.getElementById('dropZone');
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = 'var(--accent)';
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.style.borderColor = '#3a3c48';
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = '#3a3c48';
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                this._handleImageFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        // 範例按鈕
+        document.getElementById('btnSample1').addEventListener('click', () => this._loadPresetSample('sampleA'));
+        document.getElementById('btnSample2').addEventListener('click', () => this._loadPresetSample('sampleB'));
+
+        // 骨骼部位顯示開關
+        document.getElementById('toggleRibs').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleRibcage(e.target.checked);
+        });
+        document.getElementById('toggleShoulderGirdle').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleShoulderGirdle(e.target.checked);
+        });
+        document.getElementById('toggleArms').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleArms(e.target.checked);
+        });
+        document.getElementById('togglePelvis').addEventListener('change', (e) => {
+            this.anatomicalTorso.togglePelvis(e.target.checked);
+        });
+        document.getElementById('toggleLandmarks').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleLandmarks(e.target.checked);
+        });
+
+        // 2D 骨架特徵線開關
+        this.btnToggle2D.addEventListener('click', () => {
+            this.show2DLandmarks = !this.show2DLandmarks;
+            this.landmarkCanvas.style.display = this.show2DLandmarks ? 'block' : 'none';
+            this.btnToggle2D.textContent = this.show2DLandmarks ? '隱藏特徵線' : '顯示特徵線';
+            if (this.show2DLandmarks) this._draw2DLandmarks();
+        });
+
+        // 左右鏡像翻轉開關
+        const btnMirror = document.getElementById('btnToggleMirror');
+        btnMirror.addEventListener('click', () => {
+            this.poseEstimator.isMirrored = !this.poseEstimator.isMirrored;
+            btnMirror.classList.toggle('active', this.poseEstimator.isMirrored);
+            this.currentPose.thoracicRoll = -this.currentPose.thoracicRoll;
+            this.currentPose.lumbarRoll = -this.currentPose.lumbarRoll;
+            this.currentPose.thoracicYaw = -this.currentPose.thoracicYaw;
+            this.currentPose.cervicalYaw = -this.currentPose.cervicalYaw;
+
+            const tempArm = this.currentPose.leftArmRoll;
+            this.currentPose.leftArmRoll = -this.currentPose.rightArmRoll;
+            this.currentPose.rightArmRoll = -tempArm;
+
+            this.anatomicalTorso.setTorsoPose(this.currentPose);
+            this._updateSlidersUI();
+        });
+
+        // 姿態微調滑桿
+        this._bindSlider('sliderPelvisRoll', 'valPelvisRoll', 'pelvisRoll');
+        this._bindSlider('sliderThoracicYaw', 'valThoracicYaw', 'thoracicYaw');
+        this._bindSlider('sliderThoracicPitch', 'valThoracicPitch', 'thoracicPitch');
+        this._bindSlider('sliderThoracicRoll', 'valThoracicRoll', 'thoracicRoll');
+        this._bindSlider('sliderLumbarRoll', 'valLumbarRoll', 'lumbarRoll');
+        this._bindSlider('sliderLumbarPitch', 'valLumbarPitch', 'lumbarPitch');
+        this._bindSlider('sliderNeckPitch', 'valNeckPitch', 'cervicalPitch');
+        this._bindSlider('sliderRightArmRoll', 'valRightArmRoll', 'rightArmRoll');
+        this._bindSlider('sliderLeftArmRoll', 'valLeftArmRoll', 'leftArmRoll');
+
+        // 重置為 AI 姿態
+        document.getElementById('btnResetPose').addEventListener('click', () => {
+            this._applyPose(this.aiPoseBackup);
+            this._updateSlidersUI();
+        });
+
+        // 快速視角按鈕
+        document.getElementById('btnFrontView').addEventListener('click', () => this._setCameraView('front'));
+        document.getElementById('btnSideView').addEventListener('click', () => this._setCameraView('side'));
+        document.getElementById('btnBackView').addEventListener('click', () => this._setCameraView('back'));
+        document.getElementById('btnTopView').addEventListener('click', () => this._setCameraView('top'));
+        document.getElementById('btnResetCamera').addEventListener('click', () => this._setCameraView('front'));
+    }
+
+    _bindSlider(sliderId, labelId, propName) {
+        const slider = document.getElementById(sliderId);
+        const label = document.getElementById(labelId);
+        if (!slider || !label) return;
+        slider.addEventListener('input', (e) => {
+            const deg = parseFloat(e.target.value);
+            label.textContent = `${deg}°`;
+            this.currentPose[propName] = deg * (Math.PI / 180);
+            this.anatomicalTorso.setTorsoPose(this.currentPose);
+        });
+    }
+
+    _updateSlidersUI() {
+        const radToDeg = (rad) => Math.round((rad || 0) * (180 / Math.PI));
+        
+        const setSlider = (id, valId, val) => {
+            const el = document.getElementById(id);
+            const valEl = document.getElementById(valId);
+            if (el && valEl) {
+                const deg = radToDeg(val);
+                el.value = deg;
+                valEl.textContent = `${deg}°`;
+            }
+        };
+
+        setSlider('sliderPelvisRoll', 'valPelvisRoll', this.currentPose.pelvisRoll);
+        setSlider('sliderThoracicYaw', 'valThoracicYaw', this.currentPose.thoracicYaw);
+        setSlider('sliderThoracicPitch', 'valThoracicPitch', this.currentPose.thoracicPitch);
+        setSlider('sliderThoracicRoll', 'valThoracicRoll', this.currentPose.thoracicRoll);
+        setSlider('sliderLumbarRoll', 'valLumbarRoll', this.currentPose.lumbarRoll);
+        setSlider('sliderLumbarPitch', 'valLumbarPitch', this.currentPose.lumbarPitch);
+        setSlider('sliderNeckPitch', 'valNeckPitch', this.currentPose.cervicalPitch);
+        setSlider('sliderRightArmRoll', 'valRightArmRoll', this.currentPose.rightArmRoll);
+        setSlider('sliderLeftArmRoll', 'valLeftArmRoll', this.currentPose.leftArmRoll);
+    }
+
+    _setCameraView(view) {
+        document.querySelectorAll('.gizmo-btn').forEach(b => b.classList.remove('active'));
+
+        const dist = 38;
+        const targetY = 4.0;
+        switch (view) {
+            case 'front':
+                this.camera.position.set(0, targetY, dist);
+                document.getElementById('btnFrontView')?.classList.add('active');
+                break;
+            case 'side':
+                this.camera.position.set(dist, targetY, 0);
+                document.getElementById('btnSideView')?.classList.add('active');
+                break;
+            case 'back':
+                this.camera.position.set(0, targetY, -dist);
+                document.getElementById('btnBackView')?.classList.add('active');
+                break;
+            case 'top':
+                this.camera.position.set(0, dist + targetY, 0.01);
+                document.getElementById('btnTopView')?.classList.add('active');
+                break;
+        }
+        this.controls.target.set(0, targetY, 0);
+        this.controls.update();
+    }
+
+    async _handleImageFile(file) {
+        this.statusText.textContent = "載入並分析模特兒圖片中...";
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            const img = new Image();
+            img.onload = async () => {
+                this.originalImageElement = img;
+
+                this.emptyPlaceholder.style.display = 'none';
+                this.referenceImage.src = img.src;
+                this.referenceImage.style.display = 'block';
+
+                const pose = await this.poseEstimator.estimateFromImage(img);
+                if (pose) {
+                    this._applyPose(pose);
+                    this.aiPoseBackup = { ...pose };
+                    this._updateSlidersUI();
+                    this.lastLandmarks2D = pose.landmarks2D;
+
+                    if (pose.landmarks2D) {
+                        this.btnToggle2D.style.display = 'inline-block';
+                        this.landmarkCanvas.style.display = 'block';
+                        this._draw2DLandmarks();
+                    }
+
+                    this.statusText.textContent = "✅ 姿態識別完成！已連動鎖骨、肩胛骨與肱骨";
+                } else {
+                    this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
+                }
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+
+    _draw2DLandmarks() {
+        if (!this.lastLandmarks2D || !this.originalImageElement) return;
+
+        const img = this.referenceImage;
+        const rect = img.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+
+        this.landmarkCanvas.width = rect.width;
+        this.landmarkCanvas.height = rect.height;
+        this.landmarkCanvas.style.width = `${rect.width}px`;
+        this.landmarkCanvas.style.height = `${rect.height}px`;
+
+        const ctx = this.landmarkCanvas.getContext('2d');
+        ctx.clearRect(0, 0, rect.width, rect.height);
+
+        const lm = this.lastLandmarks2D;
+        const toScreen = (pt) => ({
+            x: pt.x * rect.width,
+            y: pt.y * rect.height
+        });
+
+        const pLS = toScreen(lm.leftShoulder);
+        const pRS = toScreen(lm.rightShoulder);
+        const pLH = toScreen(lm.leftHip);
+        const pRH = toScreen(lm.rightHip);
+        const pMS = toScreen(lm.midShoulder);
+        const pMH = toScreen(lm.midHip);
+
+        // 1. 雙肩軸線 (Shoulder Axis)
+        ctx.strokeStyle = '#e07a5f';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(pLS.x, pLS.y);
+        ctx.lineTo(pRS.x, pRS.y);
+        ctx.stroke();
+
+        // 2. 雙臂連線 (Shoulder -> Elbow -> Wrist)
+        if (lm.rightElbow) {
+            const pRE = toScreen(lm.rightElbow);
+            ctx.strokeStyle = '#4cc9f0';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(pRS.x, pRS.y);
+            ctx.lineTo(pRE.x, pRE.y);
+            if (lm.rightWrist) {
+                const pRW = toScreen(lm.rightWrist);
+                ctx.lineTo(pRW.x, pRW.y);
+            }
+            ctx.stroke();
+            this._drawPoint(ctx, pRE, '#4cc9f0', 5);
+        }
+
+        if (lm.leftElbow) {
+            const pLE = toScreen(lm.leftElbow);
+            ctx.strokeStyle = '#4cc9f0';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(pLS.x, pLS.y);
+            ctx.lineTo(pLE.x, pLE.y);
+            if (lm.leftWrist) {
+                const pLW = toScreen(lm.leftWrist);
+                ctx.lineTo(pLW.x, pLW.y);
+            }
+            ctx.stroke();
+            this._drawPoint(ctx, pLE, '#4cc9f0', 5);
+        }
+
+        // 3. 骨盆連線與恥骨倒三角 (Pelvic Basin & Pubic Symphysis)
+        ctx.strokeStyle = '#81b29a';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(pLH.x, pLH.y);
+        ctx.lineTo(pRH.x, pRH.y);
+        const pPubic = {
+            x: (pLH.x + pRH.x) * 0.5,
+            y: (pLH.y + pRH.y) * 0.5 + Math.abs(pLH.x - pRH.x) * 0.35
+        };
+        ctx.lineTo(pPubic.x, pPubic.y);
+        ctx.lineTo(pLH.x, pLH.y);
+        ctx.stroke();
+        this._drawPoint(ctx, pPubic, '#81b29a', 5);
+
+        // 4. 脊椎動勢線
+        ctx.strokeStyle = '#f4a261';
+        ctx.lineWidth = 4;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(pMS.x, pMS.y);
+        ctx.lineTo(pMH.x, pMH.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 5. 節點標記
+        this._drawPoint(ctx, pLS, '#e07a5f');
+        this._drawPoint(ctx, pRS, '#e07a5f');
+        this._drawPoint(ctx, pLH, '#81b29a');
+        this._drawPoint(ctx, pRH, '#81b29a');
+        this._drawPoint(ctx, pMS, '#f4a261', 6);
+        this._drawPoint(ctx, pMH, '#f4a261', 6);
+    }
+
+    _drawPoint(ctx, pt, color, radius = 5) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    _loadPresetSample(type) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 600;
+        canvas.height = 800;
+        const ctx = canvas.getContext('2d');
+
+        ctx.fillStyle = '#1c1e26';
+        ctx.fillRect(0, 0, 600, 800);
+
+        ctx.strokeStyle = '#e07a5f';
+        ctx.lineWidth = 4;
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '22px sans-serif';
+
+        let targetPose;
+        if (type === 'sampleA') {
+            ctx.fillText("範例 A：微側身挺胸 + 抬手姿態", 40, 60);
+            targetPose = {
+                thoracicPitch: -0.15,
+                thoracicYaw: 0.25,
+                thoracicRoll: -0.05,
+                lumbarPitch: 0.12,
+                lumbarRoll: 0.05,
+                lumbarYaw: 0.12,
+                cervicalPitch: -0.05,
+                cervicalYaw: 0.15,
+                leftArmPitch: 0.1,
+                leftArmRoll: 0.2, // 左手微放開
+                leftArmYaw: 0,
+                rightArmPitch: 0.35,
+                rightArmRoll: -1.15, // 右手高抬
+                rightArmYaw: 0
+            };
+        } else {
+            ctx.fillText("範例 B：側彎對抗 (Contrapposto)", 40, 60);
+            targetPose = {
+                thoracicPitch: 0.05,
+                thoracicYaw: -0.25,
+                thoracicRoll: 0.22,
+                lumbarPitch: -0.05,
+                lumbarRoll: -0.28,
+                lumbarYaw: -0.1,
+                cervicalPitch: 0.08,
+                cervicalYaw: -0.15,
+                leftArmPitch: -0.1,
+                leftArmRoll: 0.45,
+                leftArmYaw: 0,
+                rightArmPitch: 0.2,
+                rightArmRoll: -0.3,
+                rightArmYaw: 0
+            };
+        }
+
+        const dataUrl = canvas.toDataURL();
+        this.emptyPlaceholder.style.display = 'none';
+        this.referenceImage.src = dataUrl;
+        this.referenceImage.style.display = 'block';
+        this.landmarkCanvas.style.display = 'none';
+        this.btnToggle2D.style.display = 'none';
+
+        this._applyPose(targetPose);
+        this.aiPoseBackup = { ...targetPose };
+        this._updateSlidersUI();
+        this.statusText.textContent = `✅ 已載入 ${type === 'sampleA' ? '範例 A (抬手站姿)' : '範例 B (側彎對抗)'}！`;
+    }
+
+    _applyPose(pose) {
+        Object.assign(this.currentPose, pose);
+        this.anatomicalTorso.setTorsoPose(this.currentPose);
+    }
+
+    _onResize() {
+        const width = this.viewportArea.clientWidth;
+        const height = this.viewportArea.clientHeight;
+        if (width === 0 || height === 0) return;
+
+        this.camera.aspect = width / height;
+        this.camera.updateProjectionMatrix();
+        this.renderer.setSize(width, height);
+
+        if (this.show2DLandmarks && this.lastLandmarks2D) {
+            this._draw2DLandmarks();
+        }
+    }
+
+    _animate() {
+        requestAnimationFrame(() => this._animate());
+        this.controls.update();
+        this.renderer.render(this.scene, this.camera);
+    }
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+    new App();
+});

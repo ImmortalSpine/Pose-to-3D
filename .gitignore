@@ -1,0 +1,21 @@
+# Node & Build
+node_modules/
+dist/
+.DS_Store
+
+# Python & Environment
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
