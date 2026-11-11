@@ -209,30 +209,19 @@ export class TorsoPoseEstimator {
         const hipSpan = Math.hypot(hipDx, hipDy);
 
         // -------------------------------------------------------------
-        // 5. 核心：透視縮短 (Foreshortening) 水平轉向解算 (Yaw)
+        // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
-        // 解剖規律：正常人體正面站姿下，肩寬/軀幹高度比約為 0.75 ~ 0.85
-        // 當人體轉為側身 (3/4 視角或正側面) 時，2D 投影肩寬會因餘弦定理急遽壓縮
-        const expectedFrontalRatio = 0.78;
-        const compression = shoulderSpan / (torsoHeight * expectedFrontalRatio);
-
-        // 壓縮比：1.0 為完全正面；0.5 為 60° 側身；0.25 為 75° 強烈側身
-        const clampedComp = this._clamp(compression, 0.18, 1.0);
-        const yawMagnitude = Math.acos(clampedComp); // 弧度：0° ~ 80°
-
-        // 判定轉向方向 (朝左轉還是朝右轉)：
-        // 結合 MediaPipe 輸出的深度 Z 差值 (深入背景或靠近鏡頭)
+        // 結合 MediaPipe 雙肩與雙髖在 3D 相機空間中的真實法向投影 (atan2(Δz, Δx))
+        // 具備平滑連續性，正面站姿下 (Δz ≈ 0) 自動完美對齊 0° 正面，絕不產生跳變與側身畸變
         const rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
         const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
-        const combinedDz = (rawDz * 0.65 + hipDz * 0.35);
+        const combinedDz = (rawDz * 0.70 + hipDz * 0.30);
 
-        // 若 leftShoulder.z > rightShoulder.z，代表左肩在後、右肩在前，胸部朝向畫面右方 (+X)
-        const zSign = combinedDz >= 0 ? 1 : -1;
-        let thoracicYaw = zSign * yawMagnitude;
+        let thoracicYaw = Math.atan2(combinedDz * 1.35, Math.max(0.04, shoulderDx));
+        thoracicYaw = this._clamp(thoracicYaw, -1.3, 1.3);
 
-        // 骨盆也同步具備側身轉向 (Pelvis Yaw)
-        const hipComp = this._clamp(hipSpan / (torsoHeight * 0.52), 0.18, 1.0);
-        let pelvisYaw = zSign * Math.acos(hipComp) * 0.85;
+        let pelvisYaw = Math.atan2(hipDz * 1.35, Math.max(0.04, hipDx));
+        pelvisYaw = this._clamp(pelvisYaw, -1.2, 1.2);
 
         // 6. 胸廓側傾 (Roll - 高低肩)
         let thoracicRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
@@ -240,8 +229,9 @@ export class TorsoPoseEstimator {
         // 7. 骨盆傾斜 (Pelvis Roll / Hip Tilt)
         let pelvisRoll = -Math.atan2(hipDy, Math.abs(hipDx) + 0.001);
 
-        // 8. 腰椎受力側彎 (Contrapposto)
+        // 8. 腰椎受力側彎與旋轉 (Contrapposto & Lumbar Rotation)
         let lumbarRoll = (thoracicRoll - pelvisRoll) * 0.55 - (spineDx * 0.5);
+        let lumbarYaw = (thoracicYaw - pelvisYaw) * 0.45;
 
         // 9. 俯仰 (Pitch)
         let thoracicPitch = this._clamp((spineDy + 0.35) * 0.2, -0.3, 0.3);
@@ -249,8 +239,7 @@ export class TorsoPoseEstimator {
 
         // 10. 頸椎轉動 (回眸補償：當身體側轉但頭看鏡頭時，頸椎自動反向旋轉對齊臉部)
         let cervicalPitch = (nose.y - midShoulder.y + 0.15) * 0.3;
-        // 頸椎反向旋轉補償 (Looking back over shoulder)
-        let cervicalYaw = -thoracicYaw * 0.75 + ((nose.x - midShoulder.x) * 0.8);
+        let cervicalYaw = -thoracicYaw * 0.75 + ((nose.x - midShoulder.x) * ar * 1.1);
 
         // 11. MediaPipe Holistic 雙手 21 骨節特徵提取與預處理
         let matchedLeftHand = null;
@@ -413,6 +402,7 @@ export class TorsoPoseEstimator {
             lumbarRoll = -lumbarRoll;
             thoracicYaw = -thoracicYaw;
             pelvisYaw = -pelvisYaw;
+            lumbarYaw = -lumbarYaw;
             cervicalYaw = -cervicalYaw;
             
             const tempRoll = leftArmRoll;
@@ -481,7 +471,7 @@ export class TorsoPoseEstimator {
             thoracicRoll: this._clamp(thoracicRoll, -0.5, 0.5),
             lumbarPitch: this._clamp(thoracicPitch * 0.3, -0.3, 0.3),
             lumbarRoll: this._clamp(lumbarRoll, -0.45, 0.45),
-            lumbarYaw: this._clamp(thoracicYaw * 0.35, -0.5, 0.5),
+            lumbarYaw: this._clamp(lumbarYaw, -0.5, 0.5),
             cervicalPitch: this._clamp(cervicalPitch, -0.4, 0.4),
             cervicalYaw: this._clamp(cervicalYaw, -0.9, 0.9),
             leftArmPitch: this._clamp(leftArmPitch, -2.2, 2.2),
