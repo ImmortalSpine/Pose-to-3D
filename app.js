@@ -749,7 +749,8 @@ class App {
                     const profileStr = pose.isProfileStance ? `、側身模式 (${pose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
                     const claspedStr = pose.isOverheadClasped ? '、過頂拱手閉環' : '';
                     const handTrackStr = (pose.rightHandAngles || pose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
-                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})、性別 (${genderStr})${profileStr}${claspedStr}${handTrackStr}`;
+                    const truncStr = pose.isLegsTruncated ? '、下肢裁切照 (已鎖定標準站姿)' : '';
+                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})、性別 (${genderStr})${profileStr}${claspedStr}${handTrackStr}${truncStr}`;
                 } else {
                     this._resetToNeutralPose();
                     this.statusText.textContent = "未識別到完整人體 (可能為純背面或過度遮擋視角)，已重置為標準解剖姿態";

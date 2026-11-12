@@ -156,6 +156,20 @@ export class TorsoPoseEstimator {
         return null;
     }
 
+    _createEnhancedCanvas(imageElement, contrast = 1.35, brightness = 1.08) {
+        const origW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 1;
+        const origH = imageElement.naturalHeight || imageElement.videoHeight || imageElement.height || 1;
+        const canvas = document.createElement('canvas');
+        canvas.width = origW;
+        canvas.height = origH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        ctx.filter = `contrast(${contrast}) brightness(${brightness})`;
+        ctx.drawImage(imageElement, 0, 0, origW, origH);
+        return canvas;
+    }
+
     _createRotatedCanvas(imageElement, angleDeg) {
         const origW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 1;
         const origH = imageElement.naturalHeight || imageElement.videoHeight || imageElement.height || 1;
@@ -221,7 +235,27 @@ export class TorsoPoseEstimator {
             }
         }
 
-        // 2. 旋轉探索 TTA (Test-Time Augmentation) 機制：
+        // 2. 自適應對比度與靈敏度探測 (針對深色寬鬆大衣/夾克、低對比灰調全身棚拍照)
+        const enhCanvas = this._createEnhancedCanvas(imageElement, 1.35, 1.08);
+        if (enhCanvas) {
+            if (this.holistic && this.holistic.setOptions) {
+                this.holistic.setOptions({ minDetectionConfidence: 0.32, minTrackingConfidence: 0.32 });
+            }
+            const enhResults = await this._runInference(enhCanvas);
+            if (this.holistic && this.holistic.setOptions) {
+                this.holistic.setOptions({ minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+            }
+            if (enhResults && enhResults.poseLandmarks && enhResults.poseLandmarks.length > 0) {
+                try {
+                    const pose = this._processLandmarks(enhResults);
+                    if (pose) return pose;
+                } catch (err) {
+                    console.error("[AnatoPose] Enhanced contrast processing error:", err);
+                }
+            }
+        }
+
+        // 3. 旋轉探索 TTA (Test-Time Augmentation) 機制：
         // 針對排球空翻扣殺、高空飛躍、舞蹈、體操等非垂直傾斜姿態，依次旋轉影像尋找人體拓撲
         const ttaAngles = [-45, 45, -30, 30, -90, 90];
         for (const angle of ttaAngles) {
@@ -731,19 +765,22 @@ export class TorsoPoseEstimator {
         let activeRightWrist = sanitizeWristOcclusion(rightShoulder, rightElbow, rightWrist, rightHip, matchedRightHand, 'right');
 
         // 側身遮擋手臂防畸變與雙臂支撐鏡像 (Profile Occluded Arm Sanity & Support Alignment):
-        // 在 90° 側身下，若近側手臂自然向下向後支撐地面 (wrist.y > elbow.y + 0.08)，
-        // 而遠側 (背景) 手臂因身體遮擋導致 MediaPipe 誤預測或預測向上反折/混淆時，
-        // 遠側手臂應對齊近側手臂之向下後方支撐姿態
+        // 嚴格限定：僅在「近側手臂處於地面支撐姿態 (如跪地雙手後撐，wrist 在 hip 下方)」
+        // 且「遠側手臂沒有檢測到手掌 21 節點、未在摸頭/摸頸、且手腕缺失或異常」時，才進行向下支撐鏡像！
         if (isProfileStance && profileSign !== 0) {
             const nearWrist = (profileSign === -1) ? rightWrist : leftWrist;
             const nearElbow = (profileSign === -1) ? rightElbow : leftElbow;
+            const nearHip = (profileSign === -1) ? rightHip : leftHip;
             const farWrist = (profileSign === -1) ? activeLeftWrist : activeRightWrist;
             const farElbow = (profileSign === -1) ? leftElbow : rightElbow;
+            const farHand = (profileSign === -1) ? matchedLeftHand : matchedRightHand;
 
-            const nearIsDown = nearWrist && nearElbow && (nearWrist.y > nearElbow.y + 0.08);
-            if (nearIsDown && farElbow) {
-                // 若遠側手腕反折向上 (farWrist.y < farElbow.y) 或遠側手腕缺失/位置異常
-                const farIsErratic = !farWrist || (farWrist.y < farElbow.y + 0.04) || (farWrist.y < nearElbow.y);
+            const nearIsGroundSupport = nearWrist && nearElbow && nearHip && (nearWrist.y > nearElbow.y + 0.08) && (nearWrist.y > nearHip.y - 0.05);
+            const farHasHand = farHand && farHand.length >= 21;
+            const farIsUpperPose = farWrist && (farWrist.y < midShoulder.y + 0.15 * torsoHeight);
+
+            if (nearIsGroundSupport && farElbow && !farHasHand && !farIsUpperPose) {
+                const farIsErratic = !farWrist || (farWrist.y < farElbow.y + 0.04);
                 if (farIsErratic) {
                     const correctedFarWrist = {
                         x: farElbow.x + (nearWrist.x - nearElbow.x),
@@ -783,19 +820,19 @@ export class TorsoPoseEstimator {
                 }
             }
 
-            // 3. 垂直高度檢測：手腕必須在頭顱高度範圍內 (不得高於頭頂太遠，亦不得低於下巴胸部)
+            // 3. 垂直高度檢測：手腕必須在頭顱與頸部範圍內 (支援摸額、摸耳、撫面、托腮、摸頸圈/喉結)
             const hSpan = headSpan2D > 0.02 ? headSpan2D : torsoHeight * 0.48;
             const topY = midEyeY - hSpan * 0.48;
-            const btmY = nose.y + hSpan * 0.42;
+            const btmY = Math.max(nose.y + hSpan * 0.42, s.y + 0.08 * torsoHeight);
 
             const testPt = (handLandmarks && handLandmarks.length >= 21) ? handLandmarks[0] : w;
             if (testPt.y < (topY - 0.05 * torsoHeight)) return false; // 空中高舉手
-            if (testPt.y > (btmY + 0.08 * torsoHeight)) return false; // 低於頸下胸腹手
+            if (testPt.y > (btmY + 0.16 * torsoHeight)) return false; // 低於頸下胸腹手
 
-            // 4. 頭顱外輪廓鄰域檢測 (手腕或指骨必須貼近頭部橢圓外輪廓)
+            // 4. 頭顱與頸部外輪廓鄰域檢測
             const headCenterY = (midEyeY + nose.y) * 0.5;
-            const headRadX = Math.max(0.06, hSpan * 0.38);
-            const headRadY = Math.max(0.08, hSpan * 0.52);
+            const headRadX = Math.max(0.06, hSpan * 0.42);
+            const headRadY = Math.max(0.08, hSpan * 0.58);
 
             const normWx = Math.abs(testPt.x - nose.x) * ar / headRadX;
             const normWy = Math.abs(testPt.y - headCenterY) / headRadY;
@@ -818,8 +855,12 @@ export class TorsoPoseEstimator {
                 }
             }
 
+            // 特殊檢測：摸頸飾/喉部/下頜頸圈手 (橫向貼近中線，縱向位於鼻子與肩膀之間)
+            const isNearNeckChoker = Math.abs(testPt.x - nose.x) * ar < 0.16 && testPt.y > nose.y && testPt.y < (s.y + 0.10 * torsoHeight);
+            if (isNearNeckChoker) return true;
+
             const bestDistSq = Math.min(distWristSq, minTipDistSq);
-            return (bestDistSq <= 3.0);
+            return (bestDistSq <= 3.2);
         };
 
         const checkFrontOfPelvis = (w) => {
@@ -981,6 +1022,39 @@ export class TorsoPoseEstimator {
         let rightAnklePitch = rightLegPose.anklePitch;
         let rightAnkleYaw = rightLegPose.ankleYaw;
         let rightAnkleRoll = rightLegPose.ankleRoll;
+
+        // 15. 下肢截斷裁切照片安全防護 (Lower Limb Truncation Guard)
+        // 當照片為半身照或裁切至大腿 (膝/踝出鏡或被模型擠壓在畫布邊緣，如 Image 1) 時，
+        // 鎖定下肢為自然筆直站立姿態，徹底防止假性屈曲與誤觸地面跪姿吸附！
+        const lLegSpan = (leftHip && leftAnkle) ? (leftAnkle.y - leftHip.y) : 0;
+        const rLegSpan = (rightHip && rightAnkle) ? (rightAnkle.y - rightHip.y) : 0;
+        const leftAnkleAtEdge = leftAnkle && leftAnkle.y > 0.82;
+        const rightAnkleAtEdge = rightAnkle && rightAnkle.y > 0.82;
+        const isLegSpanCompressed = (lLegSpan > 0 && lLegSpan < 0.95 * torsoHeight) || (rLegSpan > 0 && rLegSpan < 0.95 * torsoHeight);
+        const isAnkleLowVis = (!leftAnkle || (leftAnkle.visibility != null && leftAnkle.visibility < 0.35)) &&
+                              (!rightAnkle || (rightAnkle.visibility != null && rightAnkle.visibility < 0.35));
+
+        const isLegsTruncated = !isProfileStance && (
+            (isLegSpanCompressed && (leftAnkleAtEdge || rightAnkleAtEdge)) ||
+            (isAnkleLowVis && (leftKnee ? leftKnee.y > 0.68 : true))
+        );
+
+        if (isLegsTruncated) {
+            leftHipPitch = 0.0;
+            rightHipPitch = 0.0;
+            leftHipRoll = 0.04;
+            rightHipRoll = -0.04;
+            leftHipYaw = 0.0;
+            rightHipYaw = 0.0;
+            leftKneeFlex = 0.03;
+            rightKneeFlex = 0.03;
+            leftAnklePitch = 0.0;
+            rightAnklePitch = 0.0;
+            leftAnkleYaw = 0.06;
+            rightAnkleYaw = -0.06;
+            leftAnkleRoll = 0.0;
+            rightAnkleRoll = 0.0;
+        }
 
         // 鏡像反轉
         if (this.isMirrored) {
@@ -1147,6 +1221,7 @@ export class TorsoPoseEstimator {
             isProfileStance,
             profileSign,
             isOverheadClasped,
+            isLegsTruncated: !!isLegsTruncated,
             pelvisRoll: this._clamp(pelvisRoll, -0.4, 0.4),
             pelvisPitch: this._clamp(pelvisPitch, -0.45, 0.45),
             pelvisYaw: this._clamp(pelvisYaw, -1.57, 1.57),
@@ -1300,26 +1375,34 @@ export class TorsoPoseEstimator {
             const nosePt = headTargetInfo.nose;
             const midEyeY = headTargetInfo.midEyeY;
 
-            // 1. 橫向位置 (Lateral position on head)
+            // 1. 橫向位置 (Lateral position on head & neck)
             const rawDx = (testPt.x - nosePt.x) * ar;
             // 判斷是否同側摸頭或越過中線 (Cross-body)
             const isCrossBody = (sign > 0 && rawDx < -0.04) || (sign < 0 && rawDx > 0.04);
             const targetSign = isCrossBody ? -sign : sign;
             const normX = THREE.MathUtils.clamp(Math.abs(rawDx) / 0.16, 0.40, 1.20);
-            const targetX = targetSign * (1.30 + normX * 0.85); // 1.6 ~ 2.3 (顳骨/顴弓/顱側表面)
+            let targetX = targetSign * (1.30 + normX * 0.85); // 1.6 ~ 2.3 (顳骨/顴弓/顱側表面)
 
-            // 2. 縱向高度 (Vertical position on head)
+            // 2. 縱向高度 (Vertical position on head & neck)
             const scaleH = torsoHeight || 0.45;
             const dyHead = (midEyeY - testPt.y) / scaleH;
             // 藝用解剖頭骨中心高約 17.8 (寰枕關節 16.38 + 顴骨/顳骨 1.45)
-            const targetY = THREE.MathUtils.clamp(17.8 + dyHead * 4.5, 15.6, 20.2);
+            // 支援摸頸圈、喉部、下頜至頭頂：範圍擴展至 13.0 ~ 20.2
+            const targetY = THREE.MathUtils.clamp(17.8 + dyHead * 4.8, 13.0, 20.2);
 
-            // 3. 深度方程 (Head Ellipsoid Surface Equation)
-            // 顱骨橢圓球體方程：Rx=2.3, Ry=2.5, Rz=2.3, 中心=(0, 17.8, 0.8)
-            const rxRatio = Math.min(1.0, Math.abs(targetX) / 2.3);
-            const ryRatio = Math.min(1.0, Math.abs(targetY - 17.8) / 2.5);
-            const rRemain = Math.max(0.0, 1.0 - rxRatio * rxRatio - ryRatio * ryRatio);
-            const targetZ = 0.8 + 2.2 * Math.sqrt(rRemain) + 0.35; // 0.35 手掌手腕厚度偏移
+            // 3. 深度方程 (Head & Neck Ellipsoid Surface Equation)
+            let targetZ;
+            if (targetY < 15.5) {
+                // 頸部/下頜/頸圈區域 (Cervical / Mandible / Choker region)
+                targetX = targetSign * THREE.MathUtils.clamp(Math.abs(rawDx) / 0.16 * 1.4, 0.7, 1.8);
+                targetZ = 2.1; // 頸前頸側天然包絡面
+            } else {
+                // 顱骨橢圓球體方程：Rx=2.3, Ry=2.5, Rz=2.3, 中心=(0, 17.8, 0.8)
+                const rxRatio = Math.min(1.0, Math.abs(targetX) / 2.3);
+                const ryRatio = Math.min(1.0, Math.abs(targetY - 17.8) / 2.5);
+                const rRemain = Math.max(0.0, 1.0 - rxRatio * rxRatio - ryRatio * ryRatio);
+                targetZ = 0.8 + 2.2 * Math.sqrt(rRemain) + 0.35; // 0.35 手掌手腕厚度偏移
+            }
 
             const pWristTarget = new THREE.Vector3(targetX, targetY, targetZ);
 
