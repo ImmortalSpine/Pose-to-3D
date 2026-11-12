@@ -351,16 +351,19 @@ export class HierarchicalArmSolver {
             const LArm = scale * 0.58;
             const LFore = scale * 0.52;
 
-            const rawDzArm = Math.sqrt(Math.max(0, LArm * LArm - lArm2D * lArm2D));
+            // 動態自適應參考臂長：防止修長或健美體型因 2D 投影長度 >= LArm 而使 rawDzArm 歸零，
+            // 導致整條手臂退化停留在後背肩胛平面 (pShoulderLocal.z = -1.0)
+            const effLArm = Math.max(LArm, lArm2D * 1.06);
+            const rawDzArm = Math.sqrt(Math.max(0, effLArm * effLArm - lArm2D * lArm2D));
             const mpDz = -((elbow.z || 0) - (shoulder.z || 0));
-            let zSignArm = isFrontOfPelvis ? 0.18 : (mpDz < -0.05 ? -0.15 : 0.32);
-            if (isHandOnHip) zSignArm = 0.22;
-            let dzArm = (lArm2D < LArm * 0.95) ? (rawDzArm * zSignArm) : 0.02 * LArm;
+            let zSignArm = isFrontOfPelvis ? 0.32 : (mpDz < -0.08 ? -0.10 : 0.25);
+            if (isHandOnHip) zSignArm = 0.25;
+            let dzArm = rawDzArm * zSignArm;
 
             if (isProfileStance && profileSign !== 0) {
                 // 側身模式：近側手摸頸/抬起時，手肘顯著朝向鏡頭外展 (+Z_cam)，避免大臂往後背深處穿刺
                 const depthSignArm = isNearArm ? (isUpperTorsoHand ? 0.45 : 0.22) : -0.08;
-                dzArm = depthSignArm * LArm;
+                dzArm = depthSignArm * effLArm;
             } else if (isBackStance) {
                 dzArm = -dzArm;
             }
@@ -372,20 +375,21 @@ export class HierarchicalArmSolver {
                 const dxFore = (wrist.x - elbow.x) * ar;
                 const dyFore = -(wrist.y - elbow.y);
                 const lFore2D = Math.hypot(dxFore, dyFore);
-                const rawDzFore = Math.sqrt(Math.max(0, LFore * LFore - lFore2D * lFore2D));
+                const effLFore = Math.max(LFore, lFore2D * 1.08);
+                const rawDzFore = Math.sqrt(Math.max(0, effLFore * effLFore - lFore2D * lFore2D));
                 const mpDzFore = -((wrist.z || 0) - (elbow.z || 0));
-                let zSignFore = 0.35;
+                let zSignFore = 0.32;
                 if (isFrontOfPelvis) {
-                    zSignFore = 0.22;
+                    zSignFore = 0.48;
                 } else if (isHandOnHip) {
-                    zSignFore = 0.25;
-                } else if (mpDzFore < -0.05) {
-                    zSignFore = (wrist.y > elbow.y + 0.1) ? 0.12 : -0.15;
+                    zSignFore = 0.30;
+                } else if (mpDzFore < -0.08) {
+                    zSignFore = (wrist.y > elbow.y + 0.1) ? 0.12 : -0.12;
                 }
-                let dzFore = (lFore2D < LFore * 0.95) ? (rawDzFore * zSignFore) : 0.02 * LFore;
+                let dzFore = rawDzFore * zSignFore;
                 if (isProfileStance && profileSign !== 0) {
                     const depthSignFore = isNearArm ? 0.08 : -0.04;
-                    dzFore = depthSignFore * LFore;
+                    dzFore = depthSignFore * effLFore;
                 } else if (isBackStance) {
                     dzFore = -dzFore;
                 }
@@ -427,14 +431,27 @@ export class HierarchicalArmSolver {
                     uFore.normalize();
                 }
             } else {
-                // 一般姿態：站姿大臂主動後伸生理極限約 22° (uArm.z >= -0.38)
+                // 由於盂肱關節起點位於胸廓後外側肩胛骨 (pShoulderLocal.z = -1.0)：
+                // 1) 當手置於骨盆/口袋前方 (isFrontOfPelvis) 時，大臂必須微向前傾 (uArm.z >= 0.16)，使手肘推進至冠狀面中線前方 (Z >= +0.36)
+                // 2) 正面自然下垂手臂 (uArm.y < -0.20) 亦需 uArm.z >= 0.08，防止因胸腔微轉向 (thoracicYaw) 逆變換將手臂推往背後
                 const isGroundSupport = isProfileStance && wrist && elbow && (wrist.y > elbow.y + 0.06);
-                const minZLimit = isGroundSupport ? -0.75 : -0.38;
+                let minZLimit = isGroundSupport ? -0.75 : -0.38;
+                if (isFrontOfPelvis) {
+                    minZLimit = 0.16;
+                } else if (!isProfileStance && !isBackStance && uArm.y < -0.20 && mpDz >= -0.10) {
+                    minZLimit = 0.08;
+                }
+
                 if (uArm.z < minZLimit) {
-                    const uy = uArm.y;
-                    const uz = minZLimit;
-                    const uxMag = Math.sqrt(Math.max(0.05, 1.0 - uy * uy - uz * uz));
-                    uArm.set(Math.sign(uArm.x || sign) * uxMag, uy, uz).normalize();
+                    // 等比例縮放 (uArm.x, uArm.y)，100% 保持 2D 投影夾角不變
+                    const xyLen = Math.hypot(uArm.x, uArm.y);
+                    if (xyLen > 1e-4) {
+                        const sXY = Math.sqrt(Math.max(0.08, 1.0 - minZLimit * minZLimit)) / xyLen;
+                        uArm.set(uArm.x * sXY, uArm.y * sXY, minZLimit).normalize();
+                    } else {
+                        uArm.z = minZLimit;
+                        uArm.normalize();
+                    }
                 }
                 pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, L1);
 
@@ -460,22 +477,32 @@ export class HierarchicalArmSolver {
                 pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, L1);
             }
 
-            // D. 骨骼鏈端點檢測
+            // D. 骨骼鏈端點與全軀幹-腰椎-骨盆前表面包絡檢測
+            // 注意：在 thoracicCageUnit 局部坐標中：
+            // - 胸廓 (T1..T12) 為 Y ∈ [0, 8.5]
+            // - 腰椎 (L1..L5) 為 Y ∈ [-6.75, 0]
+            // - 骨盆 (Ilium / ASIS Z=2.6 / Pubis Z=2.7) 為 Y ∈ [-12.5, -5.0]
             pWristLocal = pElbowLocal.clone().addScaledVector(uFore, L2);
             pHandTip = pElbowLocal.clone().addScaledVector(uFore, L2 + cfg.handClearance.handLen);
 
             const testPenetration = (pt) => {
-                // 僅針對胸腹核心高度 (-1.2 <= Y <= 8.5) 進行內臟/脊椎防穿插檢測，避免大腿側邊口袋手被誤判推高
-                const inY = (pt.y >= -1.2 && pt.y <= cfg.spineShield.yMax);
+                const inY = (pt.y >= -12.5 && pt.y <= cfg.spineShield.yMax);
                 if (!inY) return { penetrates: false, zSurface: 0 };
 
-                const zBack = -1.2;
+                const zBack = -1.5;
                 if (pt.z < zBack) return { penetrates: false, zSurface: 0 };
 
                 const inSpineShield = (Math.abs(pt.x) < cfg.spineShield.radiusX && pt.z < cfg.spineShield.radiusZ);
-                const effRadX = 3.6;
+                const effRadX = 5.2;
                 const normX = Math.min(1.0, Math.abs(pt.x) / effRadX);
-                const zSurface = cfg.torsoEnvelope.centerZ + cfg.torsoEnvelope.radiusZ * Math.sqrt(Math.max(0.0, 1.0 - normX * normX));
+                let zSurface = cfg.torsoEnvelope.centerZ + cfg.torsoEnvelope.radiusZ * Math.sqrt(Math.max(0.0, 1.0 - normX * normX));
+
+                // 骨盆髂前上棘 (ASIS: |X|=3.8, Z=2.6) 與恥骨聯合 (Pubis: X=0, Z=2.7) 前緣包絡保護
+                if (pt.y >= -12.5 && pt.y <= -4.5 && Math.abs(pt.x) <= 5.0) {
+                    const zPelvis = 2.75 - 0.22 * (Math.abs(pt.x) / 5.0);
+                    zSurface = Math.max(zSurface, zPelvis);
+                }
+
                 const inTorsoViscera = (Math.abs(pt.x) < effRadX && pt.z < zSurface);
 
                 return {
@@ -487,26 +514,50 @@ export class HierarchicalArmSolver {
             const resWrist = testPenetration(pWristLocal);
             const resTip = testPenetration(pHandTip);
 
-            isReachingBehind = (pWristLocal.z < -1.0) || (uArm.z < -0.3);
+            // 僅當非骨盆前側置手且大臂顯著後伸時，才判定為背後背手
+            isReachingBehind = !isFrontOfPelvis && !isHandOnHip && ((uArm.z < -0.32) || (pWristLocal.z < -1.6 && isProfileStance));
 
             if (isHandOnHip) {
-                // 保留相機投影解算出的真實手腕高度 pWristLocal.y，嚴禁強制拉高至腰際 (-1.2)
-                pWristLocal.x = sign * Math.max(4.0, Math.abs(pWristLocal.x));
-                pWristLocal.z = clamp(pWristLocal.z, 0.4, 1.35);
+                pWristLocal.x = sign * Math.max(4.2, Math.abs(pWristLocal.x));
+                pWristLocal.z = clamp(pWristLocal.z, 0.8, 1.6);
 
                 uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
                 pHandTip = pElbowLocal.clone().addScaledVector(uFore, L2 + cfg.handClearance.handLen);
-            } else if (!isReachingBehind && !isUpperTorsoHand && (resWrist.penetrates || resTip.penetrates)) {
-                const targetZ = Math.min(resWrist.zSurface + 0.35, 1.85);
-                pWristLocal.z = Math.max(pWristLocal.z, targetZ);
+            } else if (!isReachingBehind && !isUpperTorsoHand && (resWrist.penetrates || resTip.penetrates || isFrontOfPelvis)) {
+                // 計算跨越骨盆前緣 (ASIS Z=2.6 / 恥骨 Z=2.7) 所需之安全前方 Z 座標 (Z >= 2.90)
+                const reqZ = Math.max(
+                    pWristLocal.z,
+                    resWrist.penetrates ? (resWrist.zSurface + 0.40) : -99.0,
+                    resTip.penetrates ? (resTip.zSurface + 0.25) : -99.0,
+                    isFrontOfPelvis ? 2.90 : -99.0
+                );
 
-                uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                pHandTip = pElbowLocal.clone().addScaledVector(uFore, L2 + cfg.handClearance.handLen);
-            } else if (!isReachingBehind && !isUpperTorsoHand) {
-                // 骨盆正前方口袋/恥骨區域輕微前移，同時完整保留 2D 前臂向下傾斜角度
-                if (pWristLocal.y < -1.2 && Math.abs(pWristLocal.x) < 3.0 && pWristLocal.z < 1.15) {
-                    pWristLocal.z = 1.15;
-                    uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
+                if (pWristLocal.z < reqZ) {
+                    // 1) 若手肘偏後 (Z < 0.36)，先將手肘推至冠狀面微前方，分擔前臂前移量
+                    if (pElbowLocal.z < 0.36) {
+                        const targetArmUz = clamp((0.36 - pShoulderLocal.z) / L1, -0.30, 0.45);
+                        const xyA = Math.hypot(uArm.x, uArm.y);
+                        if (xyA > 1e-4) {
+                            const sA = Math.sqrt(Math.max(0.10, 1.0 - targetArmUz * targetArmUz)) / xyA;
+                            uArm.set(uArm.x * sA, uArm.y * sA, targetArmUz).normalize();
+                            pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, L1);
+                        }
+                    }
+
+                    // 2) 以等比例縮放 (uFore.x, uFore.y) 的方式設定前臂前向分量 targetForeUz，
+                    //    100% 保留 2D 畫面中的前臂斜向口袋角度與手腕下探高度，徹底杜絕手掌穿入骨盆後方或被拉高至腰部！
+                    const targetForeUz = clamp((reqZ - pElbowLocal.z) / L2, uFore.z, 0.52);
+                    const xyF = Math.hypot(uFore.x, uFore.y);
+                    if (xyF > 1e-4) {
+                        const sF = Math.sqrt(Math.max(0.10, 1.0 - targetForeUz * targetForeUz)) / xyF;
+                        uFore.set(uFore.x * sF, uFore.y * sF, targetForeUz).normalize();
+                    } else {
+                        uFore.z = targetForeUz;
+                        uFore.normalize();
+                    }
+
+                    pWristLocal = pElbowLocal.clone().addScaledVector(uFore, L2);
+                    pHandTip = pElbowLocal.clone().addScaledVector(uFore, L2 + cfg.handClearance.handLen);
                 }
             }
         }

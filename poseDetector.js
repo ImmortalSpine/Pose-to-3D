@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.2';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.3';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -13,22 +13,23 @@ import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from
 
 /**
  * 解剖學軀幹與脊椎 3D 碰撞防護常數 (Anatomical Torso Collision Config)
- * 參數化模組設計：未來更換高精細醫學模型或加入肌肉/皮膚層時，只需微調此配置表！
+ * 注意：在 thoracicCageUnit 局部坐標系中，T12 原點為 Y=0，腰椎 L1-L5 為 Y ∈ [-6.75, 0]，
+ * 骨盆 (Ilium / ASIS / Pubic Symphysis) 位於 Y ∈ [-12.0, -6.0]，因此 yMin 必須涵蓋至 -12.5！
  */
 export const ANATOMICAL_COLLISION_CONFIG = {
-    // 1. 脊椎剛性禁區 (Spine Shield Core) - 嚴禁任何上肢骨骼穿透
+    // 1. 脊椎與薦骨剛性禁區 (Spine & Sacrum Shield Core) - 嚴禁任何上肢骨骼穿透
     spineShield: {
         radiusX: 2.8,       // 脊椎與橫突/棘突禁區橫向半徑 (|X| < 2.8)
         radiusZ: 2.2,       // 脊椎柱後壁至前縱韌帶矢狀深度 (Z < 2.2)
-        yMin: -3.0,         // 薦骨/骨盆上緣
+        yMin: -12.5,        // 涵蓋胸椎、腰椎 (-6.75..0) 與骨盆/薦骨 (-12.5..-6.0)
         yMax: 8.5           // 胸椎上口 (T1)
     },
-    // 2. 腹壁與胸腹橢圓包絡面 (Abdominal & Torso Ellipsoid Clearance)
+    // 2. 腹壁、胸腹與骨盆前緣橢圓包絡面 (Thoraco-Abdominal & Pelvic Anterior Envelope)
     torsoEnvelope: {
-        radiusX: 4.4,       // 側腰/髂脊外緣半徑 (插腰時的側向極限)
-        radiusZ: 2.8,       // 腹壁前凸矢狀半徑 (腹前置手的前向支撐面)
-        centerZ: 0.8,       // 腹腔中心相對於脊椎前移量
-        waistYMin: -2.5,    // 骨盆髂脊高度
+        radiusX: 4.8,       // 側腰與骨盆髂脊外緣半徑 (Ilium Summit |X| = 4.6)
+        radiusZ: 2.8,       // 腹壁與骨盆前凸矢狀半徑 (ASIS Z=2.6, Pubis Z=2.7)
+        centerZ: 0.8,       // 腹腔與骨盆前表面中心相對於脊椎前移量
+        waistYMin: -12.0,   // 骨盆恥骨聯合與髖關節下緣
         waistYMax: 3.5      // 肋弓與劍突高度
     },
     // 3. 手部與指骨末端幾何常數
@@ -1059,12 +1060,29 @@ export class TorsoPoseEstimator {
             return (bestDistSq <= 2.8);
         };
 
-        const checkFrontOfPelvis = (w) => {
+        const checkFrontOfPelvis = (e, w, side) => {
             if (!w || !leftHip || !rightHip) return false;
+            const scaleH = torsoHeight || 0.45;
             const minX = Math.min(leftHip.x, rightHip.x) - 0.05 / ar;
             const maxX = Math.max(leftHip.x, rightHip.x) + 0.05 / ar;
             const midY = (leftHip.y + rightHip.y) * 0.5;
-            return (w.x >= minX && w.x <= maxX && w.y >= (midY - 0.38 * torsoHeight));
+            const inPelvisSpan = (w.x >= minX && w.x <= maxX && w.y >= (midY - 0.38 * scaleH));
+
+            // 若前臂由手肘明顯向內側收攏靠近髖部/口袋區域 (wristInward > 0.02 * scaleH)，亦視為置於骨盆/口袋前方
+            let isPocketReach = false;
+            if (e) {
+                const wristInward = (side === 'left') ? ((e.x - w.x) * ar) : ((w.x - e.x) * ar);
+                const pocketMinX = Math.min(leftHip.x, rightHip.x) - 0.12 / ar;
+                const pocketMaxX = Math.max(leftHip.x, rightHip.x) + 0.12 / ar;
+                isPocketReach = (
+                    wristInward > 0.02 * scaleH &&
+                    w.x >= pocketMinX &&
+                    w.x <= pocketMaxX &&
+                    w.y >= (midY - 0.30 * scaleH) &&
+                    w.y <= (midY + 0.38 * scaleH)
+                );
+            }
+            return inPelvisSpan || isPocketReach;
         };
 
         const checkHandOnHip = (s, e, w, side) => {
@@ -1113,8 +1131,8 @@ export class TorsoPoseEstimator {
         const isLeftHandOnHip = !isLeftTouchingHead && !isOverheadClasped && checkHandOnHip(leftShoulder, leftElbow, activeLeftWrist, 'left');
         const isRightHandOnHip = !isRightTouchingHead && !isOverheadClasped && checkHandOnHip(rightShoulder, rightElbow, activeRightWrist, 'right');
 
-        const isLeftFrontOfPelvis = !isLeftHandOnHip && !isLeftTouchingHead && !isOverheadClasped && checkFrontOfPelvis(activeLeftWrist);
-        const isRightFrontOfPelvis = !isRightHandOnHip && !isRightTouchingHead && !isOverheadClasped && checkFrontOfPelvis(activeRightWrist);
+        const isLeftFrontOfPelvis = !isLeftHandOnHip && !isLeftTouchingHead && !isOverheadClasped && checkFrontOfPelvis(leftElbow, activeLeftWrist, 'left');
+        const isRightFrontOfPelvis = !isRightHandOnHip && !isRightTouchingHead && !isOverheadClasped && checkFrontOfPelvis(rightElbow, activeRightWrist, 'right');
 
         const headTargetInfo = (nose && leftEye && rightEye) ? {
             nose: nose,
