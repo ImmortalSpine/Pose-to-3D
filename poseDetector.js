@@ -1617,6 +1617,7 @@ export class TorsoPoseEstimator {
         let pElbowLocal, pWristLocal, pHandTip;
         let isHeadSolve = false;
         let isReachingBehind = false;
+        let isUpperTorsoHand = false;
 
         if (overheadTargetInfo && overheadTargetInfo.isClasped) {
             // -------------------------------------------------------------
@@ -1798,7 +1799,7 @@ export class TorsoPoseEstimator {
                 isTouchingHead
             );
             const isForearmReachingUp = wrist && elbow && (-(wrist.y - elbow.y) > 0.02);
-            const isUpperTorsoHand = isHandAtNeckOrChest && isForearmReachingUp;
+            isUpperTorsoHand = Boolean(isHandAtNeckOrChest && isForearmReachingUp);
 
             // A. 後背壁防穿透與矢狀面/冠狀面人體結構約束 (Biomechanical Structural Constraints)
             if (isUpperTorsoHand) {
