@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=4.6';
-import { TorsoPoseEstimator } from './poseDetector.js?v=4.6';
+import { AnatomicalTorso } from './anatomy.js?v=4.7';
+import { TorsoPoseEstimator } from './poseDetector.js?v=4.7';
 
 class App {
     constructor() {
@@ -142,14 +142,21 @@ class App {
         fillLight.position.set(0, -10, 15);
         this.scene.add(fillLight);
 
-        // 地面 (位置設定於腳掌底部 Y = -25.5)
-        const groundGeo = new THREE.PlaneGeometry(120, 120);
-        const groundMat = new THREE.ShadowMaterial({ opacity: 0.25 });
-        const ground = new THREE.Mesh(groundGeo, groundMat);
-        ground.rotation.x = -Math.PI / 2;
-        ground.position.y = -25.5;
-        ground.receiveShadow = true;
-        this.scene.add(ground);
+        // 1. 地面陰影接收面 (位置設定於腳掌接地基準面 Y = -25.5)
+        const groundGeo = new THREE.PlaneGeometry(160, 160);
+        const groundMat = new THREE.ShadowMaterial({ opacity: 0.30 });
+        this.groundMesh = new THREE.Mesh(groundGeo, groundMat);
+        this.groundMesh.rotation.x = -Math.PI / 2;
+        this.groundMesh.position.y = -25.5;
+        this.groundMesh.receiveShadow = true;
+        this.scene.add(this.groundMesh);
+
+        // 2. 藝用美學地面空間網格 (Floor Spatial Grid)
+        this.floorGrid = new THREE.GridHelper(80, 40, 0x5a6880, 0x252a35);
+        this.floorGrid.position.y = -25.5;
+        this.floorGrid.material.opacity = 0.40;
+        this.floorGrid.material.transparent = true;
+        this.scene.add(this.floorGrid);
     }
 
     _initAnatomy() {
@@ -223,6 +230,26 @@ class App {
         });
         document.getElementById('toggleLandmarks').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleLandmarks(e.target.checked);
+        });
+
+        // 地面自動吸附開關
+        document.getElementById('toggleGroundSnap')?.addEventListener('change', (e) => {
+            const enabled = e.target.checked;
+            this.anatomicalTorso.autoGroundSnap = enabled;
+            if (enabled) {
+                this.anatomicalTorso.snapToGround(-25.5);
+            } else {
+                this.anatomicalTorso.rootGroup.position.y = 0;
+                this.anatomicalTorso.rootGroup.updateMatrixWorld(true);
+            }
+            this._fitCameraToSkeleton();
+        });
+
+        // 地面空間參考網格開關
+        document.getElementById('toggleFloorGrid')?.addEventListener('change', (e) => {
+            const enabled = e.target.checked;
+            if (this.floorGrid) this.floorGrid.visible = enabled;
+            if (this.groundMesh) this.groundMesh.visible = enabled;
         });
 
         // 2D 骨架特徵線開關
@@ -547,24 +574,31 @@ class App {
     }
 
     _getTargetY() {
-        const headRatio = (this.currentPose && this.currentPose.headToBodyRatio) ? this.currentPose.headToBodyRatio : 7.1;
-        const headHeight = 48.0 / headRatio;
-        // 頭頂約在 21.7 + headHeight，足底約在 -21.7，中心 Y 為兩者平均值
-        const topY = 21.7 + headHeight;
-        const bottomY = -21.7;
-        return (topY + bottomY) * 0.5;
+        if (this.anatomicalTorso && this.anatomicalTorso.rootGroup) {
+            this.anatomicalTorso.rootGroup.updateMatrixWorld(true);
+            const bbox = new THREE.Box3().setFromObject(this.anatomicalTorso.rootGroup);
+            if (!bbox.isEmpty()) {
+                return (bbox.max.y + bbox.min.y) * 0.5;
+            }
+        }
+        return 2.0;
     }
 
     /**
      * 計算全人體骨骼在當前畫布長寬比下的理想相機觀測距離 (保證頭頂與雙腳永遠完整可見)
      */
     _calculateIdealCameraDistance() {
-        const headRatio = (this.currentPose && this.currentPose.headToBodyRatio) ? this.currentPose.headToBodyRatio : 7.1;
-        const headHeight = 48.0 / headRatio;
-        const totalHeight = 44.0 + headHeight; // 軀幹與下肢約 44 單位加上動態頭骨高度
+        let skeletonHeight = 52.0;
+        let skeletonWidth = 28.0;
 
-        const skeletonHeight = totalHeight;
-        const skeletonWidth = 28;  // 自然肢體開展寬度
+        if (this.anatomicalTorso && this.anatomicalTorso.rootGroup) {
+            this.anatomicalTorso.rootGroup.updateMatrixWorld(true);
+            const bbox = new THREE.Box3().setFromObject(this.anatomicalTorso.rootGroup);
+            if (!bbox.isEmpty()) {
+                skeletonHeight = Math.max(16, bbox.max.y - bbox.min.y);
+                skeletonWidth = Math.max(16, bbox.max.x - bbox.min.x);
+            }
+        }
 
         const aspect = Math.max(0.1, this.camera ? this.camera.aspect : 1.0);
         const fov = this.camera ? this.camera.fov : 38;
@@ -575,7 +609,7 @@ class App {
         const padding = 1.25;
         const distY = (skeletonHeight * padding * 0.5) / tanHalfFov;
         const distX = (skeletonWidth * padding * 0.5) / (tanHalfFov * aspect);
-        return Math.max(distY, distX, 86);
+        return Math.max(distY, distX, 50);
     }
 
     /**

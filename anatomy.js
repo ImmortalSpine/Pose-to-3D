@@ -26,6 +26,10 @@ export class AnatomicalTorso {
         this.pelvisUnit.name = "Pelvis_Unit";
         this.rootGroup.add(this.pelvisUnit);
 
+        // 地面自動吸附與接地高度
+        this.autoGroundSnap = true;
+        this.groundY = -25.5;
+
         this.pelvisBones = {
             sacrum: null, coccyx: null, iliumL: null, iliumR: null,
             ischiumL: null, ischiumR: null, pubisL: null, pubisR: null,
@@ -2080,6 +2084,38 @@ export class AnatomicalTorso {
             this.lowerLimbs.right.ankleJoint.rotation.y = rightAnkleYaw;
             this.lowerLimbs.right.ankleJoint.rotation.z = rightAnkleRoll;
         }
+
+        // 12. 地面自動吸附 (Auto Ground Snap)
+        if (this.autoGroundSnap) {
+            this.snapToGround(this.groundY);
+        }
+    }
+
+    /**
+     * 地面自動吸附 (Auto Ground Snap)
+     * 計算人體骨骼在未偏移狀態下的最低接觸點 (足底骨、髕骨/膝關節、脛骨小腿或骨盆坐骨)，
+     * 並自動將 rootGroup 平移下沉，使最低承重接觸面精確貼合在地面 (預設 Y = -25.5)。
+     */
+    snapToGround(groundY = -25.5) {
+        if (!this.rootGroup) return 0;
+
+        const prevY = this.rootGroup.position.y;
+        this.rootGroup.position.y = 0;
+        this.rootGroup.updateMatrixWorld(true);
+
+        const bbox = new THREE.Box3().setFromObject(this.rootGroup);
+        if (bbox.isEmpty()) {
+            this.rootGroup.position.y = prevY;
+            return prevY;
+        }
+
+        const rawLowestY = bbox.min.y;
+        const targetOffsetY = groundY - rawLowestY;
+
+        this.rootGroup.position.y = targetOffsetY;
+        this.rootGroup.updateMatrixWorld(true);
+
+        return targetOffsetY;
     }
 
     toggleLandmarks(visible) {
