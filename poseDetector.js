@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.0';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.1';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -318,6 +318,7 @@ export class TorsoPoseEstimator {
         }
 
         const lm = results.poseLandmarks;
+        const landmarks = lm;
 
         const nose = lm[0];
         const leftEyeInner = lm[1];
@@ -898,7 +899,7 @@ export class TorsoPoseEstimator {
         }
 
         // 10b. 信心分層評估與「胸腔—骨盆」相對轉角雙向約束 (Confidence Evaluation & Thoraco-Pelvic Coupling)
-        const confidences = ConfidenceEvaluator.evaluate(landmarks, matchedLeftHand, matchedRightHand, {
+        const confidences = ConfidenceEvaluator.evaluate(lm, matchedLeftHand, matchedRightHand, {
             isProfileStance,
             isBackStance
         });
