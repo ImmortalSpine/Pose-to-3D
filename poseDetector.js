@@ -10,6 +10,34 @@ import * as THREE from 'three';
  * 4. 骨盆 (Pelvis) 與頸椎 (Cervical) 同步還原側身與回眸動態
  */
 
+/**
+ * 解剖學軀幹與脊椎 3D 碰撞防護常數 (Anatomical Torso Collision Config)
+ * 參數化模組設計：未來更換高精細醫學模型或加入肌肉/皮膚層時，只需微調此配置表！
+ */
+export const ANATOMICAL_COLLISION_CONFIG = {
+    // 1. 脊椎剛性禁區 (Spine Shield Core) - 嚴禁任何上肢骨骼穿透
+    spineShield: {
+        radiusX: 2.8,       // 脊椎與橫突/棘突禁區橫向半徑 (|X| < 2.8)
+        radiusZ: 2.2,       // 脊椎柱後壁至前縱韌帶矢狀深度 (Z < 2.2)
+        yMin: -3.0,         // 薦骨/骨盆上緣
+        yMax: 8.5           // 胸椎上口 (T1)
+    },
+    // 2. 腹壁與胸腹橢圓包絡面 (Abdominal & Torso Ellipsoid Clearance)
+    torsoEnvelope: {
+        radiusX: 4.4,       // 側腰/髂脊外緣半徑 (插腰時的側向極限)
+        radiusZ: 2.8,       // 腹壁前凸矢狀半徑 (腹前置手的前向支撐面)
+        centerZ: 0.8,       // 腹腔中心相對於脊椎前移量
+        waistYMin: -2.5,    // 骨盆髂脊高度
+        waistYMax: 3.5      // 肋弓與劍突高度
+    },
+    // 3. 手部與指骨末端幾何常數
+    handClearance: {
+        armLen: 8.5,        // 肱骨大臂長度
+        foreLen: 7.4,       // 前臂尺骨橈骨長度
+        handLen: 3.5        // 掌骨與指骨延伸等效長度
+    }
+};
+
 export class TorsoPoseEstimator {
     constructor() {
         this.detectorReady = false;
@@ -795,8 +823,15 @@ export class TorsoPoseEstimator {
             const lFore2D = Math.hypot(dxFore, dyFore);
             const rawDzFore = Math.sqrt(Math.max(0, LFore * LFore - lFore2D * lFore2D));
             const mpDzFore = -((wrist.z || 0) - (elbow.z || 0));
-            let zSignFore = isFrontOfPelvis ? 0.45 : (mpDzFore < -0.05 ? -0.15 : 0.45);
-            if (isHandOnHip) zSignFore = 0.30;
+            let zSignFore = 0.45;
+            if (isFrontOfPelvis) {
+                zSignFore = 0.55;
+            } else if (isHandOnHip) {
+                zSignFore = 0.35;
+            } else if (mpDzFore < -0.05) {
+                // 僅在手明顯往後背伸 (如背手姿態) 且手腕位於體側後方時才允許向後
+                zSignFore = (wrist.y > elbow.y + 0.1) ? 0.15 : -0.15;
+            }
             const dzFore = (lFore2D < LFore * 0.95) ? (rawDzFore * zSignFore) : 0.02 * LFore;
 
             vForeCam = new THREE.Vector3(dxFore, dyFore, dzFore);
@@ -813,62 +848,98 @@ export class TorsoPoseEstimator {
         let uArm = vArmCam.clone().applyQuaternion(qThoraxInv).normalize();
         let uFore = vForeCam.clone().applyQuaternion(qThoraxInv).normalize();
 
-        // 4. 生理防穿插約束與人體軀幹/骨盆外輪廓包絡面 (Biomechanical Clearance & Flank Guard)
+        // 4. 生理防穿插約束與「脊椎解剖防護禁區」+「腹壁橢圓包絡面動態前推算法」
+        // (Biomechanical Clearance, Spine Shield & Abdominal Ellipsoid Projection)
+        const cfg = ANATOMICAL_COLLISION_CONFIG;
+
         // A. 後背壁防穿透：大臂在胸腔坐標系中 Z 軸不可向後過度延伸
-        if (uArm.z < -0.22) {
-            uArm.z = -0.22;
+        if (uArm.z < -0.15) {
+            uArm.z = -0.15;
             uArm.normalize();
         }
 
         // 盂肱關節在胸廓坐標系中之解剖位置
         const pShoulderLocal = new THREE.Vector3(sign * 5.35, 8.6, -1.0);
-        let pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
+        let pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
 
-        // B. 肋骨與側胸防穿插：在手臂下垂時維持側向安全間距 (X 軸不穿入肋骨)
-        if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.6 && uArm.z < 0.5) {
-            pElbowLocal.x = sign * 4.6;
+        // B. 肋骨與側胸防穿插：在手臂下垂或內收時維持側向安全間距 (X 軸不穿入肋骨)
+        if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.4 && uArm.z < 0.5) {
+            pElbowLocal.x = sign * 4.4;
             uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
-            pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
+            pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
         }
 
-        let pWristLocal = pElbowLocal.clone().addScaledVector(uFore, 7.4);
-
-        // C. 插腰 (Hand on Hip / Akimbo) 專屬側腰與髂脊力學防線
+        // C. 插腰手肘外展三角幾何鎖定 (Akimbo Flared Elbow Anchor)
         if (isHandOnHip) {
-            // 1. 肘部自然向外展開，形成人體三角骨架支撐
-            pElbowLocal.x = sign * Math.max(6.8, Math.abs(pElbowLocal.x));
-            pElbowLocal.z = THREE.MathUtils.clamp(pElbowLocal.z, -0.3, 0.8);
+            pElbowLocal.x = sign * Math.max(6.6, Math.abs(pElbowLocal.x));
+            pElbowLocal.z = THREE.MathUtils.clamp(pElbowLocal.z, -0.1, 0.8);
             uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
-            pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
+            pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
+        }
 
-            // 2. 手腕緊貼側腰外緣與髂脊上方 (X 軸嚴格 >= 4.6，從根本上杜絕刺穿骨盆腔)
-            pWristLocal.x = sign * Math.max(4.6, Math.abs(pWristLocal.x));
-            pWristLocal.y = THREE.MathUtils.clamp(pWristLocal.y, -1.2, 1.2);
-            pWristLocal.z = THREE.MathUtils.clamp(pWristLocal.z, 0.35, 1.30);
+        // D. 骨骼鏈端點檢測 (手腕點與手掌指骨尖端點)
+        let pWristLocal = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen);
+        let pHandTip = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen + cfg.handClearance.handLen);
+
+        // 輔助函式：判斷任意 3D 點是否侵入「脊椎禁區」或「胸腹內臟實體腔」
+        const testPenetration = (pt) => {
+            const inY = (pt.y >= cfg.spineShield.yMin && pt.y <= cfg.spineShield.yMax);
+            if (!inY) return { penetrates: false, zSurface: 0 };
+
+            // 1. 脊椎剛性禁區 (|X| < radiusX, Z < radiusZ)
+            const inSpineShield = (Math.abs(pt.x) < cfg.spineShield.radiusX && pt.z < cfg.spineShield.radiusZ);
+
+            // 2. 腹壁/胸廓橢圓包絡面表面深度方程 Z_surface(X)
+            const normX = Math.min(1.0, Math.abs(pt.x) / cfg.torsoEnvelope.radiusX);
+            const zSurface = cfg.torsoEnvelope.centerZ + cfg.torsoEnvelope.radiusZ * Math.sqrt(Math.max(0.0, 1.0 - normX * normX));
+            const inTorsoViscera = (Math.abs(pt.x) < cfg.torsoEnvelope.radiusX && pt.z < zSurface);
+
+            return {
+                penetrates: inSpineShield || inTorsoViscera,
+                zSurface: zSurface
+            };
+        };
+
+        const resWrist = testPenetration(pWristLocal);
+        const resTip = testPenetration(pHandTip);
+
+        // E. 智慧曲面避障分流解算
+        if (isHandOnHip) {
+            // 模式 1：側腰插腰 (Akimbo Flank Placement)
+            // 手腕精確錨定於側腰髂脊外輪廓 (|X| >= radiusX)，手掌隨髂骨弧度自然前傾下垂
+            pWristLocal.x = sign * Math.max(cfg.torsoEnvelope.radiusX, Math.abs(pWristLocal.x));
+            pWristLocal.y = THREE.MathUtils.clamp(pWristLocal.y, -1.2, 0.8);
+            pWristLocal.z = THREE.MathUtils.clamp(pWristLocal.z, 0.6, 1.5);
+
             uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-        } else {
-            // D. 通用骨盆腔與大腿防穿插保護 (Pelvic Basin Penetration Guard)
-            if (pWristLocal.y < 0.8 && pWristLocal.y > -4.5 && Math.abs(pWristLocal.x) < 4.6) {
-                // 若手腕位於腰側邊緣 (|X| > 3.2)，向側外推至側腰輪廓表面
-                if (Math.abs(pWristLocal.x) > 3.2 && pWristLocal.z < 1.4) {
-                    pWristLocal.x = sign * 4.6;
-                } else if (pWristLocal.z < 1.8) {
-                    // 若在腹前/恥骨前方，則向前推進至大腿/下腹前表面
-                    pWristLocal.z = 1.8;
-                }
+            pHandTip = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen + cfg.handClearance.handLen);
+
+            const reCheckTip = testPenetration(pHandTip);
+            if (reCheckTip.penetrates) {
+                // 手指末端若指向腹側，向前推向腹前或向下微傾
+                pWristLocal.z = Math.max(pWristLocal.z, reCheckTip.zSurface + 0.6);
                 uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-            } else if (pWristLocal.y >= 0.8 && pWristLocal.y <= 3.0 && Math.abs(pWristLocal.x) < 4.6) {
-                // 腹前區防穿插
-                if (pWristLocal.z < 2.0) {
-                    pWristLocal.z = 2.0;
-                    uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                }
-            } else if (pWristLocal.y > 3.0 && Math.abs(pWristLocal.x) < 4.5) {
-                // 胸大肌前側防線
-                if (pWristLocal.z < 2.2 && pWristLocal.z > -0.5) {
-                    pWristLocal.z = 2.2;
-                    uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                }
+            }
+        } else if (resWrist.penetrates || resTip.penetrates) {
+            // 模式 2：腹前置手 / 脊椎禁區動態前推 (Abdominal Ellipsoid Projection)
+            // 當手腕或手指即將刺穿脊椎與腹腔時，順著腹壁曲面法向向前推進 (Forward Projection)
+            const targetZ = Math.max(resWrist.zSurface + 0.5, 2.6);
+            pWristLocal.z = Math.max(pWristLocal.z, targetZ);
+
+            uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
+            pHandTip = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen + cfg.handClearance.handLen);
+
+            const reCheckTip = testPenetration(pHandTip);
+            if (reCheckTip.penetrates) {
+                const dzNeeded = (reCheckTip.zSurface + 0.5) - pHandTip.z;
+                pWristLocal.z += dzNeeded * 0.85;
+                uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
+            }
+        } else {
+            // 模式 3：體側下垂手與大腿前區常規保護
+            if (pWristLocal.y < -1.5 && Math.abs(pWristLocal.x) < 3.8 && pWristLocal.z < 1.6) {
+                pWristLocal.z = 1.6;
+                uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
             }
         }
 
