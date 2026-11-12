@@ -1519,19 +1519,29 @@ export class AnatomicalTorso {
         this.pelvisUnit.rotation.y = pelvisYaw;
         this.pelvisUnit.rotation.z = pelvisRoll;
 
-        // 2. 腰椎 S 型曲度
+        // 2. 腰椎 S 型曲度 (累加脊椎曲度)
         const lCount = this.lumbarVertebrae.length;
+        let accumPitch = pelvisPitch;
+        let accumYaw = pelvisYaw;
+        let accumRoll = pelvisRoll;
+
         this.lumbarVertebrae.forEach((vert, idx) => {
             const factor = Math.sin(((idx + 1) / lCount) * (Math.PI * 0.5));
-            vert.rotation.x = lumbarPitch * factor * 0.25;
-            vert.rotation.y = lumbarYaw * factor * 0.25;
-            vert.rotation.z = lumbarRoll * factor * 0.25;
+            const rotX = lumbarPitch * factor * 0.25;
+            const rotY = lumbarYaw * factor * 0.25;
+            const rotZ = lumbarRoll * factor * 0.25;
+            vert.rotation.x = rotX;
+            vert.rotation.y = rotY;
+            vert.rotation.z = rotZ;
+            accumPitch += rotX;
+            accumYaw += rotY;
+            accumRoll += rotZ;
         });
 
-        // 3. 胸椎與肋骨整體單元 (相對於骨盆父級空間之相對偏轉，使胸廓在世界/相機空間之姿態精確等於 thoracicPitch/Yaw/Roll)
-        this.thoracicCageUnit.rotation.x = thoracicPitch - pelvisPitch;
-        this.thoracicCageUnit.rotation.y = thoracicYaw - pelvisYaw;
-        this.thoracicCageUnit.rotation.z = thoracicRoll - pelvisRoll;
+        // 3. 胸椎與肋骨整體單元 (精確補足剩餘轉角，使胸廓在世界/相機空間之姿態 100% 精確等於 thoracicPitch/Yaw/Roll)
+        this.thoracicCageUnit.rotation.x = thoracicPitch - accumPitch;
+        this.thoracicCageUnit.rotation.y = thoracicYaw - accumYaw;
+        this.thoracicCageUnit.rotation.z = thoracicRoll - accumRoll;
 
         // 4. 頸椎
         const cCount = this.cervicalVertebrae.length;

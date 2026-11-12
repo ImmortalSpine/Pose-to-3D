@@ -211,50 +211,29 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
-        // 1. 頭頸部正中線校驗 (Head-Centering Verification)
-        const noseOffset = Math.abs((nose.x - midShoulder.x) * ar);
-        const isHeadCentered = (noseOffset < 0.045);
-
-        // 2. 2D 幾何展寬約束 (Screen-Space Compression Guardrail)
-        // 在正面拍攝時，雙肩展寬比例 sRatio >= 0.58 (頭部居中時) 代表 2D 畫面上雙肩開闊展現，幾何上 100% 屬於正面！
-        // 徹底消除 MediaPipe 單圖深度隨機噪聲導致的假性 75° 側轉或 150° 背身倒轉
-        const sRatio = shoulderSpan / torsoHeight;
-        const rRefS = isHeadCentered ? 0.58 : 0.68;
-        const compS = this._clamp(sRatio / rRefS, 0.0, 1.0);
-        const maxShoulderYaw = Math.acos(compS); // 2D 投影決定的最大可能側偏角
-
-        const hRatio = hipSpan / torsoHeight;
-        const rRefH = isHeadCentered ? 0.42 : 0.48;
-        const compH = this._clamp(hRatio / rRefH, 0.0, 1.0);
-        const maxHipYaw = Math.acos(compH);
-
-        // 3. 深度差信號轉屏幕尺度 (MediaPipe Depth to Isotropic Screen Units)
+        // 結合 MediaPipe 雙肩與雙髖在 3D 相機空間中的真實法向投影 (atan2(Δz, Δx))
+        // 透過平滑死區濾波 (Deadzone Filter, 門檻 0.055)：
+        // - 正面站姿下單圖深度噪聲全部平滑歸零 (0° 正面，絕不產生假性側轉)
+        // - 側身與 3/4 轉向 (如迪斯可舞姿、側身夾克/西裝模特兒) 靈敏還原其真實側向偏轉角
         const rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
         const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
         const combinedDz = (rawDz * 0.70 + hipDz * 0.30);
 
-        const dzScreenS = combinedDz * (torsoHeight / 0.50);
-        const rawThoracicYaw = Math.atan2(dzScreenS, Math.max(0.01, Math.abs(shoulderDx)));
-
-        // 4. 死區平滑濾波 (Deadzone filter: 深度信號 <= 0.045 時平滑歸零，消除噪聲抖動)
+        const deadzoneThreshold = 0.055;
         const dzMag = Math.abs(combinedDz);
-        let deadzoneS = 0.0;
-        if (dzMag > 0.045) {
-            deadzoneS = (dzMag < 0.12) ? ((dzMag - 0.045) / 0.075) : 1.0;
+        let effDz = 0.0;
+        if (dzMag > deadzoneThreshold) {
+            effDz = Math.sign(combinedDz) * (dzMag - deadzoneThreshold);
         }
-        const signS = combinedDz >= 0 ? 1.0 : -1.0;
-        let thoracicYaw = signS * Math.min(Math.abs(rawThoracicYaw), maxShoulderYaw) * deadzoneS;
+        let thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
         thoracicYaw = this._clamp(thoracicYaw, -1.2, 1.2);
 
-        const dzScreenH = hipDz * (torsoHeight / 0.50);
-        const rawPelvisYaw = Math.atan2(dzScreenH, Math.max(0.01, Math.abs(hipDx)));
         const hipDzMag = Math.abs(hipDz);
-        let deadzoneH = 0.0;
-        if (hipDzMag > 0.045) {
-            deadzoneH = (hipDzMag < 0.12) ? ((hipDzMag - 0.045) / 0.075) : 1.0;
+        let effHipDz = 0.0;
+        if (hipDzMag > deadzoneThreshold) {
+            effHipDz = Math.sign(hipDz) * (hipDzMag - deadzoneThreshold);
         }
-        const signH = hipDz >= 0 ? 1.0 : -1.0;
-        let pelvisYaw = signH * Math.min(Math.abs(rawPelvisYaw), maxHipYaw) * deadzoneH;
+        let pelvisYaw = Math.atan2(effHipDz, Math.max(0.02, Math.abs(hipDx)));
         pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
 
         // 6. 胸廓側傾 (Roll - 高低肩)
@@ -267,8 +246,12 @@ export class TorsoPoseEstimator {
         let lumbarRoll = (thoracicRoll - pelvisRoll) * 0.55 - (spineDx * 0.5);
         let lumbarYaw = (thoracicYaw - pelvisYaw) * 0.45;
 
-        // 9. 俯仰 (Pitch)
-        let thoracicPitch = this._clamp((spineDy + 0.35) * 0.2, -0.3, 0.3);
+        // 9. 俯仰 (Pitch - 挺胸/後仰或前傾)
+        const midShoulderZ = ((leftShoulder.z || 0) + (rightShoulder.z || 0)) * 0.5;
+        const midHipZ = ((leftHip.z || 0) + (rightHip.z || 0)) * 0.5;
+        const spineDz = midShoulderZ - midHipZ;
+        let thoracicPitch = Math.atan2(spineDz * 0.6, Math.max(0.05, Math.abs(spineDy)));
+        thoracicPitch = this._clamp(thoracicPitch, -0.35, 0.35);
         let pelvisPitch = thoracicPitch * 0.35;
 
         // 10. 頸椎轉動 (回眸補償：當身體側轉但頭看鏡頭時，頸椎自動反向旋轉對齊臉部)
