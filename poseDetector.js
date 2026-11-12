@@ -278,6 +278,7 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
+        const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
         const hipDzMag = Math.abs(hipDz);
         const deadzoneThreshold = 0.055;
         let effHipDz = 0.0;
