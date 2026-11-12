@@ -998,10 +998,16 @@ export class TorsoPoseEstimator {
             if (testPt.y < (topY - 0.05 * torsoHeight)) return false; // 空中高舉手
             if (testPt.y > (btmY + 0.16 * torsoHeight)) return false; // 低於頸下胸腹手
 
-            // 4. 頭顱與頸部外輪廓鄰域檢測
+            // 4. 頭顱外輪廓鄰域檢測
             const headCenterY = (midEyeY + nose.y) * 0.5;
             const headRadX = Math.max(0.06, hSpan * 0.42);
             const headRadY = Math.max(0.08, hSpan * 0.58);
+
+            // 若手腕/手掌位於下巴/頸圈處 (testPt.y > nose.y + 0.04) 且手肘下垂 (e.y > s.y + 0.03)，
+            // 屬於自然下垂摸頸/持花/整理衣領動作，回歸精確 2D 向量投影解算，避免誤觸摸頭兩段式 IK
+            if (testPt.y > (nose.y + 0.04) && e.y > (s.y + 0.03)) {
+                return false;
+            }
 
             const normWx = Math.abs(testPt.x - nose.x) * ar / headRadX;
             const normWy = Math.abs(testPt.y - headCenterY) / headRadY;
@@ -1024,12 +1030,8 @@ export class TorsoPoseEstimator {
                 }
             }
 
-            // 特殊檢測：摸頸飾/喉部/下頜頸圈手 (橫向貼近中線，縱向位於鼻子與肩膀之間)
-            const isNearNeckChoker = Math.abs(testPt.x - nose.x) * ar < 0.16 && testPt.y > nose.y && testPt.y < (s.y + 0.10 * torsoHeight);
-            if (isNearNeckChoker) return true;
-
             const bestDistSq = Math.min(distWristSq, minTipDistSq);
-            return (bestDistSq <= 3.2);
+            return (bestDistSq <= 2.8);
         };
 
         const checkFrontOfPelvis = (w) => {
@@ -1609,6 +1611,7 @@ export class TorsoPoseEstimator {
         let uArm, uFore;
         let pElbowLocal, pWristLocal, pHandTip;
         let isHeadSolve = false;
+        let isReachingBehind = false;
 
         if (overheadTargetInfo && overheadTargetInfo.isClasped) {
             // -------------------------------------------------------------
@@ -1642,7 +1645,7 @@ export class TorsoPoseEstimator {
             uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
             uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
             isHeadSolve = true;
-        } else if (isTouchingHead && headTargetInfo && wrist) {
+        } else if (!isProfileStance && isTouchingHead && headTargetInfo && wrist && (elbow ? elbow.y <= shoulder.y + 0.05 : true)) {
             // -------------------------------------------------------------
             // 模式 0：摸頭/撫面/手觸臉部 專屬解剖解析逆向幾何求解器 (Analytical Two-Bone IK)
             // -------------------------------------------------------------
@@ -1837,7 +1840,7 @@ export class TorsoPoseEstimator {
             const resTip = testPenetration(pHandTip);
 
             // E. 智慧曲面避障分流解算
-            const isReachingBehind = (pWristLocal.z < -1.0) || (uArm.z < -0.3);
+            isReachingBehind = (pWristLocal.z < -1.0) || (uArm.z < -0.3);
 
             if (isHandOnHip) {
                 // 模式 1：側腰插腰 (Akimbo Flank Placement)
@@ -1887,8 +1890,8 @@ export class TorsoPoseEstimator {
         const isFarSide = isProfileStance && profileSign !== 0 && (
             (profileSign === -1 && side === 'left') || (profileSign === 1 && side === 'right')
         );
-        if (isFarSide) {
-            // 遠側手臂在側身後撐姿態下，手肘屈曲不應超過生理極限，防止 180° 反折貼胸
+        if (isFarSide && isReachingBehind && uFore.y < 0) {
+            // 遠側手臂在側身後撐姿態下 (手向下向後延伸支撐地面)，手肘屈曲不應超過生理極限，防止 180° 反折貼胸
             flex = Math.min(flex, 1.25);
         }
 
