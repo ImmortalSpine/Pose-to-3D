@@ -1001,18 +1001,36 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // 當照片為半身照或裁切至大腿 (膝/踝出鏡或被模型擠壓在畫布邊緣，如經典長裙半身照) 時，
         // 鎖定下肢為自然筆直站立姿態，徹底防止假性屈曲與誤觸地面跪姿吸附！
+
+        // 收集所有下肢與足部節點在畫面 2D 空間中的最低點
+        const footYList = [
+            leftAnkle ? leftAnkle.y : null,
+            rightAnkle ? rightAnkle.y : null,
+            leftHeel ? leftHeel.y : null,
+            rightHeel ? rightHeel.y : null,
+            leftFootIndex ? leftFootIndex.y : null,
+            rightFootIndex ? rightFootIndex.y : null,
+            leftKnee ? leftKnee.y : null,
+            rightKnee ? rightKnee.y : null
+        ].filter(v => v !== null && !isNaN(v));
+
+        const lowestFootY = footYList.length > 0 ? Math.max(...footYList) : 0;
+        const totalLowerSpan = (midHip && lowestFootY > 0) ? (lowestFootY - midHip.y) : 0;
+
         const lLegSpan = (leftHip && leftAnkle) ? (leftAnkle.y - leftHip.y) : (leftHip && leftKnee ? (leftKnee.y - leftHip.y) : 0);
         const rLegSpan = (rightHip && rightAnkle) ? (rightAnkle.y - rightHip.y) : (rightHip && rightKnee ? (rightKnee.y - rightHip.y) : 0);
-        const maxLegSpan = Math.max(lLegSpan, rLegSpan);
+        const maxLegSpan = Math.max(lLegSpan, rLegSpan, totalLowerSpan);
 
         const lFemurDy = (leftHip && leftKnee) ? (leftKnee.y - leftHip.y) : 0;
         const lFemurDx = (leftHip && leftKnee) ? Math.abs((leftKnee.x - leftHip.x) * ar) : 0;
-        const isLeftFemurVertical = lFemurDy > 0.08 * torsoHeight && lFemurDx < 0.65 * lFemurDy;
-
         const rFemurDy = (rightHip && rightKnee) ? (rightKnee.y - rightHip.y) : 0;
         const rFemurDx = (rightHip && rightKnee) ? Math.abs((rightKnee.x - rightHip.x) * ar) : 0;
-        const isRightFemurVertical = rFemurDy > 0.08 * torsoHeight && rFemurDx < 0.65 * rFemurDy;
 
+        // 股骨長度異常坍縮：MediaPipe 在長裙/半身照常因未見雙足，將膝蓋與髖骨擠在同一高度 (ΔY < 0.12 * torsoHeight)
+        const isFemurCollapsed = (lFemurDy < 0.12 * torsoHeight) || (rFemurDy < 0.12 * torsoHeight);
+
+        const isLeftFemurVertical = lFemurDy > 0.08 * torsoHeight && lFemurDx < 0.65 * lFemurDy;
+        const isRightFemurVertical = rFemurDy > 0.08 * torsoHeight && rFemurDx < 0.65 * rFemurDy;
         const isAnyFemurVertical = isLeftFemurVertical || isRightFemurVertical;
 
         const lShinDy = (leftKnee && leftAnkle) ? (leftAnkle.y - leftKnee.y) : 0;
@@ -1021,21 +1039,32 @@ export class TorsoPoseEstimator {
         const isRightShinTruncated = rFemurDy > 0.08 && rShinDy < 0.60 * rFemurDy;
         const isShinTruncated = isLeftShinTruncated || isRightShinTruncated;
 
-        const isShinHorizontal = (leftAnkle && leftKnee && Math.abs((leftAnkle.x - leftKnee.x) * ar) > 0.12) ||
-                                 (rightAnkle && rightKnee && Math.abs((rightAnkle.x - rightKnee.x) * ar) > 0.12);
+        // 小腿水平展開判定 (真人地面跪姿特徵，如芭蕾/體操動作)
+        const isShinHorizontal = (leftAnkle && leftKnee && Math.abs((leftAnkle.x - leftKnee.x) * ar) > 0.10) ||
+                                 (rightAnkle && rightKnee && Math.abs((rightAnkle.x - rightKnee.x) * ar) > 0.10);
 
-        const isLegSpanCompressed = maxLegSpan > 0 && maxLegSpan < 1.35 * torsoHeight;
-        const isKneeNearBottom = (leftKnee && leftKnee.y > 0.70) || (rightKnee && rightKnee.y > 0.70);
-        const isAnkleNearBottom = (leftAnkle && leftAnkle.y > 0.75) || (rightAnkle && rightAnkle.y > 0.75);
-        const isAnkleMissingOrLowVis = (!leftAnkle || (leftAnkle.visibility != null && leftAnkle.visibility < 0.50)) &&
-                                       (!rightAnkle || (rightAnkle.visibility != null && rightAnkle.visibility < 0.50));
-        const isHipNearBottom = (midHip && midHip.y > 0.70);
-        const isSpineUpright = Math.abs(spineDy) > 0.70 * torsoHeight && Math.abs(spineDx) < 0.55 * torsoHeight;
+        const isSpineUpright = Math.abs(spineDy) > 0.65 * torsoHeight && Math.abs(spineDx) < 0.60 * torsoHeight;
 
+        // 下肢總跨度判定：正常人體站姿骨盆至腳底必然 ≥ 1.45 ~ 1.85 倍軀幹高度
+        // 凡是小於 1.25 倍軀幹高度者，生理上絕無可能是完整站姿全身照！
+        const isLowerSpanSeverelyTruncated = totalLowerSpan > 0 && totalLowerSpan < 1.15 * torsoHeight;
+        const isLowerSpanTruncated = totalLowerSpan > 0 && totalLowerSpan < 1.35 * torsoHeight;
+
+        const isFootNearBottom = lowestFootY > 0.72;
+        const isHipNearBottom = (midHip && midHip.y > 0.62);
+
+        // 綜合判定
         const isLegsTruncated = !isProfileStance && !isShinHorizontal && (
-            (isSpineUpright && isAnyFemurVertical && (isLegSpanCompressed || isShinTruncated) && (isKneeNearBottom || isAnkleNearBottom || isAnkleMissingOrLowVis)) ||
-            (isShinTruncated && (isKneeNearBottom || isAnkleNearBottom)) ||
-            isHipNearBottom
+            // A. 股骨坍縮 (MediaPipe 把膝蓋標在髖骨高度) 且身軀直立
+            (isSpineUpright && isFemurCollapsed && (isFootNearBottom || isLowerSpanTruncated)) ||
+            // B. 骨盆至最低足點垂直落差 < 1.15 倍軀幹 (物理上必然是裁切照)
+            (isSpineUpright && isLowerSpanSeverelyTruncated) ||
+            // C. 骨盆至最低足點落差 < 1.35 倍軀幹 且 足部/骨盆靠近畫面下半部
+            (isSpineUpright && isLowerSpanTruncated && (isFootNearBottom || isHipNearBottom)) ||
+            // D. 直立軀幹 + 大腿垂直但小腿嚴重截斷
+            (isSpineUpright && isAnyFemurVertical && isShinTruncated) ||
+            // E. 骨盆直接被裁切在畫面下半部 (胸像/大頭照/腰部裁切)
+            (midHip && midHip.y > 0.70)
         );
 
         // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援側身矢狀投影)
@@ -1753,13 +1782,21 @@ export class TorsoPoseEstimator {
         }
 
         // 1. 相機平面投影向量 (Screen X-Y，經各向同性修正)
-        const dxFemur = (knee.x - hip.x) * ar;
-        const dyFemur = -(knee.y - hip.y); // Three.js 向上為正
-        const lFemur2D = Math.hypot(dxFemur, dyFemur);
+        let dxFemur = (knee.x - hip.x) * ar;
+        let dyFemur = -(knee.y - hip.y); // Three.js 向上為正
+        let lFemur2D = Math.hypot(dxFemur, dyFemur);
 
         const scale = torsoHeight || 0.45;
         const LFemur = scale * 0.65;
         const LTibia = scale * 0.60;
+
+        // 解剖防禦：若股骨 2D 投影嚴重坍縮 (膝蓋落在髖部附近，常為長裙或裁切照假特徵)
+        // 絕不可將微小的 dzFemur 歸一化為指向相機的 90° 坐姿向前向量！
+        if (lFemur2D < 0.28 * LFemur && !isProfileStance) {
+            dxFemur = sign * 0.02 * LFemur;
+            dyFemur = -LFemur;
+            lFemur2D = LFemur;
+        }
 
         // 2. 解剖深度推估 (Pythagorean Depth)
         const rawDzFemur = Math.sqrt(Math.max(0, LFemur * LFemur - lFemur2D * lFemur2D));
