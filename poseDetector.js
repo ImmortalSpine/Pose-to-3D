@@ -378,6 +378,10 @@ export class TorsoPoseEstimator {
         const hipDy = leftHip.y - rightHip.y;
         const hipSpan = Math.hypot(hipDx, hipDy);
 
+        // 雙眼中點 (Mid-Eye 2D Center - 全域五官幾何基準)
+        const midEyeX = (leftEye && rightEye) ? (leftEye.x + rightEye.x) * 0.5 : (nose ? nose.x : 0.5);
+        const midEyeY = (leftEye && rightEye) ? (leftEye.y + rightEye.y) * 0.5 : (nose ? nose.y - 0.045 : 0.2);
+
         // -------------------------------------------------------------
         // 藝用解剖頭部姿態解算 (Head Yaw, Pitch, Roll)
         // 核心：純 2D 幾何五官比例與兩側投影面積 (Eye & Facial Area Symmetry)
@@ -564,7 +568,6 @@ export class TorsoPoseEstimator {
         const rightEarVis = rightEar ? (rightEar.visibility ?? 0.5) : 0;
         const hasSingleEar = (leftEarVis > 0.40 && rightEarVis < 0.32) || (rightEarVis > 0.40 && leftEarVis < 0.32);
 
-        const midEyeX = (leftEye && rightEye) ? (leftEye.x + rightEye.x) * 0.5 : (nose ? nose.x : 0);
         const noseOffset = nose ? (nose.x - midEyeX) * ar : 0;
         const isNoseExtruding = Math.abs(noseOffset) > Math.max(0.012, eyeDx * 0.45);
 
@@ -724,7 +727,7 @@ export class TorsoPoseEstimator {
                 headYaw = thoracicYaw + turnSign * 1.25;
 
                 // 回眸平視/微收下巴姿態 (-0.02 ~ 0.08 rad)，消除五官側向投影失真造成的假性仰天
-                const safeMidEyeY = (leftEye && rightEye) ? (leftEye.y + rightEye.y) * 0.5 : (leftEye?.y || rightEye?.y || nose?.y || 0.2);
+                const safeMidEyeY = midEyeY;
                 const eyeNoseDy = (nose && (leftEye || rightEye)) ? (nose.y - safeMidEyeY) : 0.045;
                 const lookPitchOffset = THREE.MathUtils.clamp(eyeNoseDy - 0.045, -0.06, 0.12);
                 headPitch = lookPitchOffset * 1.0 + 0.03; // 優雅微低頭平視
