@@ -1934,15 +1934,15 @@ export class AnatomicalTorso {
 
         // 4. 頸椎與寰枕關節頭骨旋轉 (Cervical Spine & Skull Rotation)
         const cCount = this.cervicalVertebrae.length;
-        let accumCervicalPitch = thoracicPitch;
-        let accumCervicalYaw = thoracicYaw;
-        let accumCervicalRoll = thoracicRoll;
+        let accumCervicalPitch = 0;
+        let accumCervicalYaw = 0;
+        let accumCervicalRoll = 0;
 
         this.cervicalVertebrae.forEach((vert, idx) => {
-            const factor = (idx + 1) / cCount;
-            const rotX = (headPitch - thoracicPitch) * factor * 0.08;
-            const rotY = (headYaw - thoracicYaw) * factor * 0.08;
-            const rotZ = (headRoll - thoracicRoll) * factor * 0.08;
+            // 直接受 cervicalPitch / cervicalYaw 驅動，7 節頸椎平滑分擔
+            const rotX = cervicalPitch / cCount;
+            const rotY = cervicalYaw / cCount;
+            const rotZ = (headRoll - thoracicRoll) / cCount * 0.4;
             vert.rotation.x = rotX;
             vert.rotation.y = rotY;
             vert.rotation.z = rotZ;
@@ -1953,7 +1953,8 @@ export class AnatomicalTorso {
 
         if (this.headJoint) {
             this.headJoint.rotation.order = 'YXZ';
-            this.headJoint.rotation.x = headPitch - accumCervicalPitch;
+            // 寰枕關節承擔頭骨獨立點頭/仰頭，不倒扣 thoracicPitch
+            this.headJoint.rotation.x = headPitch;
             this.headJoint.rotation.y = headYaw - accumCervicalYaw;
             this.headJoint.rotation.z = headRoll - accumCervicalRoll;
         }

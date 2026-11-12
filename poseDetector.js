@@ -298,44 +298,79 @@ export class TorsoPoseEstimator {
             const midEyeY = (leftEye.y + rightEye.y) * 0.5;
             const eyeNoseDy = nose.y - midEyeY;
 
+            // 1. 口-鼻-眼垂直投影比例 (Mouth Ratio)
             let mouthPitch = null;
             if (leftMouth && rightMouth &&
-                (leftMouth.visibility === undefined || leftMouth.visibility > 0.35) &&
-                (rightMouth.visibility === undefined || rightMouth.visibility > 0.35)) {
+                (leftMouth.visibility === undefined || leftMouth.visibility > 0.30) &&
+                (rightMouth.visibility === undefined || rightMouth.visibility > 0.30)) {
                 const midMouthY = (leftMouth.y + rightMouth.y) * 0.5;
                 const eyeMouthDy = Math.max(0.02, midMouthY - midEyeY);
-                // 解剖五官黃金比例：正面仰角 0° 時，眼鼻垂直距佔眼口距約 57%
-                // 低頭 (Flexion) 時鼻尖相對眼睛下移、更靠近唇口，投影比例增高 (>0.57)，需產生正向 pitch (>0)
-                // 仰頭 (Extension) 時鼻尖相對眼睛上移、遠離唇口，投影比例縮小 (<0.57)，需產生負向 pitch (<0)
+                // 解剖五官黃金比例：正面平視仰角 0° 時，眼鼻垂直距佔眼口距約 50%
+                // 低頭 (Flexion) 時鼻尖相對眼睛下移、更靠近唇口，投影比例增高 (>0.50)，產生正向 pitch (>0)
+                // 仰頭 (Extension) 時鼻尖相對眼睛上移、遠離唇口，投影比例縮小 (<0.50)，產生負向 pitch (<0)
                 const normRatio = eyeNoseDy / eyeMouthDy;
-                const pitchOffset = normRatio - 0.57;
-                mouthPitch = THREE.MathUtils.clamp(pitchOffset * 3.2, -0.42, 0.42);
+                const pitchOffset = normRatio - 0.50;
+                mouthPitch = THREE.MathUtils.clamp(pitchOffset * 2.8, -0.42, 0.42);
             }
 
+            // 2. 雙耳-雙眼高度差 (Ear-Eye Offset)
             let earPitch = null;
             if (leftEar && rightEar &&
-                (leftEar.visibility === undefined || leftEar.visibility > 0.45) &&
-                (rightEar.visibility === undefined || rightEar.visibility > 0.45)) {
+                (leftEar.visibility === undefined || leftEar.visibility > 0.40) &&
+                (rightEar.visibility === undefined || rightEar.visibility > 0.40)) {
                 const midEarY = (leftEar.y + rightEar.y) * 0.5;
                 const faceScale = Math.max(0.02, eyeNoseDy);
-                // 影像座標向下為正。低頭時後腦與雙耳相對於眼睛上升 (midEarY < midEyeY)，midEyeY - midEarY > 0 -> pitch > 0
-                // 仰頭時雙耳相對於眼睛下降 (midEarY > midEyeY)，midEyeY - midEarY < 0 -> pitch < 0
+                // 影像座標向下為正：低頭時雙耳相對眼睛上升 (midEarY < midEyeY)，midEyeY - midEarY > 0 -> pitch > 0
+                // 仰頭時雙耳相對眼睛下降 (midEarY > midEyeY)，midEyeY - midEarY < 0 -> pitch < 0
                 const earEyeOffset = (midEyeY - midEarY) / faceScale;
                 earPitch = THREE.MathUtils.clamp(earEyeOffset * 0.85, -0.42, 0.42);
             }
 
+            // 3. 雙眼-鼻距水平比基準校正 (Fallback when ears/mouth occluded)
+            const eyeDx = Math.max(0.02, Math.abs(leftEye.x - rightEye.x) * ar);
+            const normNose = eyeNoseDy / eyeDx;
+            // 解剖五官常態：眼鼻垂直距約為雙眼間距之 52% (非 72%)
+            const fallbackFacePitch = THREE.MathUtils.clamp((normNose - 0.52) * 2.0, -0.38, 0.38);
+
+            let facePitch = fallbackFacePitch;
             if (mouthPitch !== null && earPitch !== null) {
-                headPitch = mouthPitch * 0.70 + earPitch * 0.30;
+                facePitch = mouthPitch * 0.65 + earPitch * 0.35;
             } else if (mouthPitch !== null) {
-                headPitch = mouthPitch;
+                facePitch = mouthPitch;
             } else if (earPitch !== null) {
-                headPitch = earPitch;
+                facePitch = earPitch;
+            }
+
+            // 4. 眼-肩垂直距離壓縮比 (Eye-to-Shoulder Compression Ratio) - 極其抗毛髮/手部遮擋
+            let pitchFromShoulder = null;
+            if (leftShoulder && rightShoulder) {
+                const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
+                const eyeShoulderDy = midShoulderY - midEyeY;
+                const normEyeShoulder = eyeShoulderDy / Math.max(0.1, torsoHeight || 0.45);
+                // 平視常態約 0.245~0.27；低頭下巴貼胸時眼肩距顯著壓縮 (< 0.22)；仰頭伸頸時顯著拉長 (> 0.28)
+                const shoulderOffset = 0.245 - normEyeShoulder;
+                pitchFromShoulder = THREE.MathUtils.clamp(shoulderOffset * 2.4, -0.42, 0.42);
+            }
+
+            // 5. MediaPipe 3D 深度傾向 (Z-depth Trend)
+            let pitchFromZ = null;
+            if (leftMouth && rightMouth) {
+                const midMouthZ = ((leftMouth.z || 0) + (rightMouth.z || 0)) * 0.5;
+                const midEyeZ = ((leftEye.z || 0) + (rightEye.z || 0)) * 0.5;
+                // 低頭時下巴與嘴巴向後內收 (Z 變大)、額眼向前 (Z 變小)
+                const dzMouthEye = midMouthZ - midEyeZ;
+                pitchFromZ = THREE.MathUtils.clamp(dzMouthEye * 2.0, -0.35, 0.35);
+            }
+
+            // 多特徵加權融合 (Multi-cue Fusion)
+            if (pitchFromShoulder !== null) {
+                headPitch = facePitch * 0.55 + pitchFromShoulder * 0.45;
             } else {
-                // 僅有眼鼻時：以雙眼水平間距推算垂直投影比例
-                const eyeDx = Math.max(0.02, Math.abs(leftEye.x - rightEye.x) * ar);
-                const normNose = eyeNoseDy / eyeDx;
-                const pitchOffset = normNose - 0.72;
-                headPitch = THREE.MathUtils.clamp(pitchOffset * 2.2, -0.38, 0.38);
+                headPitch = facePitch;
+            }
+
+            if (pitchFromZ !== null) {
+                headPitch = headPitch * 0.80 + pitchFromZ * 0.20;
             }
         }
         headPitch = this._clamp(headPitch, -0.42, 0.42);
@@ -467,9 +502,13 @@ export class TorsoPoseEstimator {
         thoracicPitch = this._clamp(thoracicPitch, -0.35, 0.35);
         let pelvisPitch = thoracicPitch * 0.35;
 
-        // 10. 頸椎轉動 (頸椎自胸廓朝向平滑過渡至頭部朝向)
-        let cervicalPitch = headPitch - thoracicPitch;
-        let cervicalYaw = headYaw - thoracicYaw;
+        // 10. 頸椎與寰枕關節仰俯協同分配 (Biomechanical Head/Neck Coupling)
+        // 人體生理生物力學：頭部相對於胸廓之仰俯角，由頸椎 (60%) 與寰枕關節 (40%) 協同承擔
+        const relativeHeadPitch = headPitch - thoracicPitch;
+        let cervicalPitch = relativeHeadPitch * 0.60;
+        let cranialPitch = relativeHeadPitch * 0.40;
+
+        let cervicalYaw = (headYaw - thoracicYaw) * 0.50;
 
         // 11. MediaPipe Holistic 雙手 21 骨節特徵提取與預處理
         let matchedLeftHand = null;
@@ -865,9 +904,9 @@ export class TorsoPoseEstimator {
             lumbarPitch: this._clamp(thoracicPitch * 0.3, -0.3, 0.3),
             lumbarRoll: this._clamp(lumbarRoll, -0.45, 0.45),
             lumbarYaw: this._clamp(lumbarYaw, -0.5, 0.5),
-            cervicalPitch: this._clamp(cervicalPitch, -0.4, 0.4),
+            cervicalPitch: this._clamp(cervicalPitch, -0.45, 0.45),
             cervicalYaw: this._clamp(cervicalYaw, -0.9, 0.9),
-            headPitch: this._clamp(headPitch, -0.45, 0.45),
+            headPitch: this._clamp(cranialPitch, -0.40, 0.40),
             headYaw: this._clamp(headYaw, -1.3, 1.3),
             headRoll: this._clamp(headRoll, -0.6, 0.6),
             leftArmPitch: this._clamp(leftArmPitch, -2.2, 2.2),
@@ -979,20 +1018,21 @@ export class TorsoPoseEstimator {
             // 判斷是否同側摸頭或越過中線 (Cross-body)
             const isCrossBody = (sign > 0 && rawDx < -0.04) || (sign < 0 && rawDx > 0.04);
             const targetSign = isCrossBody ? -sign : sign;
-            const normX = THREE.MathUtils.clamp(Math.abs(rawDx) / 0.16, 0.50, 1.15);
-            const targetX = targetSign * (1.15 + normX * 0.70); // 1.5 ~ 2.0 (顳骨/顱側表面)
+            const normX = THREE.MathUtils.clamp(Math.abs(rawDx) / 0.16, 0.40, 1.20);
+            const targetX = targetSign * (1.30 + normX * 0.85); // 1.6 ~ 2.3 (顳骨/顴弓/顱側表面)
 
             // 2. 縱向高度 (Vertical position on head)
             const scaleH = torsoHeight || 0.45;
             const dyHead = (midEyeY - testPt.y) / scaleH;
-            const targetY = THREE.MathUtils.clamp(12.3 + dyHead * 4.2, 10.6, 14.5);
+            // 藝用解剖頭骨中心高約 17.8 (寰枕關節 16.38 + 顴骨/顳骨 1.45)
+            const targetY = THREE.MathUtils.clamp(17.8 + dyHead * 4.5, 15.6, 20.2);
 
             // 3. 深度方程 (Head Ellipsoid Surface Equation)
-            // 顱骨橢圓球體方程：Rx=2.2, Ry=2.5, Rz=2.1, 中心=(0, 12.3, 0.6)
-            const rxRatio = Math.min(1.0, Math.abs(targetX) / 2.2);
-            const ryRatio = Math.min(1.0, Math.abs(targetY - 12.3) / 2.5);
+            // 顱骨橢圓球體方程：Rx=2.3, Ry=2.5, Rz=2.3, 中心=(0, 17.8, 0.8)
+            const rxRatio = Math.min(1.0, Math.abs(targetX) / 2.3);
+            const ryRatio = Math.min(1.0, Math.abs(targetY - 17.8) / 2.5);
             const rRemain = Math.max(0.0, 1.0 - rxRatio * rxRatio - ryRatio * ryRatio);
-            const targetZ = 0.6 + 2.0 * Math.sqrt(rRemain) + 0.35; // 0.35 手掌手腕厚度偏移
+            const targetZ = 0.8 + 2.2 * Math.sqrt(rRemain) + 0.35; // 0.35 手掌手腕厚度偏移
 
             const pWristTarget = new THREE.Vector3(targetX, targetY, targetZ);
 
