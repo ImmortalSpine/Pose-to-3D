@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.0';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -753,8 +754,9 @@ export class TorsoPoseEstimator {
 
             profileSign = (leftScore >= rightScore) ? -1 : 1;
 
-            // 2. 直接賦予解剖側身轉向角 (±82° ~ ±88°)，徹底擺脫單目深度噪聲坍縮
-            const profileTargetYaw = profileSign * 1.48; // ~85°
+            // 2. 依雙肩展開度賦予解剖側身/斜側身轉向角 (70° ~ 83°)，兼顧立體透視與穩定度
+            const profileYawMag = (normShoulderSpan > 0.22) ? 1.25 : 1.44;
+            const profileTargetYaw = profileSign * profileYawMag;
             pelvisYaw = profileTargetYaw;
             thoracicYaw = profileTargetYaw;
 
@@ -870,22 +872,7 @@ export class TorsoPoseEstimator {
             lumbarPitch = thoracicPitch * 0.35;
         }
 
-        // 10. 頸椎與寰枕關節仰俯協同分配 (Biomechanical Head/Neck Coupling)
-        // 人體生理生物力學：頭部相對於胸廓之仰俯角，由頸椎 (60%) 與寰枕關節 (40%) 協同承擔
-        // 生理活動度極限約束 (ROM Guardrail)：仰頭極限 -0.45 rad (~-26°)，低頭極限 +0.65 rad (~+37°)
-        const safeRelativePitch = THREE.MathUtils.clamp(headPitch - thoracicPitch, -0.45, 0.65);
-        let cervicalPitch = safeRelativePitch * 0.60;
-        let cranialPitch = safeRelativePitch * 0.40;
-
-        // 頸椎軸向旋轉 (Cervical Axial Rotation)：
-        // 頸椎生理極限約 ±77° (±1.35 rad)，其中 65% 由 7 節頸椎承擔，35% 由寰枕/寰樞關節承擔
-        let diffNeckYaw = headYaw - thoracicYaw;
-        while (diffNeckYaw > Math.PI) diffNeckYaw -= 2 * Math.PI;
-        while (diffNeckYaw < -Math.PI) diffNeckYaw += 2 * Math.PI;
-        const safeRelativeYaw = THREE.MathUtils.clamp(diffNeckYaw, -1.35, 1.35);
-        let cervicalYaw = safeRelativeYaw * 0.65;
-
-        // 11. MediaPipe Holistic 雙手 21 骨節特徵提取與預處理
+        // 10. MediaPipe Holistic 雙手 21 骨節特徵提取與預處理
         let matchedLeftHand = null;
         let matchedRightHand = null;
         let rightHandGesture = 'relaxed';
@@ -909,6 +896,43 @@ export class TorsoPoseEstimator {
                 matchedRightHand = temp;
             }
         }
+
+        // 10b. 信心分層評估與「胸腔—骨盆」相對轉角雙向約束 (Confidence Evaluation & Thoraco-Pelvic Coupling)
+        const confidences = ConfidenceEvaluator.evaluate(landmarks, matchedLeftHand, matchedRightHand, {
+            isProfileStance,
+            isBackStance
+        });
+        this.lastConfidences = confidences;
+
+        const coupledTorso = ThoracoPelvicCoupler.couple({
+            thoracicPitch, thoracicYaw, thoracicRoll,
+            pelvisPitch, pelvisYaw, pelvisRoll
+        }, confidences, spineDx);
+
+        thoracicPitch = coupledTorso.thoracicPitch;
+        thoracicYaw = coupledTorso.thoracicYaw;
+        thoracicRoll = coupledTorso.thoracicRoll;
+        pelvisPitch = coupledTorso.pelvisPitch;
+        pelvisYaw = coupledTorso.pelvisYaw;
+        pelvisRoll = coupledTorso.pelvisRoll;
+        lumbarPitch = coupledTorso.lumbarPitch;
+        lumbarYaw = coupledTorso.lumbarYaw;
+        lumbarRoll = coupledTorso.lumbarRoll;
+
+        // 11. 頸椎與寰枕關節仰俯協同分配 (Biomechanical Head/Neck Coupling)
+        // 人體生理生物力學：頭部相對於胸廓之仰俯角，由頸椎 (60%) 與寰枕關節 (40%) 協同承擔
+        // 生理活動度極限約束 (ROM Guardrail)：仰頭極限 -0.45 rad (~-26°)，低頭極限 +0.65 rad (~+37°)
+        const safeRelativePitch = THREE.MathUtils.clamp(headPitch - thoracicPitch, -0.45, 0.65);
+        let cervicalPitch = safeRelativePitch * 0.60;
+        let cranialPitch = safeRelativePitch * 0.40;
+
+        // 頸椎軸向旋轉 (Cervical Axial Rotation)：
+        // 頸椎生理極限約 ±77° (±1.35 rad)，其中 65% 由 7 節頸椎承擔，35% 由寰枕/寰樞關節承擔
+        let diffNeckYaw = headYaw - thoracicYaw;
+        while (diffNeckYaw > Math.PI) diffNeckYaw -= 2 * Math.PI;
+        while (diffNeckYaw < -Math.PI) diffNeckYaw += 2 * Math.PI;
+        const safeRelativeYaw = THREE.MathUtils.clamp(diffNeckYaw, -1.35, 1.35);
+        let cervicalYaw = safeRelativeYaw * 0.65;
 
         // 解剖學生理防呆校正：衣袖遮擋 / 偽陽性反向折返過濾 (Sleeve Occlusion Sanity Filter)
         // 當大臂自然下垂 (elbow.y > shoulder.y + 0.08)，但 MediaPipe 因外套/褶皺誤將手腕抓在手肘上方 (wrist.y < elbow.y - 0.04)
@@ -1590,462 +1614,34 @@ export class TorsoPoseEstimator {
         profileSign = 0,
         isBackStance = false
     ) {
-        const sign = (side === 'left') ? 1.0 : -1.0;
-        const ar = this.aspectRatio || 1.0;
-
-        const isNearArm = isProfileStance && profileSign !== 0 && (
-            (profileSign === 1 && side === 'right') || (profileSign === -1 && side === 'left')
-        );
-        const isFarArm = isProfileStance && profileSign !== 0 && !isNearArm;
-
-        if (!elbow || !shoulder) {
-            return {
-                roll: sign * 0.12,
-                pitch: 0,
-                yaw: 0,
-                flex: 0.15,
-                twist: isFrontOfPelvis || isHandOnHip ? 2.60 : (isTouchingHead ? 0.40 : 1.48)
-            };
-        }
-
-        const cfg = ANATOMICAL_COLLISION_CONFIG;
-        const pShoulderLocal = new THREE.Vector3(sign * 5.35, 8.6, -1.0);
-        const L1 = cfg.handClearance.armLen;  // 8.5
-        const L2 = cfg.handClearance.foreLen; // 7.4
-
-        let uArm, uFore;
-        let pElbowLocal, pWristLocal, pHandTip;
-        let isHeadSolve = false;
-        let isReachingBehind = false;
-        let isUpperTorsoHand = false;
-
-        if (overheadTargetInfo && overheadTargetInfo.isClasped) {
-            // -------------------------------------------------------------
-            // 模式 1：過頂合攏手 / 芭蕾五位手閉環 IK (Clasped Overhead Arched IK)
-            // -------------------------------------------------------------
-            // 在胸廓局部坐標系中，頭頂中心約在 (0, 20.8, 0.5)
-            // 雙手手腕目標位置在頭頂上方微前傾交匯：X = sign * 0.70, Y = 22.8, Z = 1.05
-            const pWristTarget = new THREE.Vector3(sign * 0.70, 22.8, 1.05);
-
-            const vST = pWristTarget.clone().sub(pShoulderLocal);
-            const dST = vST.length();
-            const maxD = (L1 + L2) * 0.96;
-            const minD = Math.abs(L1 - L2) * 1.05;
-            const safeD = THREE.MathUtils.clamp(dST, minD, maxD);
-            const uST = vST.clone().normalize();
-
-            const cosAlpha = (L1 * L1 + safeD * safeD - L2 * L2) / (2 * L1 * safeD);
-            const alpha = Math.acos(THREE.MathUtils.clamp(cosAlpha, -1.0, 1.0));
-            const dProj = L1 * Math.cos(alpha);
-            const rCircle = L1 * Math.sin(alpha);
-
-            // 肘部極向量：芭蕾圓弧必然向外上方展開 (+X 外側, +Y 向上, +Z 略微向前)
-            const poleVec = new THREE.Vector3(sign * 1.85, 0.65, 0.40);
-            const dotP = poleVec.dot(uST);
-            const polePerp = poleVec.clone().sub(uST.clone().multiplyScalar(dotP)).normalize();
-
-            pElbowLocal = pShoulderLocal.clone().addScaledVector(uST, dProj).addScaledVector(polePerp, rCircle);
-            pWristLocal = pWristTarget;
-            pHandTip = pWristLocal.clone().addScaledVector(pWristLocal.clone().sub(pElbowLocal).normalize(), cfg.handClearance.handLen);
-
-            uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
-            uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-            isHeadSolve = true;
-        } else if (!isProfileStance && isTouchingHead && headTargetInfo && wrist && (elbow ? elbow.y <= shoulder.y + 0.05 : true)) {
-            // -------------------------------------------------------------
-            // 模式 0：摸頭/撫面/手觸臉部 專屬解剖解析逆向幾何求解器 (Analytical Two-Bone IK)
-            // -------------------------------------------------------------
-            const testPt = (handLandmarks && handLandmarks.length >= 21) ? handLandmarks[0] : wrist;
-            const nosePt = headTargetInfo.nose;
-            const midEyeY = headTargetInfo.midEyeY;
-
-            // 1. 橫向位置 (Lateral position on head & neck)
-            const rawDx = (testPt.x - nosePt.x) * ar;
-            // 判斷是否同側摸頭或越過中線 (Cross-body)
-            const isCrossBody = (sign > 0 && rawDx < -0.04) || (sign < 0 && rawDx > 0.04);
-            const targetSign = isCrossBody ? -sign : sign;
-            const normX = THREE.MathUtils.clamp(Math.abs(rawDx) / 0.16, 0.40, 1.20);
-            let targetX = targetSign * (1.30 + normX * 0.85); // 1.6 ~ 2.3 (顳骨/顴弓/顱側表面)
-
-            // 2. 縱向高度 (Vertical position on head & neck)
-            const scaleH = torsoHeight || 0.45;
-            const dyHead = (midEyeY - testPt.y) / scaleH;
-            // 藝用解剖頭骨中心高約 17.8 (寰枕關節 16.38 + 顴骨/顳骨 1.45)
-            // 支援摸頸圈、喉部、下頜至頭頂：範圍擴展至 13.0 ~ 20.2
-            const targetY = THREE.MathUtils.clamp(17.8 + dyHead * 4.8, 13.0, 20.2);
-
-            // 3. 深度方程 (Head & Neck Ellipsoid Surface Equation)
-            let targetZ;
-            if (targetY < 15.5) {
-                // 頸部/下頜/頸圈區域 (Cervical / Mandible / Choker region)
-                targetX = targetSign * THREE.MathUtils.clamp(Math.abs(rawDx) / 0.16 * 1.4, 0.7, 1.8);
-                targetZ = 2.1; // 頸前頸側天然包絡面
-            } else {
-                // 顱骨橢圓球體方程：Rx=2.3, Ry=2.5, Rz=2.3, 中心=(0, 17.8, 0.8)
-                const rxRatio = Math.min(1.0, Math.abs(targetX) / 2.3);
-                const ryRatio = Math.min(1.0, Math.abs(targetY - 17.8) / 2.5);
-                const rRemain = Math.max(0.0, 1.0 - rxRatio * rxRatio - ryRatio * ryRatio);
-                targetZ = 0.8 + 2.2 * Math.sqrt(rRemain) + 0.35; // 0.35 手掌手腕厚度偏移
+        const conf = this.lastConfidences || {};
+        return HierarchicalArmSolver.solve({
+            shoulder,
+            elbow,
+            wrist,
+            side,
+            thoracicPitch,
+            thoracicYaw,
+            thoracicRoll,
+            torsoHeight,
+            aspectRatio: this.aspectRatio || 1.0,
+            thumb,
+            pinky,
+            isFrontOfPelvis,
+            isHandOnHip,
+            isTouchingHead,
+            headTargetInfo,
+            handLandmarks,
+            overheadTargetInfo,
+            isProfileStance,
+            profileSign,
+            isBackStance,
+            collisionConfig: ANATOMICAL_COLLISION_CONFIG,
+            confidences: {
+                arm: side === 'left' ? (conf.leftArm ?? 0.8) : (conf.rightArm ?? 0.8),
+                hand: side === 'left' ? (conf.leftHand ?? 0.8) : (conf.rightHand ?? 0.8)
             }
-
-            const pWristTarget = new THREE.Vector3(targetX, targetY, targetZ);
-
-            // 4. 解析 Two-Bone IK 幾何求解
-            const vST = pWristTarget.clone().sub(pShoulderLocal);
-            const dST = vST.length();
-            const maxD = (L1 + L2) * 0.98;
-            const minD = Math.abs(L1 - L2) * 1.05;
-            const safeD = THREE.MathUtils.clamp(dST, minD, maxD);
-            const uST = vST.clone().normalize();
-
-            // 肩關節角 alpha
-            const cosAlpha = (L1 * L1 + safeD * safeD - L2 * L2) / (2 * L1 * safeD);
-            const alpha = Math.acos(THREE.MathUtils.clamp(cosAlpha, -1.0, 1.0));
-            const dProj = L1 * Math.cos(alpha);
-            const rCircle = L1 * Math.sin(alpha);
-
-            // 5. 肘部空間旋轉極向量 (Pole Vector)
-            // 取自 2D 影像上肘部相對於肩膀的真實抬高與外展角度，融合自然前伸法線 (+Z)
-            const dxElb2D = elbow ? (elbow.x - shoulder.x) * sign * ar : 0.15;
-            const dyElb2D = elbow ? -(elbow.y - shoulder.y) : 0.10;
-            const poleVec = new THREE.Vector3(
-                sign * Math.max(0.7, 1.0 + dxElb2D * 1.8),
-                Math.max(0.15, 0.35 + dyElb2D * 1.8),
-                0.75
-            );
-            const dotP = poleVec.dot(uST);
-            const polePerp = poleVec.clone().sub(uST.clone().multiplyScalar(dotP)).normalize();
-
-            // 手肘 3D 坐標
-            pElbowLocal = pShoulderLocal.clone().addScaledVector(uST, dProj).addScaledVector(polePerp, rCircle);
-            pWristLocal = pWristTarget;
-            pHandTip = pWristLocal.clone().addScaledVector(pWristLocal.clone().sub(pElbowLocal).normalize(), cfg.handClearance.handLen);
-
-            uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
-            uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-            isHeadSolve = true;
-        } else {
-            // 1. 相機平面投影向量 (Screen X-Y，經各向同性修正)
-            const dxArm = (elbow.x - shoulder.x) * ar;
-            const dyArm = -(elbow.y - shoulder.y); // Three.js 向上為正
-            const lArm2D = Math.hypot(dxArm, dyArm);
-
-            const scale = torsoHeight || 0.45;
-            const LArm = scale * 0.58;
-            const LFore = scale * 0.52;
-
-            // 2. 解剖深度推估 (Pythagorean Depth)
-            const rawDzArm = Math.sqrt(Math.max(0, LArm * LArm - lArm2D * lArm2D));
-            const mpDz = -((elbow.z || 0) - (shoulder.z || 0));
-            let zSignArm = isFrontOfPelvis ? 0.30 : (mpDz < -0.05 ? -0.15 : 0.40);
-            if (isHandOnHip) zSignArm = 0.25;
-            let dzArm = (lArm2D < LArm * 0.95) ? (rawDzArm * zSignArm) : 0.02 * LArm;
-            if (isProfileStance && profileSign !== 0) {
-                // 側身模式微深度偏移：近側手臂自然向鏡頭外展微前傾 (+Z)，遠側手臂微向後 (-Z)
-                const depthSignArm = isNearArm ? 0.20 : -0.08;
-                dzArm = depthSignArm * LArm;
-            } else if (isBackStance) {
-                // 背身模式深度鏡像反轉
-                dzArm = -dzArm;
-            }
-
-            const vArmCam = new THREE.Vector3(dxArm, dyArm, dzArm);
-
-            // 前臂相機向量 (保留相機平面的真實投影傾角)
-            let vForeCam;
-            if (wrist) {
-                const dxFore = (wrist.x - elbow.x) * ar;
-                const dyFore = -(wrist.y - elbow.y);
-                const lFore2D = Math.hypot(dxFore, dyFore);
-                const rawDzFore = Math.sqrt(Math.max(0, LFore * LFore - lFore2D * lFore2D));
-                const mpDzFore = -((wrist.z || 0) - (elbow.z || 0));
-                let zSignFore = 0.45;
-                if (isFrontOfPelvis) {
-                    zSignFore = 0.55;
-                } else if (isHandOnHip) {
-                    zSignFore = 0.35;
-                } else if (mpDzFore < -0.05) {
-                    // 僅在手明顯往後背伸 (如背手姿態) 且手腕位於體側後方時才允許向後
-                    zSignFore = (wrist.y > elbow.y + 0.1) ? 0.15 : -0.15;
-                }
-                let dzFore = (lFore2D < LFore * 0.95) ? (rawDzFore * zSignFore) : 0.02 * LFore;
-                if (isProfileStance && profileSign !== 0) {
-                    const depthSignFore = isNearArm ? 0.04 : -0.04;
-                    dzFore = depthSignFore * LFore;
-                } else if (isBackStance) {
-                    dzFore = -dzFore;
-                }
-
-                vForeCam = new THREE.Vector3(dxFore, dyFore, dzFore);
-            } else {
-                vForeCam = new THREE.Vector3(sign * 0.05, -LFore, 0.05);
-            }
-
-            // 3. 逆變換至胸廓局部坐標系 (Thorax Local Frame: 採用 YXZ 旋轉順序保持嚴密一致性)
-            const qThorax = new THREE.Quaternion().setFromEuler(
-                new THREE.Euler(thoracicPitch, thoracicYaw, thoracicRoll, 'YXZ')
-            );
-            const qThoraxInv = qThorax.clone().invert();
-
-            uArm = vArmCam.clone().applyQuaternion(qThoraxInv).normalize();
-            uFore = vForeCam.clone().applyQuaternion(qThoraxInv).normalize();
-
-            // 4. 生理防穿插約束與「脊椎解剖防護禁區」+「腹壁橢圓包絡面動態前推算法」
-            // (Biomechanical Clearance, Spine Shield & Abdominal Ellipsoid Projection)
-
-            // 判定手腕是否位於頸部、鎖骨、下頜、臉部或胸前，且手肘在下或前臂上屈
-            const isHandAtNeckOrChest = wrist && (
-                (wrist.y < (shoulder ? shoulder.y + 0.14 * torsoHeight : 0.45)) ||
-                isTouchingHead
-            );
-            const isForearmReachingUp = wrist && elbow && (-(wrist.y - elbow.y) > 0.02);
-            isUpperTorsoHand = Boolean(isHandAtNeckOrChest && isForearmReachingUp);
-
-            // A. 後背壁防穿透與矢狀面/冠狀面人體結構約束 (Biomechanical Structural Constraints)
-            if (isUpperTorsoHand) {
-                // 【約束 1：手置於頸圈/鎖骨/胸前/下頜時，大臂在解剖學上嚴禁後伸 (No Retroversion in Upper Torso Touch)】
-                // 人體解剖生理學：手放於頸圈/胸前時，大臂必須處於肩胛骨冠狀面或前方 (+Z >= 0.18)！
-                // 絕對禁止向後延伸背部 (uArm.z < 0)，徹底消弭肘部穿透後背或反折成髮夾狀之異常畸變
-                uArm.z = Math.max(0.18, uArm.z);
-                // 側身模式近側手摸頸：維持自然側向微外展，避免夾入肋骨
-                if (isNearArm) {
-                    uArm.x = sign * Math.max(0.28, Math.abs(uArm.x));
-                }
-                uArm.normalize();
-
-                // 盂肱關節在胸廓坐標系中之解剖位置
-                pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
-
-                // 手觸摸頸圈/下頜/胸前時：前臂方向導引對準頸圈/胸頸目標點 (Choker / Neck Target)
-                // 使前臂必然從手肘向上指向上胸/頸部，保持人體解剖 V 字形姿態 (前臂在上方、大臂在下方)
-                const rawDxNeck = (wrist.x - (headTargetInfo?.nose?.x ?? shoulder.x)) * ar;
-                const neckTargetX = sign * THREE.MathUtils.clamp(Math.abs(rawDxNeck) / 0.16 * 1.4, 1.0, 1.8);
-                const neckTargetY = THREE.MathUtils.clamp(11.8 + (headTargetInfo ? (headTargetInfo.midEyeY - wrist.y) / (torsoHeight || 0.45) * 2.2 : 0.0), 10.5, 13.8);
-                const neckTargetZ = 1.8; // 頸前頸側包絡面
-                const pNeckTarget = new THREE.Vector3(neckTargetX, neckTargetY, neckTargetZ);
-                uFore = pNeckTarget.clone().sub(pElbowLocal).normalize();
-            } else {
-                // 一般姿態：正常站姿大臂主動後伸極限約為 20° (uArm.z >= -0.38)
-                // 僅在坐姿/跪姿地面後撐時放寬
-                const isGroundSupport = isProfileStance && wrist && elbow && (wrist.y > elbow.y + 0.06);
-                const minZLimit = isGroundSupport ? -0.75 : -0.38;
-                if (uArm.z < minZLimit) {
-                    uArm.z = minZLimit;
-                    uArm.normalize();
-                }
-                pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
-
-                // 側身模式遠側下垂手臂（如持花手）：防止前臂無故向前平伸突刺，使其自然隨大臂垂直下垂
-                if (isFarArm && uFore.y < -0.55) {
-                    uFore.z = THREE.MathUtils.clamp(uFore.z, -0.20, 0.20);
-                    uFore.normalize();
-                }
-            }
-
-            // B. 肋骨與側胸防穿插：在手臂下垂或內收時維持側向安全間距 (X 軸不穿入肋骨)
-            if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.4 && uArm.z < 0.5) {
-                pElbowLocal.x = sign * 4.4;
-                uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
-                pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
-            }
-
-            // C. 插腰手肘外展三角幾何鎖定 (Akimbo Flared Elbow Anchor)
-            if (isHandOnHip) {
-                pElbowLocal.x = sign * Math.max(6.6, Math.abs(pElbowLocal.x));
-                pElbowLocal.z = THREE.MathUtils.clamp(pElbowLocal.z, -0.1, 0.8);
-                uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
-                pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
-            }
-
-            // D. 骨骼鏈端點檢測 (手腕點與手掌指骨尖端點)
-            pWristLocal = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen);
-            pHandTip = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen + cfg.handClearance.handLen);
-
-            // 輔助函式：判斷任意 3D 點是否侵入「脊椎禁區」或「胸腹內臟實體腔」
-            const testPenetration = (pt) => {
-                const inY = (pt.y >= cfg.spineShield.yMin && pt.y <= cfg.spineShield.yMax);
-                if (!inY) return { penetrates: false, zSurface: 0 };
-
-                // 後背邊界：後方 (Z < -1.2) 為人體後背開放空間 (背手、後撐地)，不在胸腹內臟腔內
-                const zBack = -1.2;
-                if (pt.z < zBack) return { penetrates: false, zSurface: 0 };
-
-                // 1. 脊椎剛性禁區 (|X| < radiusX, zBack <= Z < radiusZ)
-                const inSpineShield = (Math.abs(pt.x) < cfg.spineShield.radiusX && pt.z < cfg.spineShield.radiusZ);
-
-                // 2. 腹壁/胸廓橢圓包絡面表面深度方程 Z_surface(X)
-                const normX = Math.min(1.0, Math.abs(pt.x) / cfg.torsoEnvelope.radiusX);
-                const zSurface = cfg.torsoEnvelope.centerZ + cfg.torsoEnvelope.radiusZ * Math.sqrt(Math.max(0.0, 1.0 - normX * normX));
-                const inTorsoViscera = (Math.abs(pt.x) < cfg.torsoEnvelope.radiusX && pt.z < zSurface);
-
-                return {
-                    penetrates: inSpineShield || inTorsoViscera,
-                    zSurface: zSurface
-                };
-            };
-
-            const resWrist = testPenetration(pWristLocal);
-            const resTip = testPenetration(pHandTip);
-
-            // E. 智慧曲面避障分流解算
-            isReachingBehind = (pWristLocal.z < -1.0) || (uArm.z < -0.3);
-
-            if (isHandOnHip) {
-                // 模式 1：側腰插腰 (Akimbo Flank Placement)
-                pWristLocal.x = sign * Math.max(cfg.torsoEnvelope.radiusX, Math.abs(pWristLocal.x));
-                pWristLocal.y = THREE.MathUtils.clamp(pWristLocal.y, -1.2, 0.8);
-                pWristLocal.z = THREE.MathUtils.clamp(pWristLocal.z, 0.6, 1.5);
-
-                uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                pHandTip = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen + cfg.handClearance.handLen);
-
-                const reCheckTip = testPenetration(pHandTip);
-                if (reCheckTip.penetrates) {
-                    pWristLocal.z = Math.max(pWristLocal.z, reCheckTip.zSurface + 0.6);
-                    uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                }
-            } else if (!isReachingBehind && !isUpperTorsoHand && (resWrist.penetrates || resTip.penetrates)) {
-                // 模式 2：腹前置手 / 脊椎禁區動態前推 (僅在手非向後延伸且非摸頸/摸頭時啟用)
-                const targetZ = Math.max(resWrist.zSurface + 0.5, 2.6);
-                pWristLocal.z = Math.max(pWristLocal.z, targetZ);
-
-                uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                pHandTip = pElbowLocal.clone().addScaledVector(uFore, cfg.handClearance.foreLen + cfg.handClearance.handLen);
-
-                const reCheckTip = testPenetration(pHandTip);
-                if (reCheckTip.penetrates) {
-                    const dzNeeded = (reCheckTip.zSurface + 0.5) - pHandTip.z;
-                    pWristLocal.z += dzNeeded * 0.85;
-                    uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                }
-            } else if (!isReachingBehind && !isUpperTorsoHand) {
-                // 模式 3：體側下垂手與大腿前區常規保護
-                if (pWristLocal.y < -1.5 && Math.abs(pWristLocal.x) < 3.8 && pWristLocal.z < 1.6) {
-                    pWristLocal.z = 1.6;
-                    uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-                }
-            }
-        }
-
-        // 5. 嚴密正交基底構造 (Two-Bone Orthonormal Basis)
-        // yAxis: 大臂反向長軸 (在 Three.js 中大臂自然下垂沿 -Y，故 yAxis = -uArm)
-        const yAxis = uArm.clone().negate().normalize();
-
-        // 肘關節屈曲角度 (Flexion)
-        const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
-        let flex = Math.acos(dotFlex);
-
-        // 人體肘關節鉸鏈屈曲生理極限硬性約束 (Humeroulnar Hinge Physiological Limits):
-        // 人體肘關節主動最大屈曲角為 135° ~ 140° (2.35 ~ 2.44 rad)，軟組織擠壓即終止運動，絕不允許摺疊超過 140°！
-        // 同時嚴禁反向伸展 (Hyperextension, flex < 0.05)
-        flex = THREE.MathUtils.clamp(flex, 0.05, 2.38);
-
-        const isFarSide = isFarArm;
-        if (isFarSide && isReachingBehind && uFore.y < 0) {
-            // 遠側手臂在側身後撐姿態下 (手向下向後延伸支撐地面)，手肘屈曲不應超過生理極限，防止 180° 反折貼胸
-            flex = Math.min(flex, 1.25);
-        }
-
-        // 前臂屈曲垂直向量 (uFore 在垂直於 uArm 切平面上的正交分量)
-        const uForePerp = uFore.clone().sub(uArm.clone().multiplyScalar(dotFlex));
-        const lPerp = uForePerp.length();
-
-        // 正向法線預設 zDef (手臂筆直時，肘窩 cubital fossa 面向身體正前方 +Z)
-        let zDef = new THREE.Vector3(0, 0, 1);
-        const dotZY = zDef.dot(yAxis);
-        zDef.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
-        if (zDef.lengthSq() < 1e-4) {
-            zDef = new THREE.Vector3(0, 1, 0);
-        }
-
-        // 當肘關節屈曲時，zAxis 嚴格對準前臂屈曲方向，使 elbowJoint.rotation.x = -flex 精確導引前臂指向手腕
-        let zAxis;
-        if (lPerp > 0.05 && flex > 0.08) {
-            const zFlex = uForePerp.clone().normalize();
-            const t = THREE.MathUtils.clamp((flex - 0.08) / 0.15, 0.0, 1.0);
-            zAxis = zDef.clone().multiplyScalar(1.0 - t).addScaledVector(zFlex, t).normalize();
-        } else {
-            zAxis = zDef;
-        }
-
-        // xAxis: 肘關節鉸鏈橫軸 (保證右手法則正交基底)
-        const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
-        zAxis.crossVectors(xAxis, yAxis).normalize();
-
-        // 構造旋轉矩陣並提取 'YXZ' 歐拉角
-        const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
-        const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');
-
-        // 6. 智慧橈骨旋前/旋後 (Twist / Pronation-Supination)
-        let twist = 1.48; // 預設：人體自然生理休止位 (Neutral/Semi-pronation ~85°)
-
-        const isHanging = (uFore.y < -0.65) && (flex < 0.45);
-        const isOnTorso = (flex >= 0.45) && (pWristLocal.y < 1.0) && (Math.abs(pWristLocal.x) < 5.8);
-        const isRaised = (pWristLocal.y >= 1.0) && (flex >= 0.7);
-
-        if (isHeadSolve) {
-            twist = (overheadTargetInfo && overheadTargetInfo.isClasped) ? 1.15 : 0.40; // 摸頭/撫面：掌心朝向頭部/面部，自然微旋後；芭蕾拱手：掌心斜前下
-        } else if (isUpperTorsoHand) {
-            twist = 0.35; // 摸頸圈/下頜/胸前：掌心朝向頸部，自然微旋後
-        } else if (isHandOnHip) {
-            twist = 2.65;
-        } else if (isFrontOfPelvis) {
-            twist = 2.60;
-        } else if (isRaised) {
-            twist = 0.35;
-        } else if (isOnTorso) {
-            twist = 2.65;
-        } else if (isHanging) {
-            twist = 1.48;
-        } else {
-            twist = THREE.MathUtils.clamp(1.48 + 0.45 * (flex - 0.45), 0.3, 2.7);
-        }
-
-        if (!isFrontOfPelvis && !isHandOnHip && !isHeadSolve && thumb && pinky) {
-            const latDiff = (side === 'left') ? ((thumb.x - pinky.x) * ar) : ((pinky.x - thumb.x) * ar);
-            const twistBias = THREE.MathUtils.clamp(-latDiff * 3.5, -0.65, 0.65);
-            twist += twistBias;
-        }
-
-        twist = THREE.MathUtils.clamp(twist, 0.1, Math.PI);
-
-        // 7. 歐拉角相位解包與生理極限約束 (Phase Unwrapping & Anatomical Clamping)
-        let roll = euler.z;
-        const isArmRaisedOverhead = (uArm.y > 0.15) || isHeadSolve; // 僅在大臂真正抬過肩膀水準線或摸頭時需解包過頂角
-        if (isArmRaisedOverhead) {
-            if (side === 'right' && roll > Math.PI * 0.5) {
-                roll -= 2 * Math.PI;
-            }
-            if (side === 'left' && roll < -Math.PI * 0.5) {
-                roll += 2 * Math.PI;
-            }
-            roll = this._clamp(roll, side === 'right' ? -3.23 : -0.85, side === 'right' ? 0.85 : 3.23);
-        } else if (isUpperTorsoHand && isNearArm) {
-            // 近側手摸頸：確保大臂自然外展，嚴禁向內插進肋骨或反折
-            if (side === 'right') {
-                roll = this._clamp(roll, -1.35, -0.15); // 右臂外展角度 (-77° ~ -8°)
-            } else {
-                roll = this._clamp(roll, 0.15, 1.35);  // 左臂外展角度 (+8° ~ +77°)
-            }
-        } else {
-            // 正常下垂、橫擺、側身或插腰姿態：維持解剖學自然角度範圍，絕不反向解包翻轉
-            roll = this._clamp(roll, side === 'right' ? -1.85 : -0.75, side === 'right' ? 0.75 : 1.85);
-        }
-
-        // 肩關節前後仰俯 (Pitch)：
-        // 人體解剖：前屈 (Pitch < 0) 可達 135° ~ 180° (-2.35 rad)；後伸 (Pitch > 0) 生理主動極限僅 35° (0.60 rad)！
-        // 摸頸或摸頭時更完全無後伸自由度 (max 0.20 rad)
-        const maxBackPitch = (isUpperTorsoHand || isTouchingHead) ? 0.20 : 0.60;
-        const safePitch = this._clamp(euler.x, -2.35, maxBackPitch);
-        const safeYaw = this._clamp(euler.y, -1.60, 1.60);
-
-        return {
-            roll: roll,
-            pitch: safePitch,
-            yaw: safeYaw,
-            flex: flex,
-            twist: twist
-        };
+        });
     }
 
     /**

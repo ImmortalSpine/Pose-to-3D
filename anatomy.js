@@ -429,6 +429,7 @@ export class AnatomicalTorso {
         const scapulaMesh = this._createScapulaMesh(side);
         scapulaUnit.add(scapulaMesh);
         this.shoulderGirdle[side].scapula = scapulaUnit;
+        this.shoulderGirdle[side].scapulaMesh = scapulaMesh;
 
         // 3. 盂肱關節 (GH Joint / Glenohumeral Joint) - 緊扣肩胛骨外側角肩臼窩
         const ghJoint = new THREE.Group();
@@ -1912,17 +1913,32 @@ export class AnatomicalTorso {
         this.pelvisUnit.rotation.y = pelvisYaw;
         this.pelvisUnit.rotation.z = pelvisRoll;
 
-        // 2. 腰椎生理連續曲度與側彎分配 (Smooth Continuous Lumbar Arc)
+        // 2. 胸腔與骨盆相對轉角生理極限硬體約束 + 腰椎 5 節連續曲度分配 (Thoraco-Pelvic Coupling & Smooth Lumbar Arc)
+        // 確保不論來自 AI 解算或手動滑桿調節，胸腔與骨盆之相對轉角永遠符合人體解剖極限：
+        // |ΔPitch| <= 0.40 (~23°), |ΔYaw| <= 0.45 (~25.8°), |ΔRoll| <= 0.35 (~20°)
+        let rawDiffYaw = thoracicYaw - pelvisYaw;
+        while (rawDiffYaw > Math.PI) rawDiffYaw -= 2 * Math.PI;
+        while (rawDiffYaw < -Math.PI) rawDiffYaw += 2 * Math.PI;
+
+        const safeDiffPitch = THREE.MathUtils.clamp(thoracicPitch - pelvisPitch, -0.40, 0.40);
+        const safeDiffYaw = THREE.MathUtils.clamp(rawDiffYaw, -0.45, 0.45);
+        const safeDiffRoll = THREE.MathUtils.clamp(thoracicRoll - pelvisRoll, -0.35, 0.35);
+
+        thoracicPitch = pelvisPitch + safeDiffPitch;
+        thoracicYaw = pelvisYaw + safeDiffYaw;
+        thoracicRoll = pelvisRoll + safeDiffRoll;
+
         const lCount = this.lumbarVertebrae.length;
         let accumPitch = pelvisPitch;
         let accumYaw = pelvisYaw;
         let accumRoll = pelvisRoll;
 
-        const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch, -0.45, 0.45);
-        const safeLumbarYaw = THREE.MathUtils.clamp(lumbarYaw, -0.15, 0.15);
-        const safeLumbarRoll = THREE.MathUtils.clamp(lumbarRoll, -0.35, 0.35);
+        // 由 5 節腰椎 (L5-L1) 平滑分擔 65% 的胸盆相對轉角，餘下 35% 由胸腰交界 (T12-L1) 承接，徹底消除折角
+        const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch || (safeDiffPitch * 0.65), -0.35, 0.35);
+        const safeLumbarYaw = THREE.MathUtils.clamp(lumbarYaw || (safeDiffYaw * 0.65), -0.28, 0.28);
+        const safeLumbarRoll = THREE.MathUtils.clamp(lumbarRoll || (safeDiffRoll * 0.65), -0.30, 0.30);
 
-        this.lumbarVertebrae.forEach((vert, idx) => {
+        this.lumbarVertebrae.forEach((vert) => {
             const rotX = safeLumbarPitch / lCount;
             const rotY = safeLumbarYaw / lCount;
             const rotZ = safeLumbarRoll / lCount;
@@ -1934,7 +1950,7 @@ export class AnatomicalTorso {
             accumRoll += rotZ;
         });
 
-        // 3. 胸椎與肋骨整體單元 (精確補足剩餘轉角，使胸廓在世界/相機空間之姿態 100% 精確等於 thoracicPitch/Yaw/Roll)
+        // 3. 胸椎與肋骨整體單元 (精確補足剩餘轉角，使胸廓在世界/相機空間之姿態 100% 精確等於約束後的 thoracicPitch/Yaw/Roll)
         this.thoracicCageUnit.rotation.x = thoracicPitch - accumPitch;
         this.thoracicCageUnit.rotation.y = thoracicYaw - accumYaw;
         this.thoracicCageUnit.rotation.z = thoracicRoll - accumRoll;
@@ -1992,13 +2008,16 @@ export class AnatomicalTorso {
             const scapRotL = Math.min(0.55, elevL * 0.32);
             const scapElevL = scapRotL * 0.75;
 
-            // 肩胛骨在胸廓後背表面向上旋轉與微升滑動 (平貼肋骨背側，Z ~ -1.2，絕不懸空脫臼)
+            // 肩胛骨在胸廓後背表面向上旋轉與微升滑動 (僅旋轉視覺网格 scapulaMesh，保持父節點 scapulaUnit 零旋轉以確保盂肱關節正交基底純淨)
             const baseX = this.shoulderBaseX || 4.45;
             if (this.shoulderGirdle.left.scapula) {
                 const scL = this.shoulderGirdle.left.scapula;
-                scL.rotation.z = -scapRotL;
-                scL.rotation.y = -scapRotL * 0.15;
+                scL.rotation.set(0, 0, 0);
                 scL.position.set(baseX + scapRotL * 0.20, 9.8 + scapElevL, -1.2 + scapRotL * 0.15);
+                if (this.shoulderGirdle.left.scapulaMesh) {
+                    this.shoulderGirdle.left.scapulaMesh.rotation.z = -scapRotL;
+                    this.shoulderGirdle.left.scapulaMesh.rotation.y = -scapRotL * 0.15;
+                }
             }
 
             if (this.shoulderGirdle.left.clavicle) {
@@ -2023,9 +2042,12 @@ export class AnatomicalTorso {
             const baseX = this.shoulderBaseX || 4.45;
             if (this.shoulderGirdle.right.scapula) {
                 const scR = this.shoulderGirdle.right.scapula;
-                scR.rotation.z = scapRotR;
-                scR.rotation.y = scapRotR * 0.15;
+                scR.rotation.set(0, 0, 0);
                 scR.position.set(-baseX - scapRotR * 0.20, 9.8 + scapElevR, -1.2 + scapRotR * 0.15);
+                if (this.shoulderGirdle.right.scapulaMesh) {
+                    this.shoulderGirdle.right.scapulaMesh.rotation.z = scapRotR;
+                    this.shoulderGirdle.right.scapulaMesh.rotation.y = scapRotR * 0.15;
+                }
             }
 
             if (this.shoulderGirdle.right.clavicle) {
