@@ -1740,8 +1740,8 @@ export class TorsoPoseEstimator {
             if (isHandOnHip) zSignArm = 0.25;
             let dzArm = (lArm2D < LArm * 0.95) ? (rawDzArm * zSignArm) : 0.02 * LArm;
             if (isProfileStance && profileSign !== 0) {
-                // 側身模式微深度偏移：近側手臂微向前，遠側手臂微向後
-                const depthSignArm = isNearArm ? 0.06 : -0.06;
+                // 側身模式微深度偏移：近側手臂自然向鏡頭外展微前傾 (+Z)，遠側手臂微向後 (-Z)
+                const depthSignArm = isNearArm ? 0.20 : -0.08;
                 dzArm = depthSignArm * LArm;
             } else if (isBackStance) {
                 // 背身模式深度鏡像反轉
@@ -1802,20 +1802,23 @@ export class TorsoPoseEstimator {
 
             // A. 後背壁防穿透與矢狀面/冠狀面人體結構約束 (Biomechanical Structural Constraints)
             if (isUpperTorsoHand) {
-                // 【約束 1：大臂嚴禁後伸 (No Hyperextension when touching front)】
-                // 人體解剖運動學：手放於頸圈/鎖骨/胸前時，盂肱關節、胸大肌與肩胛下肌嚴禁大臂伸向後背 (uArm.z < 0)！
-                // 大臂必處於肩胛骨平面或冠狀面 (uArm.z >= 0.08)
-                if (uArm.z < 0.08) {
-                    uArm.z = 0.08;
-                }
-                // 【約束 2：近側手臂向鏡頭自然微外展 (Near-arm gentle lateral flare towards camera)】
-                // 側身模式近側手摸頸/持物時，手肘自然向相機方向輕微外展 (sign * 0.18)，前臂自然內曲 (-sign * 0.12)
-                if (isNearArm) {
-                    uArm.x = sign * 0.18;
-                    uFore.x = -sign * 0.12;
+                // 允許正常後伸角度 (uArm.z >= -0.65)，絕不強制限制為正值，以保持側身姿態下大臂自然下垂向後的解剖角度
+                if (uArm.z < -0.65) {
+                    uArm.z = -0.65;
                 }
                 uArm.normalize();
-                uFore.normalize();
+
+                // 盂肱關節在胸廓坐標系中之解剖位置
+                pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
+
+                // 手觸摸頸圈/下頜/胸前時：前臂方向導引對準頸圈/胸頸目標點 (Choker / Neck Target)
+                // 使前臂必然從手肘向上指向上胸/頸部，保持人體解剖 V 字形姿態 (前臂在上方、大臂在下方)
+                const rawDxNeck = (wrist.x - (headTargetInfo?.nose?.x ?? shoulder.x)) * ar;
+                const neckTargetX = sign * THREE.MathUtils.clamp(Math.abs(rawDxNeck) / 0.16 * 1.4, 1.0, 1.8);
+                const neckTargetY = THREE.MathUtils.clamp(11.8 + (headTargetInfo ? (headTargetInfo.midEyeY - wrist.y) / (torsoHeight || 0.45) * 2.2 : 0.0), 10.5, 13.8);
+                const neckTargetZ = 1.8; // 頸前頸側包絡面
+                const pNeckTarget = new THREE.Vector3(neckTargetX, neckTargetY, neckTargetZ);
+                uFore = pNeckTarget.clone().sub(pElbowLocal).normalize();
             } else {
                 // 一般姿態：正常站姿大臂主動後伸極限約為 20° (uArm.z >= -0.38)
                 // 僅在坐姿/跪姿地面後撐時放寬
@@ -1825,10 +1828,8 @@ export class TorsoPoseEstimator {
                     uArm.z = minZLimit;
                     uArm.normalize();
                 }
+                pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
             }
-
-            // 盂肱關節在胸廓坐標系中之解剖位置
-            pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
 
             // B. 肋骨與側胸防穿插：在手臂下垂或內收時維持側向安全間距 (X 軸不穿入肋骨)
             if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.4 && uArm.z < 0.5) {
@@ -1968,6 +1969,8 @@ export class TorsoPoseEstimator {
 
         if (isHeadSolve) {
             twist = (overheadTargetInfo && overheadTargetInfo.isClasped) ? 1.15 : 0.40; // 摸頭/撫面：掌心朝向頭部/面部，自然微旋後；芭蕾拱手：掌心斜前下
+        } else if (isUpperTorsoHand) {
+            twist = 0.35; // 摸頸圈/下頜/胸前：掌心朝向頸部，自然微旋後
         } else if (isHandOnHip) {
             twist = 2.65;
         } else if (isFrontOfPelvis) {
