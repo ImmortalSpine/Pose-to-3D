@@ -1803,9 +1803,13 @@ export class TorsoPoseEstimator {
 
             // A. 後背壁防穿透與矢狀面/冠狀面人體結構約束 (Biomechanical Structural Constraints)
             if (isUpperTorsoHand) {
-                // 允許正常後伸角度 (uArm.z >= -0.65)，絕不強制限制為正值，以保持側身姿態下大臂自然下垂向後的解剖角度
-                if (uArm.z < -0.65) {
-                    uArm.z = -0.65;
+                // 【約束 1：手置於頸圈/鎖骨/胸前/下頜時，大臂在解剖學上嚴禁後伸 (No Retroversion in Upper Torso Touch)】
+                // 人體解剖生理學：手放於頸圈/胸前時，大臂必須處於肩胛骨冠狀面或前方 (+Z >= 0.18)！
+                // 絕對禁止向後延伸背部 (uArm.z < 0)，徹底消弭肘部穿透後背或反折成髮夾狀之異常畸變
+                uArm.z = Math.max(0.18, uArm.z);
+                // 側身模式近側手摸頸：維持自然側向微外展，避免夾入肋骨
+                if (isNearArm) {
+                    uArm.x = sign * Math.max(0.28, Math.abs(uArm.x));
                 }
                 uArm.normalize();
 
@@ -1830,6 +1834,12 @@ export class TorsoPoseEstimator {
                     uArm.normalize();
                 }
                 pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
+
+                // 側身模式遠側下垂手臂（如持花手）：防止前臂無故向前平伸突刺，使其自然隨大臂垂直下垂
+                if (isFarArm && uFore.y < -0.55) {
+                    uFore.z = THREE.MathUtils.clamp(uFore.z, -0.20, 0.20);
+                    uFore.normalize();
+                }
             }
 
             // B. 肋骨與側胸防穿插：在手臂下垂或內收時維持側向安全間距 (X 軸不穿入肋骨)
@@ -1925,6 +1935,11 @@ export class TorsoPoseEstimator {
         const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
         let flex = Math.acos(dotFlex);
 
+        // 人體肘關節鉸鏈屈曲生理極限硬性約束 (Humeroulnar Hinge Physiological Limits):
+        // 人體肘關節主動最大屈曲角為 135° ~ 140° (2.35 ~ 2.44 rad)，軟組織擠壓即終止運動，絕不允許摺疊超過 140°！
+        // 同時嚴禁反向伸展 (Hyperextension, flex < 0.05)
+        flex = THREE.MathUtils.clamp(flex, 0.05, 2.38);
+
         const isFarSide = isFarArm;
         if (isFarSide && isReachingBehind && uFore.y < 0) {
             // 遠側手臂在側身後撐姿態下 (手向下向後延伸支撐地面)，手肘屈曲不應超過生理極限，防止 180° 反折貼胸
@@ -2005,16 +2020,30 @@ export class TorsoPoseEstimator {
                 roll += 2 * Math.PI;
             }
             roll = this._clamp(roll, side === 'right' ? -3.23 : -0.85, side === 'right' ? 0.85 : 3.23);
+        } else if (isUpperTorsoHand && isNearArm) {
+            // 近側手摸頸：確保大臂自然外展，嚴禁向內插進肋骨或反折
+            if (side === 'right') {
+                roll = this._clamp(roll, -1.35, -0.15); // 右臂外展角度 (-77° ~ -8°)
+            } else {
+                roll = this._clamp(roll, 0.15, 1.35);  // 左臂外展角度 (+8° ~ +77°)
+            }
         } else {
             // 正常下垂、橫擺、側身或插腰姿態：維持解剖學自然角度範圍，絕不反向解包翻轉
             roll = this._clamp(roll, side === 'right' ? -1.85 : -0.75, side === 'right' ? 0.75 : 1.85);
         }
 
+        // 肩關節前後仰俯 (Pitch)：
+        // 人體解剖：前屈 (Pitch < 0) 可達 135° ~ 180° (-2.35 rad)；後伸 (Pitch > 0) 生理主動極限僅 35° (0.60 rad)！
+        // 摸頸或摸頭時更完全無後伸自由度 (max 0.20 rad)
+        const maxBackPitch = (isUpperTorsoHand || isTouchingHead) ? 0.20 : 0.60;
+        const safePitch = this._clamp(euler.x, -2.35, maxBackPitch);
+        const safeYaw = this._clamp(euler.y, -1.60, 1.60);
+
         return {
             roll: roll,
-            pitch: this._clamp(euler.x, -2.2, 2.2),
-            yaw: this._clamp(euler.y, -2.2, 2.2),
-            flex: this._clamp(flex, 0, 2.7),
+            pitch: safePitch,
+            yaw: safeYaw,
+            flex: flex,
             twist: twist
         };
     }
