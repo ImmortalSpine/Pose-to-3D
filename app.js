@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=3.9';
-import { TorsoPoseEstimator } from './poseDetector.js?v=3.9';
+import { AnatomicalTorso } from './anatomy.js?v=4.0';
+import { TorsoPoseEstimator } from './poseDetector.js?v=4.0';
 
 class App {
     constructor() {
@@ -50,13 +50,15 @@ class App {
             leftArmYaw: 0,
             leftElbowFlex: 0.15,
             leftForearmTwist: 1.48, // 生理休息位半旋前 (85°)，掌心對準大腿
-            leftHandGesture: 'relaxed',
+            leftHandGesture: 'auto',
+            leftHandAngles: null,
             rightArmPitch: 0,
             rightArmRoll: -0.12,
             rightArmYaw: 0,
             rightElbowFlex: 0.15,
             rightForearmTwist: 1.48, // 生理休息位半旋前 (85°)，掌心對準大腿
-            rightHandGesture: 'relaxed',
+            rightHandGesture: 'auto',
+            rightHandAngles: null,
             // 下肢骨骼系統姿態
             leftHipPitch: 0,
             leftHipRoll: 0.08,
@@ -308,16 +310,34 @@ class App {
         const selRightGest = document.getElementById('selectRightHandGesture');
         if (selRightGest) {
             selRightGest.addEventListener('change', (e) => {
-                this.currentPose.rightHandGesture = e.target.value;
-                this.anatomicalTorso.setHandGesture('right', e.target.value);
+                const val = e.target.value;
+                this.currentPose.rightHandGesture = val;
+                if (val === 'auto') {
+                    if (this.currentPose.rightHandAngles) {
+                        this.anatomicalTorso.setFingerAngles('right', this.currentPose.rightHandAngles);
+                    } else {
+                        this.anatomicalTorso.setHandGesture('right', 'relaxed');
+                    }
+                } else {
+                    this.anatomicalTorso.setHandGesture('right', val);
+                }
             });
         }
 
         const selLeftGest = document.getElementById('selectLeftHandGesture');
         if (selLeftGest) {
             selLeftGest.addEventListener('change', (e) => {
-                this.currentPose.leftHandGesture = e.target.value;
-                this.anatomicalTorso.setHandGesture('left', e.target.value);
+                const val = e.target.value;
+                this.currentPose.leftHandGesture = val;
+                if (val === 'auto') {
+                    if (this.currentPose.leftHandAngles) {
+                        this.anatomicalTorso.setFingerAngles('left', this.currentPose.leftHandAngles);
+                    } else {
+                        this.anatomicalTorso.setHandGesture('left', 'relaxed');
+                    }
+                } else {
+                    this.anatomicalTorso.setHandGesture('left', val);
+                }
             });
         }
 
@@ -446,13 +466,21 @@ class App {
         setSlider('sliderLeftAnkleRoll', 'valLeftAnkleRoll', this.currentPose.leftAnkleRoll);
 
         const selRG = document.getElementById('selectRightHandGesture');
-        if (selRG && this.currentPose.rightHandGesture) {
-            selRG.value = this.currentPose.rightHandGesture;
+        if (selRG) {
+            if (this.currentPose.rightHandGesture) {
+                selRG.value = this.currentPose.rightHandGesture;
+            } else if (this.currentPose.rightHandAngles) {
+                selRG.value = 'auto';
+            }
         }
 
         const selLG = document.getElementById('selectLeftHandGesture');
-        if (selLG && this.currentPose.leftHandGesture) {
-            selLG.value = this.currentPose.leftHandGesture;
+        if (selLG) {
+            if (this.currentPose.leftHandGesture) {
+                selLG.value = this.currentPose.leftHandGesture;
+            } else if (this.currentPose.leftHandAngles) {
+                selLG.value = 'auto';
+            }
         }
 
         const sliderRatio = document.getElementById('sliderHeadRatio');
@@ -651,7 +679,8 @@ class App {
 
                     const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
                     const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
-                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr}) 與性別 (${genderStr})`;
+                    const handTrackStr = (pose.rightHandAngles || pose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
+                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})、性別 (${genderStr})${handTrackStr}`;
                 } else {
                     this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
                 }

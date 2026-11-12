@@ -466,24 +466,35 @@ export class TorsoPoseEstimator {
         let rightElbowFlex = rightArmPose.flex;
         let rightForearmTwist = rightArmPose.twist;
 
-        // 13. 手掌前後旋 (Twist) 與手勢微調 (結合 21 骨節精密幾何)
+        // 13. 手掌前後旋 (Twist) 與 21 骨節連續指骨姿態解算
+        let leftHandAngles = null;
+        let rightHandAngles = null;
+        let leftHandDetectedPreset = 'relaxed';
+        let rightHandDetectedPreset = 'relaxed';
+
         if (matchedLeftHand) {
             const handSol = this._solveTwistAndGestureFromHand(matchedLeftHand, 'left', isLeftFrontOfPelvis, isLeftHandOnHip);
             leftForearmTwist = handSol.twist;
-            leftHandGesture = handSol.gesture;
+            leftHandDetectedPreset = handSol.gesture;
+            leftHandGesture = 'auto';
+            leftHandAngles = handSol.fingerAngles;
         } else if (leftWrist && leftShoulder && leftElbow) {
             if (leftWrist.y < leftShoulder.y + 0.15 && leftElbow.y > leftWrist.y) {
                 leftHandGesture = 'peace';
+                leftHandDetectedPreset = 'peace';
             }
         }
 
         if (matchedRightHand) {
             const handSol = this._solveTwistAndGestureFromHand(matchedRightHand, 'right', isRightFrontOfPelvis, isRightHandOnHip);
             rightForearmTwist = handSol.twist;
-            rightHandGesture = handSol.gesture;
+            rightHandDetectedPreset = handSol.gesture;
+            rightHandGesture = 'auto';
+            rightHandAngles = handSol.fingerAngles;
         } else if (rightWrist && rightShoulder && rightElbow) {
             if (rightWrist.y < rightShoulder.y + 0.15 && rightElbow.y > rightWrist.y) {
                 rightHandGesture = 'peace';
+                rightHandDetectedPreset = 'peace';
             }
         }
 
@@ -549,6 +560,14 @@ export class TorsoPoseEstimator {
             const tempGest = leftHandGesture;
             leftHandGesture = rightHandGesture;
             rightHandGesture = tempGest;
+
+            const tempAngles = leftHandAngles;
+            leftHandAngles = rightHandAngles;
+            rightHandAngles = tempAngles;
+
+            const tempPreset = leftHandDetectedPreset;
+            leftHandDetectedPreset = rightHandDetectedPreset;
+            rightHandDetectedPreset = tempPreset;
 
             const tempHand2D = matchedLeftHand;
             matchedLeftHand = matchedRightHand;
@@ -673,12 +692,16 @@ export class TorsoPoseEstimator {
             leftElbowFlex: this._clamp(leftElbowFlex, 0, 2.7),
             leftForearmTwist: this._clamp(leftForearmTwist, 0, Math.PI),
             leftHandGesture: leftHandGesture,
+            leftHandAngles: leftHandAngles,
+            leftHandDetectedPreset: leftHandDetectedPreset,
             rightArmPitch: this._clamp(rightArmPitch, -2.2, 2.2),
             rightArmRoll: this._clamp(rightArmRoll, -3.23, 0.85),
             rightArmYaw: this._clamp(rightArmYaw, -2.2, 2.2),
             rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
             rightHandGesture: rightHandGesture,
+            rightHandAngles: rightHandAngles,
+            rightHandDetectedPreset: rightHandDetectedPreset,
             leftHipPitch: this._clamp(leftHipPitch, -0.65, 0.95),
             leftHipRoll: this._clamp(leftHipRoll, -0.30, 0.65),
             leftHipYaw: this._clamp(leftHipYaw, -0.65, 0.65),
@@ -1138,7 +1161,7 @@ export class TorsoPoseEstimator {
 
     /**
      * 從 MediaPipe Holistic 21 節點中，根據手指指向、食指-小指解剖橫軸關係解算手掌前後翻轉角
-     * 並精確辨識放鬆 (Relaxed)、比耶 (Peace)、握拳 (Fist)、平展 (Open)
+     * 並提取 14 節指骨的真實連續空間夾角與藝用手勢分類
      */
     _solveTwistAndGestureFromHand(hand, side, isFrontOfPelvis = false, isHandOnHip = false) {
         const p0 = hand[0];    // Wrist
@@ -1150,8 +1173,6 @@ export class TorsoPoseEstimator {
         const dy = pMid.y - p0.y;
 
         // 2. 食指與小指橫向空間關係 (解剖內外側)
-        // lateralDiff > 0: 食指在外側 (遠離身體中心線)
-        // lateralDiff < 0: 食指在內側 (靠向身體中心線，代表拇指內翻旋前)
         const lateralDiff = (side === 'left') ? (pIdx.x - pPnk.x) : (pPnk.x - pIdx.x);
         const lateralSpan = Math.abs(pIdx.x - pPnk.x);
 
@@ -1178,7 +1199,7 @@ export class TorsoPoseEstimator {
         } else if (dy < -0.03) {
             // 手指朝上 (如比耶、摸臉、抬手)
             const gesture = this._classifyHandGesture(hand);
-            if (gesture === 'peace' || lateralDiff > -0.015 || lateralSpan < 0.04) {
+            if (gesture === 'peace' || gesture === 'point' || lateralDiff > -0.015 || lateralSpan < 0.04) {
                 // 掌心朝鏡頭 (旋後位 ~14°)
                 twist = 0.25;
             } else {
@@ -1190,14 +1211,103 @@ export class TorsoPoseEstimator {
             twist = (lateralDiff < 0) ? 2.50 : 1.48;
         }
 
-        // 手勢分類
+        // 3. 連續型 21 節點指骨角度解算 (Continuous Finger Kinematics)
+        const fingerAngles = this._solveContinuousFingerAngles(hand, side);
+
+        // 4. 手勢幾何自動分類 (用於 UI 標籤展示與預設對照)
         const gesture = this._classifyHandGesture(hand);
 
-        return { twist, gesture };
+        return { twist, gesture, fingerAngles };
     }
 
     /**
-     * 21 骨節手勢自動幾何辨識器
+     * 從 MediaPipe 21 節點計算 5 根手指各關節之連續屈曲與外展角度
+     */
+    _solveContinuousFingerAngles(hand, side) {
+        if (!hand || hand.length < 21) return null;
+        const sign = (side === 'left') ? 1.0 : -1.0;
+        const ar = this.aspectRatio || 1.0;
+
+        const getAngle = (v1, v2) => {
+            const l1 = v1.length();
+            const l2 = v2.length();
+            if (l1 < 1e-4 || l2 < 1e-4) return 0;
+            const dot = v1.dot(v2) / (l1 * l2);
+            return Math.acos(THREE.MathUtils.clamp(dot, -1.0, 1.0));
+        };
+
+        const getPt = (i) => new THREE.Vector3(hand[i].x * ar, -hand[i].y, (hand[i].z || 0) * 0.85);
+
+        const vWrist = getPt(0);
+        const vIdxMcp = getPt(5);
+        const vPnkMcp = getPt(17);
+        const vMidMcp = getPt(9);
+
+        // 掌面法向與基準軸
+        const vPalmAxis = vMidMcp.clone().sub(vWrist).normalize();
+        const vPalmWidth = vIdxMcp.clone().sub(vPnkMcp).normalize();
+        const vPalmNormal = new THREE.Vector3().crossVectors(vPalmAxis, vPalmWidth).normalize();
+
+        const solveFinger = (mcpIdx, pipIdx, dipIdx, tipIdx, baseSpread = 0) => {
+            const pM = getPt(mcpIdx);
+            const pP = getPt(pipIdx);
+            const pD = getPt(dipIdx);
+            const pT = getPt(tipIdx);
+
+            const vMeta = pM.clone().sub(vWrist);
+            const vProx = pP.clone().sub(pM);
+            const vMid = pD.clone().sub(pP);
+            const vDist = pT.clone().sub(pD);
+
+            // 掌指關節 MCP 屈曲角
+            const rawMcp = getAngle(vMeta, vProx);
+            const mcp = THREE.MathUtils.clamp(rawMcp - 0.08, 0.0, 1.65);
+
+            // 近端指間關節 PIP 屈曲角
+            const rawPip = getAngle(vProx, vMid);
+            const pip = THREE.MathUtils.clamp(rawPip - 0.05, 0.0, 1.80);
+
+            // 遠端指間關節 DIP 屈曲角
+            const rawDip = getAngle(vMid, vDist);
+            const dip = THREE.MathUtils.clamp(rawDip - 0.05, 0.0, 1.45);
+
+            // 外展分開角 (Spread)
+            const vProxPlane = vProx.clone().sub(vPalmNormal.clone().multiplyScalar(vProx.dot(vPalmNormal)));
+            const spreadDot = vProxPlane.dot(vPalmWidth);
+            const spread = THREE.MathUtils.clamp(baseSpread + spreadDot * sign * 0.25, -0.25, 0.25);
+
+            return { mcp, pip, dip, spread };
+        };
+
+        // 拇指獨立解算 (Thumb: 1 CMC, 2 MCP, 3 IP, 4 TIP)
+        const pCmc = getPt(1);
+        const pMcpT = getPt(2);
+        const pIpT = getPt(3);
+        const pTipT = getPt(4);
+
+        const vMetaT = pMcpT.clone().sub(pCmc);
+        const vProxT = pIpT.clone().sub(pMcpT);
+        const vDistT = pTipT.clone().sub(pIpT);
+
+        const rawMcpT = getAngle(vMetaT, vProxT);
+        const rawIpT = getAngle(vProxT, vDistT);
+
+        const thumbMcp = THREE.MathUtils.clamp(rawMcpT - 0.12, 0.05, 1.45);
+        const thumbPip = THREE.MathUtils.clamp(rawIpT - 0.08, 0.05, 1.60);
+        const thumbDip = thumbPip * 0.65;
+        const thumbSpread = sign * 0.15;
+
+        return {
+            Thumb:  { mcp: thumbMcp, pip: thumbPip, dip: thumbDip, spread: thumbSpread },
+            Index:  solveFinger(5, 6, 7, 8, sign * 0.05),
+            Middle: solveFinger(9, 10, 11, 12, 0),
+            Ring:   solveFinger(13, 14, 15, 16, -sign * 0.05),
+            Little: solveFinger(17, 18, 19, 20, -sign * 0.12)
+        };
+    }
+
+    /**
+     * 21 骨節手勢幾何辨識器 (支援食指指向、比耶、比讚、OK、握拳、張開、放鬆)
      */
     _classifyHandGesture(hand) {
         const w = hand[0]; // Wrist
@@ -1208,20 +1318,39 @@ export class TorsoPoseEstimator {
             return dTip > (dMcp * 1.25);
         };
 
+        const thumbExt = isExtended(4, 2);
         const indexExt = isExtended(8, 5);
         const middleExt = isExtended(12, 9);
         const ringExt = isExtended(16, 13);
         const pinkyExt = isExtended(20, 17);
 
-        if (indexExt && middleExt && !ringExt && !pinkyExt) {
-            return 'peace'; // 勝利剪刀手 (YA)
-        } else if (!indexExt && !middleExt && !ringExt && !pinkyExt) {
-            return 'fist';  // 握拳
-        } else if (indexExt && middleExt && ringExt && pinkyExt) {
-            return 'open';  // 張開平展
-        } else {
-            return 'relaxed'; // 自然放鬆
+        // 1. 食指單獨指向 / 手槍姿態 (Point)
+        if (indexExt && !middleExt && !ringExt && !pinkyExt) {
+            return 'point';
         }
+        // 2. 勝利剪刀手 (Peace / YA)
+        if (indexExt && middleExt && !ringExt && !pinkyExt) {
+            return 'peace';
+        }
+        // 3. 大拇指比讚 (Thumbs Up)
+        if (thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt) {
+            return 'thumbsUp';
+        }
+        // 4. OK 手勢 (拇指與食指指尖相接，中指與無名指伸展)
+        const dThumbIndex = Math.hypot(hand[4].x - hand[8].x, hand[4].y - hand[8].y);
+        if (dThumbIndex < 0.06 && middleExt && ringExt) {
+            return 'ok';
+        }
+        // 5. 握拳 (Fist)
+        if (!indexExt && !middleExt && !ringExt && !pinkyExt) {
+            return 'fist';
+        }
+        // 6. 張開平展 (Open Palm)
+        if (indexExt && middleExt && ringExt && pinkyExt) {
+            return 'open';
+        }
+        // 7. 自然放鬆微屈 (Relaxed)
+        return 'relaxed';
     }
 
     _heuristicImageAnalysis() {

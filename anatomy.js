@@ -1209,6 +1209,12 @@ export class AnatomicalTorso {
     /**
      * 驅動手部關節鏈達成各種藝用姿態 (Relaxed, Peace/Victory, Fist, Open)
      */
+    /**
+     * 驅動手部關節鏈達成各種藝用姿態或 21 節點連續自適應指骨角度
+     * @param {Object} joints 手部關節字典
+     * @param {string} side 'left' | 'right'
+     * @param {string|Object} gesture 手勢名稱 (字串) 或 逐指連續角度字典 (物件)
+     */
     _applyHandGestureDirect(joints, side, gesture = 'relaxed') {
         const sign = (side === 'left') ? 1 : -1;
         const GESTURES = {
@@ -1219,12 +1225,33 @@ export class AnatomicalTorso {
                 Ring:   { mcp: 0.25, pip: 0.38, dip: 0.20, spread: 0 },
                 Little: { mcp: 0.30, pip: 0.45, dip: 0.22, spread: 0 }
             },
+            point: { // 食指指向 / 手槍姿態 (食指完全伸展，其餘手指與拇指自然曲折)
+                Thumb:  { mcp: 0.65, pip: 0.95, dip: 0.55, spread: sign * 0.10 },
+                Index:  { mcp: 0.02, pip: 0.03, dip: 0.02, spread: sign * 0.04 },
+                Middle: { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },
+                Ring:   { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
+                Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }
+            },
             peace: { // 剪刀手 / 勝利手勢 (食指與中指伸直呈V字張開，拇指與無名指小指彎曲緊握)
                 Thumb:  { mcp: 0.70, pip: 1.05, dip: 0.60, spread: 0 },
-                Index:  { mcp: 0.02, pip: 0.04, dip: 0.02, spread: sign * 0.10 },  // 伸直微外張
-                Middle: { mcp: 0.02, pip: 0.04, dip: 0.02, spread: -sign * 0.10 }, // 伸直微內張
+                Index:  { mcp: 0.02, pip: 0.04, dip: 0.02, spread: sign * 0.12 },  // 伸直微外張
+                Middle: { mcp: 0.02, pip: 0.04, dip: 0.02, spread: -sign * 0.12 }, // 伸直微內張
                 Ring:   { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },             // 緊密屈曲
                 Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }              // 緊密屈曲
+            },
+            thumbsUp: { // 大拇指比讚 (大拇指豎立，四指握緊)
+                Thumb:  { mcp: 0.05, pip: 0.05, dip: 0.05, spread: sign * 0.25 },
+                Index:  { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },
+                Middle: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
+                Ring:   { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
+                Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }
+            },
+            ok: { // OK 手勢 (拇指與食指指尖相碰成環，中指無名指小指張開)
+                Thumb:  { mcp: 0.65, pip: 0.85, dip: 0.50, spread: sign * 0.05 },
+                Index:  { mcp: 0.75, pip: 1.05, dip: 0.65, spread: 0 },
+                Middle: { mcp: 0.05, pip: 0.05, dip: 0.05, spread: 0 },
+                Ring:   { mcp: 0.05, pip: 0.05, dip: 0.05, spread: -sign * 0.06 },
+                Little: { mcp: 0.05, pip: 0.05, dip: 0.05, spread: -sign * 0.12 }
             },
             open: { // 五指伸展張開
                 Thumb:  { mcp: 0.05, pip: 0.05, dip: 0.05, spread: sign * 0.15 },
@@ -1242,7 +1269,9 @@ export class AnatomicalTorso {
             }
         };
 
-        const config = GESTURES[gesture] || GESTURES.relaxed;
+        const config = (typeof gesture === 'object' && gesture !== null)
+            ? gesture
+            : (GESTURES[gesture] || GESTURES.relaxed);
 
         Object.keys(joints).forEach(fingerName => {
             const j = joints[fingerName];
@@ -1250,24 +1279,30 @@ export class AnatomicalTorso {
 
             if (j.mcpJoint) {
                 // X 軸負向旋轉即為掌側屈曲 (Flexion)
-                j.mcpJoint.rotation.x = -angles.mcp;
+                j.mcpJoint.rotation.x = -THREE.MathUtils.clamp(angles.mcp || 0, 0, 1.70);
                 if (angles.spread !== undefined) {
-                    j.mcpJoint.rotation.z = angles.spread;
+                    j.mcpJoint.rotation.z = THREE.MathUtils.clamp(angles.spread || 0, -0.35, 0.35);
                 }
             }
             if (j.pipJoint) {
-                j.pipJoint.rotation.x = -angles.pip;
+                j.pipJoint.rotation.x = -THREE.MathUtils.clamp(angles.pip || 0, 0, 1.85);
             }
             if (j.dipJoint) {
-                j.dipJoint.rotation.x = -angles.dip;
+                j.dipJoint.rotation.x = -THREE.MathUtils.clamp(angles.dip || 0, 0, 1.55);
             }
         });
     }
 
     setHandGesture(side, gesture) {
         if (!this.shoulderGirdle[side] || !this.shoulderGirdle[side].handJoints) return;
-        this.shoulderGirdle[side].currentGesture = gesture;
+        this.shoulderGirdle[side].currentGesture = (typeof gesture === 'string') ? gesture : 'custom';
         this._applyHandGestureDirect(this.shoulderGirdle[side].handJoints, side, gesture);
+    }
+
+    setFingerAngles(side, fingerAngles) {
+        if (!this.shoulderGirdle[side] || !this.shoulderGirdle[side].handJoints) return;
+        this.shoulderGirdle[side].currentGesture = 'custom';
+        this._applyHandGestureDirect(this.shoulderGirdle[side].handJoints, side, fingerAngles);
     }
 
     _buildPelvis() {
@@ -1833,9 +1868,11 @@ export class AnatomicalTorso {
         leftForearmTwist = 0.3,
         rightElbowFlex = 0.2,
         rightForearmTwist = 0.3,
-        // 手部姿態手勢 (Relaxed, Peace, Fist, Open)
+        // 手部姿態手勢與 21 節點連續角度
         leftHandGesture = null,
         rightHandGesture = null,
+        leftHandAngles = null,
+        rightHandAngles = null,
         // 下肢骨骼姿態 (髖關節、膝關節屈曲、踝關節)
         leftHipPitch = 0,
         leftHipRoll = 0,
@@ -1990,11 +2027,20 @@ export class AnatomicalTorso {
             this._updateRadiusMesh('right', rightForearmTwist);
         }
 
-        // 9. 手部手勢更新
-        if (leftHandGesture) {
+        // 9. 手部手勢與指骨連續角度更新 (支援 21 節點逐指動態驅動)
+        if (leftHandGesture && leftHandGesture !== 'auto') {
+            this.setHandGesture('left', leftHandGesture);
+        } else if (leftHandAngles) {
+            this.setFingerAngles('left', leftHandAngles);
+        } else if (leftHandGesture) {
             this.setHandGesture('left', leftHandGesture);
         }
-        if (rightHandGesture) {
+
+        if (rightHandGesture && rightHandGesture !== 'auto') {
+            this.setHandGesture('right', rightHandGesture);
+        } else if (rightHandAngles) {
+            this.setFingerAngles('right', rightHandAngles);
+        } else if (rightHandGesture) {
             this.setHandGesture('right', rightHandGesture);
         }
 
