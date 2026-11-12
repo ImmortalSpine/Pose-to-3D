@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=4.5';
-import { TorsoPoseEstimator } from './poseDetector.js?v=4.5';
+import { AnatomicalTorso } from './anatomy.js?v=4.6';
+import { TorsoPoseEstimator } from './poseDetector.js?v=4.6';
 
 class App {
     constructor() {
@@ -682,12 +682,76 @@ class App {
                     const handTrackStr = (pose.rightHandAngles || pose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
                     this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})、性別 (${genderStr})${handTrackStr}`;
                 } else {
-                    this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
+                    this._resetToNeutralPose();
+                    this.statusText.textContent = "未識別到完整人體，已重置為標準解剖姿態";
                 }
             };
             img.src = e.target.result;
         };
         reader.readAsDataURL(file);
+    }
+
+    _resetToNeutralPose() {
+        const defaultPose = {
+            pelvisRoll: 0,
+            pelvisPitch: 0,
+            pelvisYaw: 0,
+            thoracicPitch: 0,
+            thoracicYaw: 0,
+            thoracicRoll: 0,
+            lumbarPitch: 0,
+            lumbarRoll: 0,
+            lumbarYaw: 0,
+            cervicalPitch: 0,
+            cervicalYaw: 0,
+            headPitch: 0,
+            headYaw: 0,
+            headRoll: 0,
+            headToBodyRatio: 7.1,
+            skullScale: 1.47,
+            leftArmPitch: 0,
+            leftArmRoll: 0.12,
+            leftArmYaw: 0,
+            leftElbowFlex: 0.15,
+            leftForearmTwist: 1.48,
+            leftHandGesture: 'auto',
+            leftHandAngles: null,
+            rightArmPitch: 0,
+            rightArmRoll: -0.12,
+            rightArmYaw: 0,
+            rightElbowFlex: 0.15,
+            rightForearmTwist: 1.48,
+            rightHandGesture: 'auto',
+            rightHandAngles: null,
+            leftHipPitch: 0,
+            leftHipRoll: 0.08,
+            leftHipYaw: 0,
+            leftKneeFlex: 0.08,
+            leftAnklePitch: -0.04,
+            leftAnkleYaw: 0.12,
+            leftAnkleRoll: 0,
+            rightHipPitch: 0,
+            rightHipRoll: -0.08,
+            rightHipYaw: 0,
+            rightKneeFlex: 0.08,
+            rightAnklePitch: -0.04,
+            rightAnkleYaw: -0.12,
+            rightAnkleRoll: 0
+        };
+
+        this._applyPose(defaultPose);
+        this.aiPoseBackup = { ...defaultPose };
+        this._updateSlidersUI();
+        this.lastLandmarks2D = null;
+
+        if (this.landmarkCanvas) {
+            const ctx = this.landmarkCanvas.getContext('2d');
+            ctx.clearRect(0, 0, this.landmarkCanvas.width, this.landmarkCanvas.height);
+        }
+        if (this.btnToggle2D) {
+            this.btnToggle2D.style.display = 'none';
+        }
+        this._fitCameraToSkeleton('front');
     }
 
     _draw2DLandmarks() {

@@ -90,6 +90,115 @@ export class TorsoPoseEstimator {
         }
     }
 
+    async _runInference(imageSource) {
+        if (this.holistic) {
+            if (this.holistic.reset) {
+                try { this.holistic.reset(); } catch (_) {}
+            }
+            return new Promise((resolve) => {
+                let finished = false;
+                const timeout = setTimeout(() => {
+                    if (!finished) {
+                        finished = true;
+                        resolve(null);
+                    }
+                }, 8000);
+
+                this.holistic.onResults((results) => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        resolve(results);
+                    }
+                });
+
+                this.holistic.send({ image: imageSource }).catch(() => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        resolve(null);
+                    }
+                });
+            });
+        }
+
+        if (this.poseDetector) {
+            if (this.poseDetector.reset) {
+                try { this.poseDetector.reset(); } catch (_) {}
+            }
+            return new Promise((resolve) => {
+                let finished = false;
+                const timeout = setTimeout(() => {
+                    if (!finished) {
+                        finished = true;
+                        resolve(null);
+                    }
+                }, 6000);
+
+                this.poseDetector.onResults((results) => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        resolve(results);
+                    }
+                });
+
+                this.poseDetector.send({ image: imageSource }).catch(() => {
+                    if (!finished) {
+                        finished = true;
+                        clearTimeout(timeout);
+                        resolve(null);
+                    }
+                });
+            });
+        }
+
+        return null;
+    }
+
+    _createRotatedCanvas(imageElement, angleDeg) {
+        const origW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 1;
+        const origH = imageElement.naturalHeight || imageElement.videoHeight || imageElement.height || 1;
+        const rad = angleDeg * Math.PI / 180;
+        const sin = Math.abs(Math.sin(rad));
+        const cos = Math.abs(Math.cos(rad));
+        const newW = Math.round(origW * cos + origH * sin);
+        const newH = Math.round(origW * sin + origH * cos);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = newW;
+        canvas.height = newH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+
+        ctx.translate(newW * 0.5, newH * 0.5);
+        ctx.rotate(rad);
+        ctx.drawImage(imageElement, -origW * 0.5, -origH * 0.5);
+        return canvas;
+    }
+
+    _inverseRotateLandmarks(landmarks, angleDeg, origW, origH, newW, newH) {
+        if (!landmarks || !Array.isArray(landmarks)) return landmarks;
+        const rad = angleDeg * Math.PI / 180;
+        const cosNeg = Math.cos(-rad);
+        const sinNeg = Math.sin(-rad);
+
+        return landmarks.map(lm => {
+            if (!lm) return lm;
+            const Xr = lm.x * newW - newW * 0.5;
+            const Yr = lm.y * newH - newH * 0.5;
+
+            const Xorig = Xr * cosNeg - Yr * sinNeg;
+            const Yorig = Xr * sinNeg + Yr * cosNeg;
+
+            return {
+                ...lm,
+                x: (Xorig + origW * 0.5) / origW,
+                y: (Yorig + origH * 0.5) / origH
+            };
+        });
+    }
+
     async estimateFromImage(imageElement) {
         if (!imageElement) return null;
         const imgW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 1;
@@ -101,82 +210,41 @@ export class TorsoPoseEstimator {
             await this.readyPromise;
         }
 
-        // 1. 若 Holistic 整合引擎就緒，使用單一安全推論管線 (零並發衝突，原子化同時返回軀幹 33 點與雙手各 21 點)
-        if (this.holistic) {
-            // 重置上一張圖片的殘留追蹤快取，保證每一張獨立圖片均以全新高精度檢測出發
-            if (this.holistic.reset) {
-                try { this.holistic.reset(); } catch (_) {}
+        // 1. 優先以原生影像方向進行單次推理
+        const rawResults = await this._runInference(imageElement);
+        if (rawResults && rawResults.poseLandmarks && rawResults.poseLandmarks.length > 0) {
+            try {
+                const pose = this._processLandmarks(rawResults);
+                if (pose) return pose;
+            } catch (err) {
+                console.error("[AnatoPose] Landmark processing error:", err);
             }
-
-            return new Promise((resolve) => {
-                let finished = false;
-                const timeout = setTimeout(() => {
-                    if (!finished) {
-                        finished = true;
-                        console.warn("[AnatoPose] Holistic detection timeout (15s), falling back.");
-                        resolve(null);
-                    }
-                }, 15000);
-
-                this.holistic.onResults((results) => {
-                    if (!finished) {
-                        finished = true;
-                        clearTimeout(timeout);
-                        try {
-                            const pose = this._processLandmarks(results);
-                            resolve(pose);
-                        } catch (err) {
-                            console.error("[AnatoPose] Landmark processing error:", err);
-                            resolve(null);
-                        }
-                    }
-                });
-
-                this.holistic.send({ image: imageElement }).catch((err) => {
-                    if (!finished) {
-                        finished = true;
-                        clearTimeout(timeout);
-                        console.error("[AnatoPose] Holistic send error:", err);
-                        resolve(null);
-                    }
-                });
-            });
         }
 
-        // 2. 備用 Pose 引擎
-        if (this.poseDetector) {
-            if (this.poseDetector.reset) {
-                try { this.poseDetector.reset(); } catch (_) {}
+        // 2. 旋轉探索 TTA (Test-Time Augmentation) 機制：
+        // 針對排球空翻扣殺、高空飛躍、舞蹈、體操等非垂直傾斜姿態，依次旋轉影像尋找人體拓撲
+        const ttaAngles = [-45, 45, -30, 30, -90, 90];
+        for (const angle of ttaAngles) {
+            const rotCanvas = this._createRotatedCanvas(imageElement, angle);
+            if (!rotCanvas) continue;
+            const rotResults = await this._runInference(rotCanvas);
+            if (rotResults && rotResults.poseLandmarks && rotResults.poseLandmarks.length > 0) {
+                try {
+                    const invResults = {
+                        ...rotResults,
+                        poseLandmarks: this._inverseRotateLandmarks(rotResults.poseLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height),
+                        leftHandLandmarks: this._inverseRotateLandmarks(rotResults.leftHandLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height),
+                        rightHandLandmarks: this._inverseRotateLandmarks(rotResults.rightHandLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height)
+                    };
+                    const pose = this._processLandmarks(invResults);
+                    if (pose) return pose;
+                } catch (err) {
+                    console.error(`[AnatoPose] TTA ${angle}° processing error:`, err);
+                }
             }
-
-            return new Promise((resolve) => {
-                let finished = false;
-                const timeout = setTimeout(() => {
-                    if (!finished) {
-                        finished = true;
-                        resolve(null);
-                    }
-                }, 12000);
-
-                this.poseDetector.onResults((results) => {
-                    if (!finished) {
-                        finished = true;
-                        clearTimeout(timeout);
-                        resolve(this._processLandmarks(results));
-                    }
-                });
-
-                this.poseDetector.send({ image: imageElement }).catch(() => {
-                    if (!finished) {
-                        finished = true;
-                        clearTimeout(timeout);
-                        resolve(null);
-                    }
-                });
-            });
         }
 
-        return this._heuristicImageAnalysis();
+        return null;
     }
 
     _processLandmarks(results) {
@@ -421,15 +489,37 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
+        const normShoulderSpan = shoulderSpan / Math.max(0.1, torsoHeight);
+        const normHipSpan = Math.abs(hipDx) / Math.max(0.1, torsoHeight);
+
+        // 正面姿態特徵判定 (Frontal Stance Protection)：
+        // 1. 面部朝向正面 (|headYaw| < 0.35)
+        // 2. 雙肩水平展開無嚴重側面投影壓縮 (normShoulderSpan > 0.46)
+        // 3. 雙胯水平展開無重疊 (normHipSpan > 0.20)
+        const isFaceFrontal = Math.abs(headYaw) < 0.35;
+        const isShouldersFrontal = normShoulderSpan > 0.46;
+        const isHipsFrontal = normHipSpan > 0.20;
+        const isOverallFrontal = isFaceFrontal && isShouldersFrontal && isHipsFrontal;
+
         const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
         const hipDzMag = Math.abs(hipDz);
-        const deadzoneThreshold = 0.055;
+        const deadzoneThreshold = isOverallFrontal ? 0.08 : 0.055;
         let effHipDz = 0.0;
         if (hipDzMag > deadzoneThreshold) {
             effHipDz = Math.sign(hipDz) * (hipDzMag - deadzoneThreshold);
         }
+
+        // 正面站姿防護：嚴禁因插腰/插袋單側陰影將骨盆轉向放大為大角度側身
+        if (isOverallFrontal) {
+            effHipDz = THREE.MathUtils.clamp(effHipDz, -0.04, 0.04);
+        }
+
         let pelvisYaw = Math.atan2(effHipDz, Math.max(0.02, Math.abs(hipDx)));
-        pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
+        if (isOverallFrontal) {
+            pelvisYaw = this._clamp(pelvisYaw, -0.22, 0.22);
+        } else {
+            pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
+        }
 
         let rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
 
@@ -444,7 +534,17 @@ export class TorsoPoseEstimator {
         const spineBaselineYaw = headYaw * 0.65 + pelvisYaw * 0.35;
         let thoracicYaw;
 
-        if (hasElevatedArm && Math.abs(headYaw) < 0.38 && Math.abs(pelvisYaw) < 0.38) {
+        if (isOverallFrontal) {
+            // 正面站姿胸廓鎖定：避免手肘外展與單側手臂景深噪聲扭曲胸廓
+            const combinedDz = (rawDz * 0.40 + hipDz * 0.60);
+            const clampedDz = THREE.MathUtils.clamp(combinedDz, -0.06, 0.06);
+            let effDz = 0.0;
+            if (Math.abs(clampedDz) > deadzoneThreshold) {
+                effDz = Math.sign(clampedDz) * (Math.abs(clampedDz) - deadzoneThreshold);
+            }
+            thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+            thoracicYaw = this._clamp(thoracicYaw, -0.20, 0.20);
+        } else if (hasElevatedArm && Math.abs(headYaw) < 0.38 && Math.abs(pelvisYaw) < 0.38) {
             // 面部與骨盆均處於正面區間，手臂高舉產生的假性 shoulderDz 大幅衰減，直接錨定動態脊椎軸線
             const dampenedDz = rawDz * 0.15 * 0.30 + effHipDz * 0.70;
             let effDz = 0.0;
@@ -475,12 +575,6 @@ export class TorsoPoseEstimator {
             }
         }
 
-        // 解剖防護：當骨盆與面部均正視鏡頭 (|yaw| < 0.25)，且雙肩寬度未在相機平面壓縮 (shoulderSpan / torsoHeight > 0.60)
-        const normShoulderSpan = shoulderSpan / torsoHeight;
-        if (normShoulderSpan > 0.60 && Math.abs(headYaw) < 0.25 && Math.abs(pelvisYaw) < 0.25) {
-            thoracicYaw = this._clamp(thoracicYaw, -0.14, 0.14);
-        }
-
         // 6. 胸廓側傾 (Roll - 高低肩)
         let thoracicRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
 
@@ -504,9 +598,10 @@ export class TorsoPoseEstimator {
 
         // 10. 頸椎與寰枕關節仰俯協同分配 (Biomechanical Head/Neck Coupling)
         // 人體生理生物力學：頭部相對於胸廓之仰俯角，由頸椎 (60%) 與寰枕關節 (40%) 協同承擔
-        const relativeHeadPitch = headPitch - thoracicPitch;
-        let cervicalPitch = relativeHeadPitch * 0.60;
-        let cranialPitch = relativeHeadPitch * 0.40;
+        // 生理活動度極限約束 (ROM Guardrail)：仰頭極限 -0.45 rad (~-26°)，低頭極限 +0.65 rad (~+37°)
+        const safeRelativePitch = THREE.MathUtils.clamp(headPitch - thoracicPitch, -0.45, 0.65);
+        let cervicalPitch = safeRelativePitch * 0.60;
+        let cranialPitch = safeRelativePitch * 0.40;
 
         let cervicalYaw = (headYaw - thoracicYaw) * 0.50;
 
@@ -876,9 +971,19 @@ export class TorsoPoseEstimator {
 
             // MediaPipe Pose 的 Landmark 23/24 為體內股骨頭關節中心 (Acetabulum)，
             // 其解剖距離本就遠窄於外部骨盆/側腰輪廓，故男女基準比值通常在 1.65 ~ 2.40 之間。
+            // 判斷是否為跪姿或下肢折疊姿態 (Kneeling / Folded Legs Detection)
+            const isKneelingOrFolded = (leftKneeFlex > 1.1 || rightKneeFlex > 1.1) ||
+                (leftKnee && leftAnkle && Math.abs(leftAnkle.y - leftKnee.y) < 0.18 * torsoHeight);
+
             // 結合肩寬軀幹比 (Shoulder-to-Torso Ratio) 進行綜合形態打分：
+            // 解剖學常態：MediaPipe 內部股骨頭間距基準比校準：女性約 1.65~1.85，男性約 1.95~2.30；決策分界線校準為 1.88
             const shoulderToTorsoRatio = shoulderWidth2D / Math.max(0.1, torsoHeight);
-            const maleScore = (shoulderToHipRatio - 1.68) * 2.0 + (shoulderToTorsoRatio - 0.70) * 1.5;
+            let maleScore = (shoulderToHipRatio - 1.88) * 2.0 + (shoulderToTorsoRatio - 0.73) * 1.5;
+
+            // 跪姿/坐姿補償：折疊下肢使骨盆在 2D 投影收窄，給予 -0.55 偏置防止誤判為男性
+            if (isKneelingOrFolded) {
+                maleScore -= 0.55;
+            }
 
             if (maleScore >= 0) {
                 suggestedGender = 'male';
