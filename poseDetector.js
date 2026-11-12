@@ -579,6 +579,38 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // C. 背身狀態機判定 (Back Stance Machine / BSM Trigger)
         // -------------------------------------------------------------
+        // 1. 面部五官整體隱匿度分析 (純背身時五官信賴度極低或完全缺失)
+        const faceVisList = [
+            nose?.visibility,
+            leftEye?.visibility,
+            rightEye?.visibility,
+            leftMouth?.visibility,
+            rightMouth?.visibility
+        ].filter(v => v !== null && v !== undefined && !isNaN(v));
+
+        const avgFaceVis = faceVisList.length > 0
+            ? (faceVisList.reduce((a, b) => a + b, 0) / faceVisList.length)
+            : 0.0;
+
+        // 2. 雙耳拓撲交叉 (人體背對相機時，左耳出現在畫面左側，右耳出現在畫面右側)
+        let isEarInverted = false;
+        if (leftEar && rightEar && (leftEar.visibility ?? 1.0) > 0.25 && (rightEar.visibility ?? 1.0) > 0.25) {
+            isEarInverted = (leftEar.x < rightEar.x - 0.015);
+        }
+
+        // 3. 雙肩水平拓撲顛倒 (若 MediaPipe 內建模型已識別背面並將 11/12 標籤對調)
+        const isShoulderInverted = !!(leftShoulder && rightShoulder && leftShoulder.x < rightShoulder.x - 0.02);
+
+        // 4. 雙髖水平拓撲顛倒
+        const isHipInverted = !!(leftHip && rightHip && leftHip.x < rightHip.x - 0.02);
+
+        // 5. 正面明確特徵評分 (正面保護，杜絕正臉誤判為背身)
+        const hasClearFrontFace = (leftEye && rightEye && nose) &&
+                                  (leftEye.visibility ?? 0) > 0.65 &&
+                                  (rightEye.visibility ?? 0) > 0.65 &&
+                                  (nose.visibility ?? 0) > 0.65 &&
+                                  !isEarInverted;
+
         let isBackStance = false;
         let isOverShoulderLook = false;
 
@@ -592,38 +624,6 @@ export class TorsoPoseEstimator {
             isBackStance = false;
             isOverShoulderLook = false;
         } else {
-            // 1. 面部五官整體隱匿度分析 (純背身時五官信賴度極低或完全缺失)
-            const faceVisList = [
-                nose?.visibility,
-                leftEye?.visibility,
-                rightEye?.visibility,
-                leftMouth?.visibility,
-                rightMouth?.visibility
-            ].filter(v => v !== null && v !== undefined && !isNaN(v));
-
-            const avgFaceVis = faceVisList.length > 0
-                ? (faceVisList.reduce((a, b) => a + b, 0) / faceVisList.length)
-                : 0.0;
-
-            // 2. 雙耳拓撲交叉 (人體背對相機時，左耳出現在畫面左側，右耳出現在畫面右側)
-            let isEarInverted = false;
-            if (leftEar && rightEar && (leftEar.visibility ?? 1.0) > 0.25 && (rightEar.visibility ?? 1.0) > 0.25) {
-                isEarInverted = (leftEar.x < rightEar.x - 0.015);
-            }
-
-            // 3. 雙肩水平拓撲顛倒 (若 MediaPipe 內建模型已識別背面並將 11/12 標籤對調)
-            const isShoulderInverted = (leftShoulder && rightShoulder && leftShoulder.x < rightShoulder.x - 0.02);
-
-            // 4. 雙髖水平拓撲顛倒
-            const isHipInverted = (leftHip && rightHip && leftHip.x < rightHip.x - 0.02);
-
-            // 5. 正面明確特徵評分 (正面保護，杜絕正臉誤判為背身)
-            const hasClearFrontFace = (leftEye && rightEye && nose) &&
-                                      (leftEye.visibility ?? 0) > 0.65 &&
-                                      (rightEye.visibility ?? 0) > 0.65 &&
-                                      (nose.visibility ?? 0) > 0.65 &&
-                                      !isEarInverted;
-
             // 6. 腳後跟與腳尖前後深度 (Heel vs Foot Index Depth)
             let heelInFrontCount = 0;
             if (leftHeel && leftFootIndex && (leftHeel.visibility ?? 0) > 0.35 && (leftFootIndex.visibility ?? 0) > 0.35) {
@@ -869,7 +869,10 @@ export class TorsoPoseEstimator {
 
         // 頸椎軸向旋轉 (Cervical Axial Rotation)：
         // 頸椎生理極限約 ±77° (±1.35 rad)，其中 65% 由 7 節頸椎承擔，35% 由寰枕/寰樞關節承擔
-        const safeRelativeYaw = THREE.MathUtils.clamp(headYaw - thoracicYaw, -1.35, 1.35);
+        let diffNeckYaw = headYaw - thoracicYaw;
+        while (diffNeckYaw > Math.PI) diffNeckYaw -= 2 * Math.PI;
+        while (diffNeckYaw < -Math.PI) diffNeckYaw += 2 * Math.PI;
+        const safeRelativeYaw = THREE.MathUtils.clamp(diffNeckYaw, -1.35, 1.35);
         let cervicalYaw = safeRelativeYaw * 0.65;
 
         // 11. MediaPipe Holistic 雙手 21 骨節特徵提取與預處理
@@ -1495,7 +1498,7 @@ export class TorsoPoseEstimator {
             cervicalPitch: this._clamp(cervicalPitch, -0.55, 0.55),
             cervicalYaw: this._clamp(cervicalYaw, -1.2, 1.2),
             headPitch: this._clamp(cranialPitch, -0.45, 0.45),
-            headYaw: this._clamp(headYaw, -1.57, 1.57),
+            headYaw: isBackStance ? this._clamp(headYaw, -Math.PI, Math.PI) : this._clamp(headYaw, -1.57, 1.57),
             headRoll: this._clamp(headRoll, -0.6, 0.6),
             leftArmPitch: this._clamp(leftArmPitch, -2.2, 2.2),
             leftArmRoll: this._clamp(leftArmRoll, -0.85, 3.23),

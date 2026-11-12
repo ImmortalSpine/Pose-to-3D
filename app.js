@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=5.5';
-import { TorsoPoseEstimator } from './poseDetector.js?v=5.5';
+import { AnatomicalTorso } from './anatomy.js?v=5.6';
+import { TorsoPoseEstimator } from './poseDetector.js?v=5.6';
 
 class App {
     constructor() {
@@ -615,20 +615,24 @@ class App {
         this._updateStanceUI();
 
         // 1. 若有原圖 MediaPipe 特徵點，透過 poseEstimator.reprocessWithStance 重新解算完整逆運動學
-        const newPose = this.poseEstimator.reprocessWithStance(mode);
-        if (newPose) {
-            this._applyPose(newPose);
-            this.aiPoseBackup = { ...newPose };
-            this.currentPose = { ...newPose };
-            this._updateSlidersUI();
+        try {
+            const newPose = this.poseEstimator.reprocessWithStance(mode);
+            if (newPose) {
+                this._applyPose(newPose);
+                this.aiPoseBackup = { ...newPose };
+                this.currentPose = { ...newPose };
+                this._updateSlidersUI();
 
-            const ratioStr = newPose.headToBodyRatio ? `${newPose.headToBodyRatio} 頭身` : '7.1 頭身';
-            const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
-            const backStr = newPose.isBackStance ? (newPose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '、正面模式';
-            const profileStr = newPose.isProfileStance ? `、側身模式 (${newPose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
-            const handTrackStr = (newPose.rightHandAngles || newPose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
-            this.statusText.textContent = `✅ 姿態已切換！已適應人物頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}${handTrackStr}`;
-            return;
+                const ratioStr = newPose.headToBodyRatio ? `${newPose.headToBodyRatio} 頭身` : '7.1 頭身';
+                const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
+                const backStr = newPose.isBackStance ? (newPose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '、正面模式';
+                const profileStr = newPose.isProfileStance ? `、側身模式 (${newPose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
+                const handTrackStr = (newPose.rightHandAngles || newPose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
+                this.statusText.textContent = `✅ 姿態已切換！已適應人物頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}${handTrackStr}`;
+                return;
+            }
+        } catch (err) {
+            console.error("[AnatoPose] reprocessWithStance error:", err);
         }
 
         // 2. 備援手動翻轉 (無影像特徵時直接翻轉當前 3D 骨架模型)

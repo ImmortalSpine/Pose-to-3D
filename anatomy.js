@@ -1947,7 +1947,10 @@ export class AnatomicalTorso {
         let accumCervicalYaw = 0;
         let accumCervicalRoll = 0;
 
-        const safeRelativeYaw = THREE.MathUtils.clamp(headYaw - thoracicYaw, -1.35, 1.35);
+        let diffNeckYaw = headYaw - thoracicYaw;
+        while (diffNeckYaw > Math.PI) diffNeckYaw -= 2 * Math.PI;
+        while (diffNeckYaw < -Math.PI) diffNeckYaw += 2 * Math.PI;
+        const safeRelativeYaw = THREE.MathUtils.clamp(diffNeckYaw, -1.35, 1.35);
         const cervicalPartYaw = safeRelativeYaw * 0.65;
         const cranialPartYaw = safeRelativeYaw - cervicalPartYaw;
 
