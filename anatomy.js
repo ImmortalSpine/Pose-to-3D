@@ -1936,15 +1936,22 @@ export class AnatomicalTorso {
         this.thoracicCageUnit.rotation.z = thoracicRoll - accumRoll;
 
         // 4. 頸椎與寰枕關節頭骨旋轉 (Cervical Spine & Skull Rotation)
+        // 生物力學：頭骨相對於相機世界之總轉向為 headYaw。
+        // 由於頸椎與頭骨掛載於胸廓單元 (已旋轉 thoracicYaw)，
+        // 頭頸相對於胸廓之生理相對轉角為 safeRelativeYaw = clamp(headYaw - thoracicYaw, -1.35, 1.35)
         const cCount = this.cervicalVertebrae.length;
         let accumCervicalPitch = 0;
         let accumCervicalYaw = 0;
         let accumCervicalRoll = 0;
 
+        const safeRelativeYaw = THREE.MathUtils.clamp(headYaw - thoracicYaw, -1.35, 1.35);
+        const cervicalPartYaw = safeRelativeYaw * 0.65;
+        const cranialPartYaw = safeRelativeYaw - cervicalPartYaw;
+
         this.cervicalVertebrae.forEach((vert, idx) => {
-            // 直接受 cervicalPitch / cervicalYaw 驅動，7 節頸椎平滑分擔
+            // 7 節頸椎平滑分擔 cervicalPitch 與 cervicalPartYaw
             const rotX = cervicalPitch / cCount;
-            const rotY = cervicalYaw / cCount;
+            const rotY = cervicalPartYaw / cCount;
             const rotZ = (headRoll - thoracicRoll) / cCount * 0.4;
             vert.rotation.x = rotX;
             vert.rotation.y = rotY;
@@ -1958,7 +1965,7 @@ export class AnatomicalTorso {
             this.headJoint.rotation.order = 'YXZ';
             // 寰枕關節承擔頭骨獨立點頭/仰頭，不倒扣 thoracicPitch
             this.headJoint.rotation.x = headPitch;
-            this.headJoint.rotation.y = headYaw - accumCervicalYaw;
+            this.headJoint.rotation.y = cranialPartYaw;
             this.headJoint.rotation.z = headRoll - accumCervicalRoll;
         }
 

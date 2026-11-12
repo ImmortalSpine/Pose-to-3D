@@ -557,8 +557,16 @@ export class TorsoPoseEstimator {
             pelvisYaw = profileTargetYaw;
             thoracicYaw = profileTargetYaw;
 
-            // 頭部保持側向，允許微幅看鏡頭或偏轉
-            headYaw = profileTargetYaw + profileSign * THREE.MathUtils.clamp(headYaw * 0.35, -0.22, 0.22);
+            // 側身回眸與頭身解耦機制 (Head-Torso Decoupling for Profile View)
+            // 檢查五官特徵：若雙眼均被清晰檢測且橫向展開 (如側身看鏡頭回眸)，保留真實相機平面 2D headYaw！
+            // 僅在面部五官亦處於純側面剪影 (eyeDx < 0.025 或單耳顯著可見) 時，才將頭部朝向與軀幹同步
+            const hasVisibleEyes = leftEye && rightEye && (leftEye.visibility ?? 1.0) > 0.35 && (rightEye.visibility ?? 1.0) > 0.35;
+            if (hasVisibleEyes && eyeDx > 0.025) {
+                // 側身回眸姿態：雙眼清晰可見，保留 2D 五官解算的 headYaw (面向相機)
+            } else if (normEyeSpan < 0.18 || hasSingleEar) {
+                // 純側面五官：頭骨朝向與軀幹同向
+                headYaw = profileTargetYaw;
+            }
 
             // 3. 側身矢狀面俯仰解算 (Profile Sagittal Pitch Mapping)
             // 2D 畫面上的水平脊椎軸位移 (midShoulder.x - midHip.x) 直接對應身體矢狀面的前後傾倒！
@@ -665,7 +673,10 @@ export class TorsoPoseEstimator {
         let cervicalPitch = safeRelativePitch * 0.60;
         let cranialPitch = safeRelativePitch * 0.40;
 
-        let cervicalYaw = (headYaw - thoracicYaw) * 0.50;
+        // 頸椎軸向旋轉 (Cervical Axial Rotation)：
+        // 頸椎生理極限約 ±77° (±1.35 rad)，其中 65% 由 7 節頸椎承擔，35% 由寰枕/寰樞關節承擔
+        const safeRelativeYaw = THREE.MathUtils.clamp(headYaw - thoracicYaw, -1.35, 1.35);
+        let cervicalYaw = safeRelativeYaw * 0.65;
 
         // 11. MediaPipe Holistic 雙手 21 骨節特徵提取與預處理
         let matchedLeftHand = null;
@@ -712,8 +723,37 @@ export class TorsoPoseEstimator {
             return w;
         };
 
-        const activeLeftWrist = sanitizeWristOcclusion(leftShoulder, leftElbow, leftWrist, leftHip, matchedLeftHand, 'left');
-        const activeRightWrist = sanitizeWristOcclusion(rightShoulder, rightElbow, rightWrist, rightHip, matchedRightHand, 'right');
+        let activeLeftWrist = sanitizeWristOcclusion(leftShoulder, leftElbow, leftWrist, leftHip, matchedLeftHand, 'left');
+        let activeRightWrist = sanitizeWristOcclusion(rightShoulder, rightElbow, rightWrist, rightHip, matchedRightHand, 'right');
+
+        // 側身遮擋手臂防畸變 (Profile Occluded Arm Sanity):
+        // 在 90° 側身下，若近側手臂自然向下支撐地面 (wrist.y > elbow.y + 0.08)，
+        // 而遠側 (背景) 手臂因身體遮擋導致 MediaPipe 誤預測為向上反折 (w.y < e.y) 且無 21 節手掌點時，
+        // 遠側手臂應對齊近側手臂之向下支撐姿態
+        if (isProfileStance) {
+            const nearWrist = (profileSign === -1) ? rightWrist : leftWrist;
+            const nearElbow = (profileSign === -1) ? rightElbow : leftElbow;
+            const farWrist = (profileSign === -1) ? activeLeftWrist : activeRightWrist;
+            const farElbow = (profileSign === -1) ? leftElbow : rightElbow;
+            const farHand = (profileSign === -1) ? matchedLeftHand : matchedRightHand;
+
+            const nearIsDown = nearWrist && nearElbow && (nearWrist.y > nearElbow.y + 0.08);
+            const farIsUp = farWrist && farElbow && (farWrist.y < farElbow.y - 0.02);
+
+            if (!farHand && nearIsDown && farIsUp) {
+                const correctedFarWrist = {
+                    x: farElbow.x + (nearWrist.x - nearElbow.x),
+                    y: farElbow.y + Math.abs(nearWrist.y - nearElbow.y),
+                    z: farElbow.z || 0,
+                    visibility: 0.5
+                };
+                if (profileSign === -1) {
+                    activeLeftWrist = correctedFarWrist;
+                } else {
+                    activeRightWrist = correctedFarWrist;
+                }
+            }
+        }
 
         // 判定手部姿態類型 (摸頭撫面手 / 插腰手 / 前置手 / 體側垂手)
         const checkTouchingHead = (s, e, w, handLandmarks, side) => {
