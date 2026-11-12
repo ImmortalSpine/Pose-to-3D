@@ -583,7 +583,44 @@ export class TorsoPoseEstimator {
             rightAnkleRoll = -tempAnkRoll;
         }
 
+        // -------------------------------------------------------------
+        // 12. 人體真實 2D 頭身比動態估算 (Dynamic Head-to-Body Ratio)
+        // -------------------------------------------------------------
+        let headToBodyRatio = 7.1; // 預設亞洲大眾寫實體型
+        if (leftEye && rightEye && nose && leftShoulder && rightShoulder) {
+            const midEyeY = (leftEye.y + rightEye.y) * 0.5;
+            const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
+            const eyeShoulderDy = Math.max(0.04, midShoulderY - midEyeY);
+            // 2D 影像上頭部邊界估算 (頭頂至下巴)
+            const headTopY = midEyeY - eyeShoulderDy * 0.65;
+            const chinY = midEyeY + eyeShoulderDy * 0.75;
+            const headSpan2D = Math.max(0.035, chinY - headTopY);
+
+            // 尋找雙腳在 2D 影像中的最低點 (Foot / Ankle)
+            const footYValues = [
+                leftAnkle ? leftAnkle.y : null,
+                rightAnkle ? rightAnkle.y : null,
+                leftHeel ? leftHeel.y : null,
+                rightHeel ? rightHeel.y : null,
+                leftFootIndex ? leftFootIndex.y : null,
+                rightFootIndex ? rightFootIndex.y : null
+            ].filter(v => v !== null && !isNaN(v));
+
+            if (footYValues.length > 0 && midHip) {
+                const bottomY = Math.max(...footYValues);
+                if (bottomY > midHip.y + 0.15) {
+                    const totalBodySpan2D = bottomY - headTopY;
+                    const rawRatio = totalBodySpan2D / headSpan2D;
+                    headToBodyRatio = THREE.MathUtils.clamp(rawRatio, 6.6, 8.4);
+                }
+            }
+        }
+        headToBodyRatio = parseFloat(headToBodyRatio.toFixed(1));
+        const skullScale = parseFloat(((48.0 / headToBodyRatio) / 4.60).toFixed(2));
+
         return {
+            headToBodyRatio,
+            skullScale,
             pelvisRoll: this._clamp(pelvisRoll, -0.4, 0.4),
             pelvisPitch: this._clamp(pelvisPitch, -0.2, 0.2),
             pelvisYaw: this._clamp(pelvisYaw, -1.4, 1.4),

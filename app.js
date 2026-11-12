@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=3.6';
-import { TorsoPoseEstimator } from './poseDetector.js?v=3.6';
+import { AnatomicalTorso } from './anatomy.js?v=3.7';
+import { TorsoPoseEstimator } from './poseDetector.js?v=3.7';
 
 class App {
     constructor() {
@@ -35,10 +35,12 @@ class App {
             lumbarYaw: 0,
             cervicalPitch: 0,
             cervicalYaw: 0,
-            // 藝用解剖頭部姿態 (Head Pose)
+            // 藝用解剖頭部姿態與頭身比例 (Head Pose & Proportions)
             headPitch: 0,
             headYaw: 0,
             headRoll: 0,
+            headToBodyRatio: 7.1,
+            skullScale: 1.47,
             leftArmPitch: 0,
             leftArmRoll: 0.12,
             leftArmYaw: 0,
@@ -321,6 +323,19 @@ class App {
             this._updateSlidersUI();
         });
 
+        // 人體體型與頭身比控制 (支援亞洲寫實 7.0、模特 7.5、古典 8.0)
+        const sliderRatio = document.getElementById('sliderHeadRatio');
+        if (sliderRatio) {
+            sliderRatio.addEventListener('input', (e) => {
+                const ratio = parseFloat(e.target.value);
+                this._setHeadRatio(ratio);
+            });
+        }
+
+        document.getElementById('btnRatioAsian')?.addEventListener('click', () => this._setHeadRatio(7.0));
+        document.getElementById('btnRatioModel')?.addEventListener('click', () => this._setHeadRatio(7.5));
+        document.getElementById('btnRatioClassic')?.addEventListener('click', () => this._setHeadRatio(8.0));
+
         // 快速視角切換
         document.getElementById('btnFrontView')?.addEventListener('click', () => this._setCameraView('front'));
         document.getElementById('btnSideView')?.addEventListener('click', () => this._setCameraView('side'));
@@ -417,13 +432,55 @@ class App {
         if (selLG && this.currentPose.leftHandGesture) {
             selLG.value = this.currentPose.leftHandGesture;
         }
+
+        const sliderRatio = document.getElementById('sliderHeadRatio');
+        const valRatio = document.getElementById('valHeadRatio');
+        if (sliderRatio && valRatio && this.currentPose.headToBodyRatio) {
+            sliderRatio.value = this.currentPose.headToBodyRatio;
+            valRatio.textContent = this._getRatioDesc(this.currentPose.headToBodyRatio);
+        }
+    }
+
+    _getRatioDesc(ratio) {
+        let desc = '亞洲大眾寫實';
+        if (ratio < 6.9) desc = '厚實/亞洲日常';
+        else if (ratio <= 7.2) desc = '亞洲大眾寫實';
+        else if (ratio <= 7.7) desc = '修長/時尚模特';
+        else desc = '古典藝術雕塑';
+        return `${ratio.toFixed(1)} 頭身 (${desc})`;
+    }
+
+    _setHeadRatio(ratio) {
+        this.currentPose.headToBodyRatio = ratio;
+        this.currentPose.skullScale = (48.0 / ratio) / 4.60;
+        this.anatomicalTorso.setHeadRatio(ratio);
+
+        const slider = document.getElementById('sliderHeadRatio');
+        const valEl = document.getElementById('valHeadRatio');
+        if (slider) slider.value = ratio;
+        if (valEl) valEl.textContent = this._getRatioDesc(ratio);
+
+        this._fitCameraToSkeleton();
+    }
+
+    _getTargetY() {
+        const headRatio = (this.currentPose && this.currentPose.headToBodyRatio) ? this.currentPose.headToBodyRatio : 7.1;
+        const headHeight = 48.0 / headRatio;
+        // 頭頂約在 21.7 + headHeight，足底約在 -21.7，中心 Y 為兩者平均值
+        const topY = 21.7 + headHeight;
+        const bottomY = -21.7;
+        return (topY + bottomY) * 0.5;
     }
 
     /**
      * 計算全人體骨骼在當前畫布長寬比下的理想相機觀測距離 (保證頭頂與雙腳永遠完整可見)
      */
     _calculateIdealCameraDistance() {
-        const skeletonHeight = 48; // 全人體總高度 (足底 -21.7 至頭頂 +26.2)
+        const headRatio = (this.currentPose && this.currentPose.headToBodyRatio) ? this.currentPose.headToBodyRatio : 7.1;
+        const headHeight = 48.0 / headRatio;
+        const totalHeight = 44.0 + headHeight; // 軀幹與下肢約 44 單位加上動態頭骨高度
+
+        const skeletonHeight = totalHeight;
         const skeletonWidth = 28;  // 自然肢體開展寬度
 
         const aspect = Math.max(0.1, this.camera ? this.camera.aspect : 1.0);
@@ -431,8 +488,8 @@ class App {
         const fovRad = (fov * Math.PI) / 180;
         const tanHalfFov = Math.tan(fovRad * 0.5);
 
-        // 包含適度邊界留白 (Margin ~24%)，保證頭頂與雙腳絕不被視窗邊緣裁切
-        const padding = 1.24;
+        // 包含適度邊界留白 (Margin ~25%)，保證頭頂與雙腳絕不被視窗邊緣裁切
+        const padding = 1.25;
         const distY = (skeletonHeight * padding * 0.5) / tanHalfFov;
         const distX = (skeletonWidth * padding * 0.5) / (tanHalfFov * aspect);
         return Math.max(distY, distX, 86);
@@ -443,7 +500,7 @@ class App {
      */
     _fitCameraToSkeleton(view = 'front') {
         const dist = this._calculateIdealCameraDistance();
-        const targetY = 2.0;
+        const targetY = this._getTargetY();
 
         if (view) {
             this._setCameraView(view);
@@ -480,7 +537,7 @@ class App {
         document.querySelectorAll('.gizmo-btn').forEach(b => b.classList.remove('active'));
 
         const dist = this._calculateIdealCameraDistance();
-        const targetY = 2.0;
+        const targetY = this._getTargetY();
         switch (view) {
             case 'front':
                 this.camera.position.set(0, targetY, dist);
@@ -531,7 +588,8 @@ class App {
                         this._draw2DLandmarks();
                     }
 
-                    this.statusText.textContent = "✅ 姿態與手勢識別完成！骨架已縮小適應全身視野，支援滑鼠滾輪與按鈕自由放大縮小";
+                    const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
+                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})，支援手動微調體型與縮放`;
                 } else {
                     this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
                 }
@@ -786,6 +844,8 @@ class App {
         if (type === 'sampleA') {
             ctx.fillText("範例 A：微側身挺胸 + 抬手姿態", 40, 60);
             targetPose = {
+                headToBodyRatio: 7.2,
+                skullScale: 1.45,
                 pelvisRoll: -0.06,
                 pelvisPitch: 0,
                 pelvisYaw: 0.1,
@@ -828,6 +888,8 @@ class App {
         } else {
             ctx.fillText("範例 B：側彎對抗 (Contrapposto)", 40, 60);
             targetPose = {
+                headToBodyRatio: 7.2,
+                skullScale: 1.45,
                 pelvisRoll: 0.22,
                 pelvisPitch: 0.02,
                 pelvisYaw: -0.08,

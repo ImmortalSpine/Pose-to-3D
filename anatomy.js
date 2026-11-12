@@ -155,7 +155,7 @@ export class AnatomicalTorso {
         this._addLandmark("XiphoidProcess", new THREE.Vector3(0, 4.4, 5.5), this.thoracicCageUnit);
 
         const ribWidths = [
-            2.0, 2.6, 3.2, 3.8, 4.3, 4.6, 4.8, 4.7, 4.4, 3.8, 3.0, 2.2
+            1.8, 2.3, 2.8, 3.3, 3.7, 3.9, 4.05, 3.95, 3.7, 3.2, 2.6, 1.9
         ];
 
         let tParent = this.thoracicCageUnit;
@@ -214,12 +214,33 @@ export class AnatomicalTorso {
         this.skullGroup = this._createSkullMesh();
         this.headJoint.add(this.skullGroup);
 
+        // 預設亞洲大眾寫實體型 (約 7.1 頭身，頭高約 6.76 單位，縮放約 1.47 倍)
+        this.currentHeadRatio = 7.1;
+        this.headScale = (48.0 / this.currentHeadRatio) / 4.60;
+        this.skullGroup.scale.setScalar(this.headScale);
+
         this._addLandmark("HeadBase", new THREE.Vector3(0, 0, 0), this.headJoint);
         this._addLandmark("SkullCrown", new THREE.Vector3(0, 3.8, -0.2), this.headJoint);
         this._addLandmark("Glabella", new THREE.Vector3(0, 1.65, 1.30), this.headJoint);
         this._addLandmark("ChinPoint", new THREE.Vector3(0, -0.68, 1.25), this.headJoint);
         this._addLandmark("Zygomatic_L", new THREE.Vector3(1.45, 0.90, 0.95), this.headJoint);
         this._addLandmark("Zygomatic_R", new THREE.Vector3(-1.45, 0.90, 0.95), this.headJoint);
+    }
+
+    /**
+     * 設定頭身比縮放率 (可依照片推算或使用者手動調整，支援 6.5 ~ 8.5 頭身)
+     * @param {number} ratio 目標頭身比 (如 7.0、7.5、8.0)
+     */
+    setHeadRatio(ratio = 7.1) {
+        const safeRatio = THREE.MathUtils.clamp(ratio, 6.2, 8.8);
+        this.currentHeadRatio = safeRatio;
+        // 人體總高約 48 單位，基礎頭骨幾何高 4.6 單位
+        const targetHeadHeight = 48.0 / safeRatio;
+        this.headScale = targetHeadHeight / 4.60;
+        if (this.skullGroup) {
+            this.skullGroup.scale.setScalar(this.headScale);
+        }
+        return this.headScale;
     }
 
     /**
@@ -1656,8 +1677,18 @@ export class AnatomicalTorso {
         leftAnkleRoll = 0,
         rightAnklePitch = 0,
         rightAnkleYaw = 0,
-        rightAnkleRoll = 0
+        rightAnkleRoll = 0,
+        // 頭身比與頭骨縮放 (Head Proportion)
+        headToBodyRatio = null,
+        skullScale = null
     }) {
+        if (headToBodyRatio) {
+            this.setHeadRatio(headToBodyRatio);
+        } else if (skullScale) {
+            this.headScale = skullScale;
+            if (this.skullGroup) this.skullGroup.scale.setScalar(this.headScale);
+        }
+
         // 1. 骨盆整體單元旋轉
         this.pelvisUnit.rotation.x = pelvisPitch;
         this.pelvisUnit.rotation.y = pelvisYaw;

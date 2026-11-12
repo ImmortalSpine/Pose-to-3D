@@ -189,10 +189,29 @@
                 </div>
             </div>
 
-            <!-- 3. 動態姿態微調 (Sliders) -->
+            <!-- 3. 人體體型與頭身比 (Body Proportion) -->
             <div class="panel-section">
                 <div class="panel-title">
-                    <span>3. 姿態微調 (Pose Tuning)</span>
+                    <span>3. 體型與頭身比 (Proportions)</span>
+                </div>
+                <div class="sample-buttons" style="margin-bottom: 10px;">
+                    <button class="btn btn-sm" id="btnRatioAsian" title="大眾日常寫實體型 (約 7.0 頭身)">亞洲日常 (~7.0)</button>
+                    <button class="btn btn-sm" id="btnRatioModel" title="修長模特體型 (約 7.5 頭身)">時尚模特 (~7.5)</button>
+                    <button class="btn btn-sm" id="btnRatioClassic" title="古典雕塑黃金比例 (約 8.0 頭身)">古典理想 (~8.0)</button>
+                </div>
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>頭身比例 (Head-to-Body Ratio)</span>
+                        <span class="control-val" id="valHeadRatio">7.1 頭身 (亞洲大眾)</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderHeadRatio" min="6.5" max="8.5" step="0.1" value="7.1">
+                </div>
+            </div>
+
+            <!-- 4. 動態姿態微調 (Sliders) -->
+            <div class="panel-section">
+                <div class="panel-title">
+                    <span>4. 姿態微調 (Pose Tuning)</span>
                     <button class="btn btn-sm" id="btnResetPose">重置為 AI 姿態</button>
                 </div>
 
@@ -482,7 +501,7 @@
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=3.6"></script>
+    <script type="module" src="app.js?v=3.7"></script>
 </body>
 </html>
 
