@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.1';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.2';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -1069,6 +1069,7 @@ export class TorsoPoseEstimator {
 
         const checkHandOnHip = (s, e, w, side) => {
             if (!s || !e || !w) return false;
+            const scaleH = torsoHeight || 0.45;
             const elbowFlared = (side === 'left') ? ((e.x - s.x) * ar) : ((s.x - e.x) * ar);
             const wristInward = (side === 'left') ? ((e.x - w.x) * ar) : ((w.x - e.x) * ar);
             const armDx = (e.x - s.x) * ar;
@@ -1079,8 +1080,11 @@ export class TorsoPoseEstimator {
             const lA = Math.hypot(armDx, armDy);
             const lF = Math.hypot(foreDx, foreDy);
             const flexAngle = Math.acos(Math.max(-1, Math.min(1, dot / (lA * lF + 1e-5))));
-            const atWaistHeight = (w.y >= s.y + 0.25 * torsoHeight && w.y <= (leftHip ? leftHip.y + 0.20 * torsoHeight : s.y + 0.95 * torsoHeight));
-            return (elbowFlared > 0.045 && wristInward > 0.04 && flexAngle > 0.65 && atWaistHeight);
+            const hipY = (leftHip && rightHip) ? ((leftHip.y + rightHip.y) * 0.5) : (s.y + 0.90 * scaleH);
+            // 插腰必須手腕位於髖關節連線上方之腰際 (w.y <= hipY - 0.05 * scaleH)，且手肘顯著外張、肘彎曲 > 55°
+            // 避免將自然垂放或插在短褲口袋的手誤判為插腰
+            const atWaistHeight = (w.y >= s.y + 0.30 * scaleH && w.y <= hipY - 0.05 * scaleH);
+            return (elbowFlared > 0.10 * scaleH && wristInward > 0.07 * scaleH && flexAngle > 0.95 && atWaistHeight);
         };
 
         const isLeftTouchingHead = checkTouchingHead(leftShoulder, leftElbow, activeLeftWrist, matchedLeftHand, 'left');
@@ -1537,17 +1541,17 @@ export class TorsoPoseEstimator {
             headPitch: this._clamp(cranialPitch, -0.45, 0.45),
             headYaw: isBackStance ? this._clamp(headYaw, -Math.PI, Math.PI) : this._clamp(headYaw, -1.57, 1.57),
             headRoll: this._clamp(headRoll, -0.6, 0.6),
-            leftArmPitch: this._clamp(leftArmPitch, -2.2, 2.2),
-            leftArmRoll: this._clamp(leftArmRoll, -0.85, 3.23),
-            leftArmYaw: this._clamp(leftArmYaw, -2.2, 2.2),
+            leftArmPitch: this._clamp(leftArmPitch, -3.5, 3.5),
+            leftArmRoll: this._clamp(leftArmRoll, -3.5, 3.5),
+            leftArmYaw: this._clamp(leftArmYaw, -3.5, 3.5),
             leftElbowFlex: this._clamp(leftElbowFlex, 0, 2.7),
             leftForearmTwist: this._clamp(leftForearmTwist, 0, Math.PI),
             leftHandGesture: leftHandGesture,
             leftHandAngles: leftHandAngles,
             leftHandDetectedPreset: leftHandDetectedPreset,
-            rightArmPitch: this._clamp(rightArmPitch, -2.2, 2.2),
-            rightArmRoll: this._clamp(rightArmRoll, -3.23, 0.85),
-            rightArmYaw: this._clamp(rightArmYaw, -2.2, 2.2),
+            rightArmPitch: this._clamp(rightArmPitch, -3.5, 3.5),
+            rightArmRoll: this._clamp(rightArmRoll, -3.5, 3.5),
+            rightArmYaw: this._clamp(rightArmYaw, -3.5, 3.5),
             rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
             rightHandGesture: rightHandGesture,
@@ -1978,22 +1982,40 @@ export class TorsoPoseEstimator {
             const vMid = pD.clone().sub(pP);
             const vDist = pT.clone().sub(pD);
 
-            // 掌指關節 MCP 屈曲角
+            // 1. 3D 骨節段間向量夾角
             const rawMcp = getAngle(vMeta, vProx);
-            const mcp = THREE.MathUtils.clamp(rawMcp - 0.08, 0.0, 1.65);
+            const rawPip = getAngle(vProx, vMid);
+            const rawDip = getAngle(vMid, vDist);
+
+            // 2. 2D 透視縮短與指尖回折投影補償 (Foreshortening & Tip-to-MCP Curl Recovery)
+            // 解決正面握拳或半握拳時，手指朝向鏡頭摺疊導致 2D 投影共線、Z 軸深度不足而誤判為伸直的問題
+            const vMeta2Dx = (hand[mcpIdx].x - hand[0].x) * ar;
+            const vMeta2Dy = -(hand[mcpIdx].y - hand[0].y);
+            const lMeta2D = Math.max(1e-4, Math.hypot(vMeta2Dx, vMeta2Dy));
+            const uMeta2Dx = vMeta2Dx / lMeta2D;
+            const uMeta2Dy = vMeta2Dy / lMeta2D;
+
+            const vTipFromMcpX = (hand[tipIdx].x - hand[mcpIdx].x) * ar;
+            const vTipFromMcpY = -(hand[tipIdx].y - hand[mcpIdx].y);
+            // 計算指尖相對於掌骨方向的延伸比例：完全伸直時 projRatio >= 0.85；握拳或微蜷時顯著縮小甚至為負
+            const projRatio = (vTipFromMcpX * uMeta2Dx + vTipFromMcpY * uMeta2Dy) / lMeta2D;
+            const distRatio = Math.hypot(vTipFromMcpX, vTipFromMcpY) / lMeta2D;
+            const effectiveRatio = Math.min(projRatio, distRatio);
+            const curlT = THREE.MathUtils.clamp((0.82 - effectiveRatio) / 0.78, 0.0, 1.0);
+
+            // 掌指關節 MCP 屈曲角
+            const mcp = THREE.MathUtils.clamp(Math.max(rawMcp - 0.08, curlT * 1.45), 0.0, 1.65);
 
             // 近端指間關節 PIP 屈曲角
-            const rawPip = getAngle(vProx, vMid);
-            const pip = THREE.MathUtils.clamp(rawPip - 0.05, 0.0, 1.80);
+            const pip = THREE.MathUtils.clamp(Math.max(rawPip - 0.05, curlT * 1.65), 0.0, 1.80);
 
             // 遠端指間關節 DIP 屈曲角
-            const rawDip = getAngle(vMid, vDist);
-            const dip = THREE.MathUtils.clamp(rawDip - 0.05, 0.0, 1.45);
+            const dip = THREE.MathUtils.clamp(Math.max(rawDip - 0.05, curlT * 1.15), 0.0, 1.45);
 
-            // 外展分開角 (Spread)
+            // 外展分開角 (Spread)：手指捲曲握拳時自動收攏
             const vProxPlane = vProx.clone().sub(vPalmNormal.clone().multiplyScalar(vProx.dot(vPalmNormal)));
             const spreadDot = vProxPlane.dot(vPalmWidth);
-            const spread = THREE.MathUtils.clamp(baseSpread + spreadDot * sign * 0.25, -0.25, 0.25);
+            const spread = THREE.MathUtils.clamp((baseSpread + spreadDot * sign * 0.25) * (1.0 - curlT * 0.75), -0.25, 0.25);
 
             return { mcp, pip, dip, spread };
         };
@@ -2011,10 +2033,17 @@ export class TorsoPoseEstimator {
         const rawMcpT = getAngle(vMetaT, vProxT);
         const rawIpT = getAngle(vProxT, vDistT);
 
-        const thumbMcp = THREE.MathUtils.clamp(rawMcpT - 0.12, 0.05, 1.45);
-        const thumbPip = THREE.MathUtils.clamp(rawIpT - 0.08, 0.05, 1.60);
+        // 檢測拇指尖 (4) 是否收攏貼近食指根部 (5) 或中指根部 (9)（握拳或半握姿態）
+        const palmScale2D = Math.max(1e-4, Math.hypot((hand[9].x - hand[0].x) * ar, hand[9].y - hand[0].y));
+        const dThumbToIdxMcp = Math.hypot((hand[4].x - hand[5].x) * ar, hand[4].y - hand[5].y) / palmScale2D;
+        const dThumbToMidMcp = Math.hypot((hand[4].x - hand[9].x) * ar, hand[4].y - hand[9].y) / palmScale2D;
+        const minThumbDist = Math.min(dThumbToIdxMcp, dThumbToMidMcp);
+        const thumbCurlT = THREE.MathUtils.clamp((0.68 - minThumbDist) / 0.45, 0.0, 1.0);
+
+        const thumbMcp = THREE.MathUtils.clamp(Math.max(rawMcpT - 0.12, 0.15 + thumbCurlT * 0.85), 0.05, 1.45);
+        const thumbPip = THREE.MathUtils.clamp(Math.max(rawIpT - 0.08, 0.10 + thumbCurlT * 1.05), 0.05, 1.60);
         const thumbDip = thumbPip * 0.65;
-        const thumbSpread = sign * 0.15;
+        const thumbSpread = sign * (0.15 * (1.0 - thumbCurlT * 0.65));
 
         return {
             Thumb:  { mcp: thumbMcp, pip: thumbPip, dip: thumbDip, spread: thumbSpread },

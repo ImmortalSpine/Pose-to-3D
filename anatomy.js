@@ -956,7 +956,7 @@ export class AnatomicalTorso {
         const distalHeadGeo = new THREE.BoxGeometry(0.75, 0.65, 0.5);
         const distalHeadMesh = new THREE.Mesh(distalHeadGeo, this.materials.boneHighlight);
         distalHeadMesh.position.copy(pEnd);
-        distalHeadMesh.rotation.y = twistAngle;
+        distalHeadMesh.rotation.y = -sign * twistAngle;
         group.add(distalHeadMesh);
 
         const styloidGeo = new THREE.ConeGeometry(0.14, 0.5, 6);
@@ -969,13 +969,14 @@ export class AnatomicalTorso {
         this.shoulderGirdle[side].radiusMesh = group;
 
         // 5. 手掌系統動態定位與前旋/後旋同步 (Hand Dynamic Coupling)
-        // 手腕關節面直接緊扣橈骨遠端 (Radiocarpal Joint)，掌心與五指隨橈骨旋前/旋後動態翻轉！
+        // 手腕關節面直接緊扣橈骨遠端 (Radiocarpal Joint)，掌心與五指隨橈骨旋前/後旋動態翻轉！
         const handGroup = this.shoulderGirdle[side].handGroup;
         if (handGroup) {
             // 手腕關節線位於橈骨遠端下緣，留 0.35 單位生理關節間隙
             handGroup.position.set(distalX, -radiusLen - 0.35, distalZ);
-            // 手掌沿前臂長軸隨橈骨遠端旋轉角完全同步旋轉 (旋後 twist=0: 掌心向前; 旋前 twist=PI: 掌心向後)
-            handGroup.rotation.y = twistAngle;
+            // 左手 (sign=+1) 與右手 (sign=-1) 繞 Y 軸鏡像對稱旋轉：
+            // 旋後 twist=0: 掌心朝前 (+Z)；半旋前 twist≈1.48: 拇指朝前 (+Z)、掌心朝向大腿內側；全旋前 twist=PI: 掌心朝後 (-Z)
+            handGroup.rotation.y = -sign * twistAngle;
         }
     }
 
