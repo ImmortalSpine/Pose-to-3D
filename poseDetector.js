@@ -937,12 +937,12 @@ export class TorsoPoseEstimator {
         // 嚴格限定：僅在「近側手臂處於地面支撐姿態 (如跪地雙手後撐，wrist 在 hip 下方)」
         // 且「遠側手臂沒有檢測到手掌 21 節點、未在摸頭/摸頸、且手腕缺失或異常」時，才進行向下支撐鏡像！
         if (isProfileStance && profileSign !== 0) {
-            const nearWrist = (profileSign === -1) ? rightWrist : leftWrist;
-            const nearElbow = (profileSign === -1) ? rightElbow : leftElbow;
-            const nearHip = (profileSign === -1) ? rightHip : leftHip;
-            const farWrist = (profileSign === -1) ? activeLeftWrist : activeRightWrist;
-            const farElbow = (profileSign === -1) ? leftElbow : rightElbow;
-            const farHand = (profileSign === -1) ? matchedLeftHand : matchedRightHand;
+            const nearWrist = (profileSign === 1) ? activeRightWrist : activeLeftWrist;
+            const nearElbow = (profileSign === 1) ? rightElbow : leftElbow;
+            const nearHip = (profileSign === 1) ? rightHip : leftHip;
+            const farWrist = (profileSign === 1) ? activeLeftWrist : activeRightWrist;
+            const farElbow = (profileSign === 1) ? leftElbow : rightElbow;
+            const farHand = (profileSign === 1) ? matchedLeftHand : matchedRightHand;
 
             const nearIsGroundSupport = nearWrist && nearElbow && nearHip && (nearWrist.y > nearElbow.y + 0.08) && (nearWrist.y > nearHip.y - 0.05);
             const farHasHand = farHand && farHand.length >= 21;
@@ -957,7 +957,7 @@ export class TorsoPoseEstimator {
                         z: farElbow.z || 0,
                         visibility: 0.5
                     };
-                    if (profileSign === -1) {
+                    if (profileSign === 1) {
                         activeLeftWrist = correctedFarWrist;
                     } else {
                         activeRightWrist = correctedFarWrist;
@@ -1593,6 +1593,11 @@ export class TorsoPoseEstimator {
         const sign = (side === 'left') ? 1.0 : -1.0;
         const ar = this.aspectRatio || 1.0;
 
+        const isNearArm = isProfileStance && profileSign !== 0 && (
+            (profileSign === 1 && side === 'right') || (profileSign === -1 && side === 'left')
+        );
+        const isFarArm = isProfileStance && profileSign !== 0 && !isNearArm;
+
         if (!elbow || !shoulder) {
             return {
                 roll: sign * 0.12,
@@ -1735,8 +1740,13 @@ export class TorsoPoseEstimator {
             if (isHandOnHip) zSignArm = 0.25;
             let dzArm = (lArm2D < LArm * 0.95) ? (rawDzArm * zSignArm) : 0.02 * LArm;
             if (isProfileStance && profileSign !== 0) {
-                // 側身模式深度偏移修正：profileSign * sign 決定前後深淺
-                dzArm = profileSign * sign * 0.06 * LArm;
+                if (isNearArm) {
+                    // 近側手臂面向鏡頭：當 2D 骨骼出現透視縮短時，深度必然朝向鏡頭正方向 (+Z)
+                    dzArm = (lArm2D < LArm * 0.95) ? Math.max(rawDzArm * 0.85, 0.10 * LArm) : 0.08 * LArm;
+                } else {
+                    // 遠側手臂背對鏡頭：深度朝向背景負方向 (-Z)
+                    dzArm = (lArm2D < LArm * 0.95) ? -Math.max(rawDzArm * 0.40, 0.05 * LArm) : -0.05 * LArm;
+                }
             } else if (isBackStance) {
                 // 背身模式深度鏡像反轉
                 dzArm = -dzArm;
@@ -1763,7 +1773,11 @@ export class TorsoPoseEstimator {
                 }
                 let dzFore = (lFore2D < LFore * 0.95) ? (rawDzFore * zSignFore) : 0.02 * LFore;
                 if (isProfileStance && profileSign !== 0) {
-                    dzFore = profileSign * sign * 0.05 * LFore;
+                    if (isNearArm) {
+                        dzFore = (lFore2D < LFore * 0.95) ? Math.max(rawDzFore * 0.55, 0.06 * LFore) : 0.05 * LFore;
+                    } else {
+                        dzFore = (lFore2D < LFore * 0.95) ? -Math.max(rawDzFore * 0.35, 0.04 * LFore) : -0.04 * LFore;
+                    }
                 } else if (isBackStance) {
                     dzFore = -dzFore;
                 }
@@ -1784,15 +1798,53 @@ export class TorsoPoseEstimator {
 
             // 4. 生理防穿插約束與「脊椎解剖防護禁區」+「腹壁橢圓包絡面動態前推算法」
             // (Biomechanical Clearance, Spine Shield & Abdominal Ellipsoid Projection)
-            // A. 後背壁防穿透：允許自然向後伸展支撐 (Extension)
-            const minZLimit = isProfileStance ? -0.88 : -0.55;
-            if (uArm.z < minZLimit) {
-                uArm.z = minZLimit;
-                uArm.normalize();
+
+            // 判定手腕是否位於頸部、鎖骨、下頜、臉部或胸前，且手肘在下或前臂上屈
+            const isHandAtNeckOrChest = wrist && (
+                (wrist.y < (shoulder ? shoulder.y + 0.14 * torsoHeight : 0.45)) ||
+                isTouchingHead
+            );
+            const isForearmReachingUp = wrist && elbow && (-(wrist.y - elbow.y) > 0.02);
+            const isUpperTorsoHand = isHandAtNeckOrChest && isForearmReachingUp;
+
+            // A. 後背壁防穿透與矢狀面/冠狀面人體結構約束 (Biomechanical Structural Constraints)
+            if (isUpperTorsoHand) {
+                // 【約束 1：大臂嚴禁後伸 (No Hyperextension when touching front)】
+                // 人體解剖運動學：手放於頸圈/鎖骨/胸前時，盂肱關節、胸大肌與肩胛下肌嚴禁大臂伸向後背 (uArm.z < 0)！
+                // 大臂必處於肩胛骨平面 (Scapular Plane) 或微前屈 (uArm.z >= 0.18)
+                if (uArm.z < 0.18) {
+                    uArm.z = 0.18;
+                    uArm.normalize();
+                }
+                // 【約束 2：近側手臂向鏡頭自然外展 (Near-arm lateral flare towards camera)】
+                // 側身模式近側手摸頸/持物時，手肘自然向體側/相機外展，絕不緊貼脊椎或向後穿插
+                if (isNearArm && sign * uArm.x < 0.35) {
+                    uArm.x = sign * 0.45;
+                    uArm.normalize();
+                }
+            } else {
+                // 一般姿態：正常站姿大臂主動後伸極限約為 20° (uArm.z >= -0.38)
+                // 僅在坐姿/跪姿地面後撐時放寬
+                const isGroundSupport = isProfileStance && wrist && elbow && (wrist.y > elbow.y + 0.06);
+                const minZLimit = isGroundSupport ? -0.75 : -0.38;
+                if (uArm.z < minZLimit) {
+                    uArm.z = minZLimit;
+                    uArm.normalize();
+                }
             }
 
             // 盂肱關節在胸廓坐標系中之解剖位置
             pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, cfg.handClearance.armLen);
+
+            // 當手在前胸/頸圈/下頜區域時，前臂方向直接導引對準胸鎖關節/頸圈空間目標點
+            if (isUpperTorsoHand && wrist) {
+                const rawDxNeck = (wrist.x - (headTargetInfo?.nose?.x ?? shoulder.x)) * ar;
+                const chokerX = sign * THREE.MathUtils.clamp(Math.abs(rawDxNeck) / 0.16 * 1.5, 0.9, 2.2);
+                const chokerY = 10.2 + (headTargetInfo ? (headTargetInfo.midEyeY - wrist.y) / (torsoHeight || 0.45) * 2.0 : 0.0);
+                const chokerZ = 3.6;
+                const pNeckTarget = new THREE.Vector3(chokerX, THREE.MathUtils.clamp(chokerY, 9.5, 13.5), chokerZ);
+                uFore = pNeckTarget.clone().sub(pElbowLocal).normalize();
+            }
 
             // B. 肋骨與側胸防穿插：在手臂下垂或內收時維持側向安全間距 (X 軸不穿入肋骨)
             if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.4 && uArm.z < 0.5) {
@@ -1887,9 +1939,7 @@ export class TorsoPoseEstimator {
         const dotFlex = THREE.MathUtils.clamp(uArm.dot(uFore), -1.0, 1.0);
         let flex = Math.acos(dotFlex);
 
-        const isFarSide = isProfileStance && profileSign !== 0 && (
-            (profileSign === -1 && side === 'left') || (profileSign === 1 && side === 'right')
-        );
+        const isFarSide = isFarArm;
         if (isFarSide && isReachingBehind && uFore.y < 0) {
             // 遠側手臂在側身後撐姿態下 (手向下向後延伸支撐地面)，手肘屈曲不應超過生理極限，防止 180° 反折貼胸
             flex = Math.min(flex, 1.25);
@@ -2003,6 +2053,11 @@ export class TorsoPoseEstimator {
         const sign = (side === 'left') ? 1.0 : -1.0;
         const ar = this.aspectRatio || 1.0;
 
+        const isNearLeg = isProfileStance && profileSign !== 0 && (
+            (profileSign === 1 && side === 'right') || (profileSign === -1 && side === 'left')
+        );
+        const isFarLeg = isProfileStance && profileSign !== 0 && !isNearLeg;
+
         if (!hip || !knee) {
             return {
                 pitch: 0,
@@ -2037,8 +2092,8 @@ export class TorsoPoseEstimator {
         const mpDzFemur = -((knee.z || 0) - (hip.z || 0));
         let dzFemur = 0.0;
         if (isProfileStance && profileSign !== 0) {
-            // 側身模式下，相機 Z 軸對應體側冠狀微偏移，依 profileSign 與左右側決定深淺
-            dzFemur = profileSign * sign * 0.05 * LFemur;
+            // 側身模式下，近側腿面向鏡頭微正向偏移，遠側腿背對鏡頭微負向偏移
+            dzFemur = isNearLeg ? (0.05 * LFemur) : (-0.05 * LFemur);
         } else if (lFemur2D < LFemur * 0.95) {
             dzFemur = this._clamp(rawDzFemur * mpDzFemur * 0.5, -0.35 * LFemur, 0.35 * LFemur);
             if (isBackStance) {
@@ -2058,7 +2113,7 @@ export class TorsoPoseEstimator {
             const mpDzShin = -((ankle.z || 0) - (knee.z || 0));
             let dzShin = isBackStance ? (0.05 * LTibia) : (-0.05 * LTibia);
             if (isProfileStance && profileSign !== 0) {
-                dzShin = profileSign * sign * 0.04 * LTibia;
+                dzShin = isNearLeg ? (0.04 * LTibia) : (-0.04 * LTibia);
             } else if (lShin2D < LTibia * 0.95) {
                 // 若大腿垂直下垂但小腿嚴重短縮 (常為裁切照或裙襬假特徵)，不可推估過深深度避免假性屈膝跪姿
                 const isFemurDown = dyFemur < -0.08 && Math.abs(dxFemur) < 0.65 * Math.abs(dyFemur);
