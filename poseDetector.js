@@ -340,6 +340,49 @@ export class TorsoPoseEstimator {
         }
         headPitch = this._clamp(headPitch, -0.42, 0.42);
 
+        // 4b. 2D 頭部幾何跨度與頂點位置預估 (Head Span & Crown Top)
+        let headSpan2D = 0;
+        let headTopY = (leftEye && rightEye) ? (leftEye.y + rightEye.y) * 0.5 - 0.05 : 0.1;
+        if (leftEye && rightEye && nose) {
+            const midEyeY = (leftEye.y + rightEye.y) * 0.5;
+
+            // 1. 優先使用五官解剖黃金比例 (眼-口垂直軸佔全頭骨垂直高度約 35.5%)
+            if (leftMouth && rightMouth) {
+                const midMouthY = (leftMouth.y + rightMouth.y) * 0.5;
+                const eyeMouthDy = Math.abs(midMouthY - midEyeY);
+                if (eyeMouthDy > 0.015) {
+                    headSpan2D = eyeMouthDy / 0.355;
+                    headTopY = midEyeY - headSpan2D * 0.50;
+                }
+            }
+
+            // 2. 次選使用眼-鼻軸推算 (眼-鼻垂直軸佔全頭高約 22%)
+            if (headSpan2D <= 0 && nose) {
+                const eyeNoseDy = Math.abs(nose.y - midEyeY);
+                if (eyeNoseDy > 0.01) {
+                    headSpan2D = eyeNoseDy / 0.22;
+                    headTopY = midEyeY - headSpan2D * 0.50;
+                }
+            }
+
+            // 3. 次選使用雙耳橫向跨度推算 (頭寬佔全頭高約 64%)
+            if (headSpan2D <= 0 && leftEar && rightEar) {
+                const earDist = Math.abs(leftEar.x - rightEar.x) * ar;
+                if (earDist > 0.02) {
+                    headSpan2D = earDist / 0.64;
+                    headTopY = midEyeY - headSpan2D * 0.50;
+                }
+            }
+
+            // 4. 最後備援：使用眼肩距折算
+            if (headSpan2D <= 0 && leftShoulder && rightShoulder) {
+                const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
+                const eyeShoulderDy = Math.max(0.04, midShoulderY - midEyeY);
+                headSpan2D = eyeShoulderDy * 1.18;
+                headTopY = midEyeY - headSpan2D * 0.50;
+            }
+        }
+
         // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
@@ -477,27 +520,65 @@ export class TorsoPoseEstimator {
         const activeRightWrist = sanitizeWristOcclusion(rightShoulder, rightElbow, rightWrist, rightHip, matchedRightHand, 'right');
 
         // 判定手部姿態類型 (摸頭撫面手 / 插腰手 / 前置手 / 體側垂手)
-        const checkTouchingHead = (s, w, handLandmarks, side) => {
-            if (!s || !nose) return false;
+        const checkTouchingHead = (s, e, w, handLandmarks, side) => {
+            if (!s || !e || !w || !nose) return false;
+
+            // 1. 手肘必須顯著屈曲 (伸直的手臂絕不可能摸頭，徹底排除指天、跳舞、招手)
+            const armDx = (e.x - s.x) * ar;
+            const armDy = e.y - s.y;
+            const foreDx = (w.x - e.x) * ar;
+            const foreDy = w.y - e.y;
+            const dot = armDx * foreDx + armDy * foreDy;
+            const lA = Math.hypot(armDx, armDy);
+            const lF = Math.hypot(foreDx, foreDy);
+            const flex2D = Math.acos(Math.max(-1, Math.min(1, dot / (lA * lF + 1e-5))));
+            if (flex2D < 0.85) return false; // 屈曲小於 ~49° 直接排除
+
+            // 2. 特殊外展手勢排除 (如指天 point、比耶 peace、比讚 thumbsUp)
+            if (handLandmarks && handLandmarks.length >= 21) {
+                const g = this._classifyHandGesture(handLandmarks);
+                if (g === 'point' || g === 'peace' || g === 'thumbsUp') {
+                    return false;
+                }
+            }
+
+            // 3. 垂直高度檢測：手腕必須在頭顱高度範圍內 (不得高於頭頂太遠，亦不得低於下巴胸部)
+            const hSpan = headSpan2D > 0.02 ? headSpan2D : torsoHeight * 0.48;
+            const topY = midEyeY - hSpan * 0.48;
+            const btmY = nose.y + hSpan * 0.42;
+
             const testPt = (handLandmarks && handLandmarks.length >= 21) ? handLandmarks[0] : w;
-            if (!testPt) return false;
-            // 垂直高度：手腕或手掌在肩膀以上 (或頸部/下巴以上)
-            const isHigh = testPt.y < (s.y + 0.08 * torsoHeight);
-            if (!isHigh) return false;
+            if (testPt.y < (topY - 0.05 * torsoHeight)) return false; // 空中高舉手
+            if (testPt.y > (btmY + 0.08 * torsoHeight)) return false; // 低於頸下胸腹手
 
-            // 水平跨度：手腕或手掌與頭部中心 (鼻眼) 橫向距離接近頭顱半徑
-            const dx = Math.abs(testPt.x - nose.x) * ar;
-            const nearHeadX = dx < 0.24;
+            // 4. 頭顱外輪廓鄰域檢測 (手腕或指骨必須貼近頭部橢圓外輪廓)
+            const headCenterY = (midEyeY + nose.y) * 0.5;
+            const headRadX = Math.max(0.06, hSpan * 0.38);
+            const headRadY = Math.max(0.08, hSpan * 0.52);
 
-            // 檢查 21 節點中食指/中指尖端 (8, 12) 是否接近頭部
-            let tipNearHead = false;
+            const normWx = Math.abs(testPt.x - nose.x) * ar / headRadX;
+            const normWy = Math.abs(testPt.y - headCenterY) / headRadY;
+            const distWristSq = normWx * normWx + normWy * normWy;
+
+            // 檢查食指與中指尖
+            let minTipDistSq = 999;
             if (handLandmarks && handLandmarks.length >= 21) {
                 const tip8 = handLandmarks[8];
                 const tip12 = handLandmarks[12];
-                if (tip8 && Math.abs(tip8.x - nose.x) * ar < 0.22 && tip8.y < s.y + 0.05 * torsoHeight) tipNearHead = true;
-                if (tip12 && Math.abs(tip12.x - nose.x) * ar < 0.22 && tip12.y < s.y + 0.05 * torsoHeight) tipNearHead = true;
+                if (tip8) {
+                    const tx = Math.abs(tip8.x - nose.x) * ar / headRadX;
+                    const ty = Math.abs(tip8.y - headCenterY) / headRadY;
+                    minTipDistSq = Math.min(minTipDistSq, tx * tx + ty * ty);
+                }
+                if (tip12) {
+                    const tx = Math.abs(tip12.x - nose.x) * ar / headRadX;
+                    const ty = Math.abs(tip12.y - headCenterY) / headRadY;
+                    minTipDistSq = Math.min(minTipDistSq, tx * tx + ty * ty);
+                }
             }
-            return nearHeadX || tipNearHead;
+
+            const bestDistSq = Math.min(distWristSq, minTipDistSq);
+            return (bestDistSq <= 3.0);
         };
 
         const checkFrontOfPelvis = (w) => {
@@ -524,8 +605,8 @@ export class TorsoPoseEstimator {
             return (elbowFlared > 0.045 && wristInward > 0.04 && flexAngle > 0.65 && atWaistHeight);
         };
 
-        const isLeftTouchingHead = checkTouchingHead(leftShoulder, activeLeftWrist, matchedLeftHand, 'left');
-        const isRightTouchingHead = checkTouchingHead(rightShoulder, activeRightWrist, matchedRightHand, 'right');
+        const isLeftTouchingHead = checkTouchingHead(leftShoulder, leftElbow, activeLeftWrist, matchedLeftHand, 'left');
+        const isRightTouchingHead = checkTouchingHead(rightShoulder, rightElbow, activeRightWrist, matchedRightHand, 'right');
 
         const isLeftHandOnHip = !isLeftTouchingHead && checkHandOnHip(leftShoulder, leftElbow, activeLeftWrist, 'left');
         const isRightHandOnHip = !isRightTouchingHead && checkHandOnHip(rightShoulder, rightElbow, activeRightWrist, 'right');
@@ -714,46 +795,6 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         let headToBodyRatio = 7.3; // 預設亞洲大眾寫實體型
         if (leftEye && rightEye && nose) {
-            const midEyeY = (leftEye.y + rightEye.y) * 0.5;
-            let headSpan2D = 0;
-            let headTopY = midEyeY - 0.05;
-
-            // 1. 優先使用五官解剖黃金比例 (眼-口垂直軸佔全頭骨垂直高度約 35.5%)
-            if (leftMouth && rightMouth) {
-                const midMouthY = (leftMouth.y + rightMouth.y) * 0.5;
-                const eyeMouthDy = Math.abs(midMouthY - midEyeY);
-                if (eyeMouthDy > 0.015) {
-                    headSpan2D = eyeMouthDy / 0.355;
-                    headTopY = midEyeY - headSpan2D * 0.50;
-                }
-            }
-
-            // 2. 次選使用眼-鼻軸推算 (眼-鼻垂直軸佔全頭高約 22%)
-            if (headSpan2D <= 0 && nose) {
-                const eyeNoseDy = Math.abs(nose.y - midEyeY);
-                if (eyeNoseDy > 0.01) {
-                    headSpan2D = eyeNoseDy / 0.22;
-                    headTopY = midEyeY - headSpan2D * 0.50;
-                }
-            }
-
-            // 3. 次選使用雙耳橫向跨度推算 (頭寬佔全頭高約 64%)
-            if (headSpan2D <= 0 && leftEar && rightEar) {
-                const earDist = Math.abs(leftEar.x - rightEar.x) * ar;
-                if (earDist > 0.02) {
-                    headSpan2D = earDist / 0.64;
-                    headTopY = midEyeY - headSpan2D * 0.50;
-                }
-            }
-
-            // 4. 最後備援：使用眼肩距折算 (眼至下巴約 0.50 頭高，脖子約 0.35 頭高)
-            if (headSpan2D <= 0 && leftShoulder && rightShoulder) {
-                const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
-                const eyeShoulderDy = Math.max(0.04, midShoulderY - midEyeY);
-                headSpan2D = eyeShoulderDy * 1.18;
-                headTopY = midEyeY - headSpan2D * 0.50;
-            }
-
             // 尋找雙腳在 2D 影像中的最低點 (Foot / Ankle / Heel / FootIndex)
             const footYValues = [
                 leftAnkle ? leftAnkle.y : null,
@@ -798,7 +839,7 @@ export class TorsoPoseEstimator {
             // 其解剖距離本就遠窄於外部骨盆/側腰輪廓，故男女基準比值通常在 1.65 ~ 2.40 之間。
             // 結合肩寬軀幹比 (Shoulder-to-Torso Ratio) 進行綜合形態打分：
             const shoulderToTorsoRatio = shoulderWidth2D / Math.max(0.1, torsoHeight);
-            const maleScore = (shoulderToHipRatio - 1.84) * 2.0 + (shoulderToTorsoRatio - 0.78) * 1.5;
+            const maleScore = (shoulderToHipRatio - 1.68) * 2.0 + (shoulderToTorsoRatio - 0.70) * 1.5;
 
             if (maleScore >= 0) {
                 suggestedGender = 'male';
