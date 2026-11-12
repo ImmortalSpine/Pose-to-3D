@@ -60,15 +60,24 @@
             <div class="panel-header-bar">
                 <span class="panel-header-title">🦴 3D 骨骼模型 (360° 互動視窗)</span>
                 <div class="view-gizmo-bar">
-                    <button class="gizmo-btn active" id="btnFrontView">正視圖</button>
-                    <button class="gizmo-btn" id="btnSideView">側視圖</button>
-                    <button class="gizmo-btn" id="btnBackView">後視圖</button>
-                    <button class="gizmo-btn" id="btnTopView">俯視圖</button>
-                    <button class="gizmo-btn" id="btnResetCamera">重設</button>
+                    <button class="gizmo-btn active" id="btnFrontView" title="正面視角">正視圖</button>
+                    <button class="gizmo-btn" id="btnSideView" title="側面視角">側視圖</button>
+                    <button class="gizmo-btn" id="btnBackView" title="背面視角">後視圖</button>
+                    <button class="gizmo-btn" id="btnTopView" title="俯視視角">俯視圖</button>
+                    <button class="gizmo-btn" id="btnZoomIn" title="放大視角 (滾輪向上 / 快捷鍵 +)">➕ 放大</button>
+                    <button class="gizmo-btn" id="btnZoomOut" title="縮小視角 (滾輪向下 / 快捷鍵 -)">➖ 縮小</button>
+                    <button class="gizmo-btn" id="btnResetCamera" title="自適應全人體視野 (快捷鍵 F)">🎯 全身置中</button>
                 </div>
             </div>
             <div class="viewport-canvas-container" id="viewportArea">
                 <canvas id="canvas3d"></canvas>
+
+                <!-- 畫布懸浮縮放控制器 -->
+                <div class="viewport-floating-controls">
+                    <button class="viewport-float-btn" id="btnFloatZoomIn" title="放大視角 (滾輪向上 / 快捷鍵 +)">➕</button>
+                    <button class="viewport-float-btn" id="btnFloatZoomOut" title="縮小視角 (滾輪向下 / 快捷鍵 -)">➖</button>
+                    <button class="viewport-float-btn" id="btnFloatFit" title="適應全身體態 (快捷鍵 F)">🎯</button>
+                </div>
 
                 <!-- 狀態提示膠囊 -->
                 <div class="status-pill" id="statusPill">
@@ -473,7 +482,7 @@
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=3.5"></script>
+    <script type="module" src="app.js?v=3.6"></script>
 </body>
 </html>
 

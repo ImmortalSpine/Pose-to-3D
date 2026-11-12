@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=3.5';
-import { TorsoPoseEstimator } from './poseDetector.js?v=3.5';
+import { AnatomicalTorso } from './anatomy.js?v=3.6';
+import { TorsoPoseEstimator } from './poseDetector.js?v=3.6';
 
 class App {
     constructor() {
@@ -89,7 +89,10 @@ class App {
         const height = Math.max(this.viewportArea.clientHeight, 300);
         const aspect = width / height;
         this.camera = new THREE.PerspectiveCamera(38, aspect, 0.1, 1000);
-        this.camera.position.set(0, -3.0, 48);
+
+        const targetY = 2.0;
+        const initialDist = this._calculateIdealCameraDistance();
+        this.camera.position.set(0, targetY, initialDist);
 
         this.renderer = new THREE.WebGLRenderer({
             canvas: this.canvas,
@@ -104,9 +107,11 @@ class App {
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.05;
-        this.controls.target.set(0, -4.0, 0); // 居中聚焦在全人體骨骼中心
-        this.controls.maxDistance = 85;
-        this.controls.minDistance = 6;
+        this.controls.target.set(0, targetY, 0); // 居中聚焦在全人體骨骼中心 (腰椎與骨盆上方)
+        this.controls.maxDistance = 350;         // 允許大幅度縮小以綜覽全景與地面
+        this.controls.minDistance = 3;           // 允許大幅度放大以觀察手掌、頭骨與脊椎骨節特寫
+        this.controls.enableZoom = true;
+        this.controls.zoomSpeed = 1.0;
 
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
         this.scene.add(ambientLight);
@@ -316,12 +321,31 @@ class App {
             this._updateSlidersUI();
         });
 
-        // 快速視角按鈕
-        document.getElementById('btnFrontView').addEventListener('click', () => this._setCameraView('front'));
-        document.getElementById('btnSideView').addEventListener('click', () => this._setCameraView('side'));
-        document.getElementById('btnBackView').addEventListener('click', () => this._setCameraView('back'));
-        document.getElementById('btnTopView').addEventListener('click', () => this._setCameraView('top'));
-        document.getElementById('btnResetCamera').addEventListener('click', () => this._setCameraView('front'));
+        // 快速視角切換
+        document.getElementById('btnFrontView')?.addEventListener('click', () => this._setCameraView('front'));
+        document.getElementById('btnSideView')?.addEventListener('click', () => this._setCameraView('side'));
+        document.getElementById('btnBackView')?.addEventListener('click', () => this._setCameraView('back'));
+        document.getElementById('btnTopView')?.addEventListener('click', () => this._setCameraView('top'));
+        document.getElementById('btnResetCamera')?.addEventListener('click', () => this._fitCameraToSkeleton('front'));
+
+        // 放大與縮小控制 (頂部工具列按鈕 & 畫布懸浮按鈕)
+        document.getElementById('btnZoomIn')?.addEventListener('click', () => this._zoomCamera(0.80));
+        document.getElementById('btnZoomOut')?.addEventListener('click', () => this._zoomCamera(1.25));
+        document.getElementById('btnFloatZoomIn')?.addEventListener('click', () => this._zoomCamera(0.80));
+        document.getElementById('btnFloatZoomOut')?.addEventListener('click', () => this._zoomCamera(1.25));
+        document.getElementById('btnFloatFit')?.addEventListener('click', () => this._fitCameraToSkeleton('front'));
+
+        // 鍵盤快速鍵支援 (+/- 放大縮小，F/0 全身置中)
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+            if (e.key === '+' || e.key === '=') {
+                this._zoomCamera(0.82);
+            } else if (e.key === '-' || e.key === '_') {
+                this._zoomCamera(1.22);
+            } else if (e.key === 'f' || e.key === 'F' || e.key === '0') {
+                this._fitCameraToSkeleton('front');
+            }
+        });
     }
 
     _bindSlider(sliderId, labelId, propName) {
@@ -395,11 +419,68 @@ class App {
         }
     }
 
+    /**
+     * 計算全人體骨骼在當前畫布長寬比下的理想相機觀測距離 (保證頭頂與雙腳永遠完整可見)
+     */
+    _calculateIdealCameraDistance() {
+        const skeletonHeight = 48; // 全人體總高度 (足底 -21.7 至頭頂 +26.2)
+        const skeletonWidth = 28;  // 自然肢體開展寬度
+
+        const aspect = Math.max(0.1, this.camera ? this.camera.aspect : 1.0);
+        const fov = this.camera ? this.camera.fov : 38;
+        const fovRad = (fov * Math.PI) / 180;
+        const tanHalfFov = Math.tan(fovRad * 0.5);
+
+        // 包含適度邊界留白 (Margin ~24%)，保證頭頂與雙腳絕不被視窗邊緣裁切
+        const padding = 1.24;
+        const distY = (skeletonHeight * padding * 0.5) / tanHalfFov;
+        const distX = (skeletonWidth * padding * 0.5) / (tanHalfFov * aspect);
+        return Math.max(distY, distX, 86);
+    }
+
+    /**
+     * 讓相機自動適應並置中全人體骨骼（從頭頂到腳底完整呈現）
+     */
+    _fitCameraToSkeleton(view = 'front') {
+        const dist = this._calculateIdealCameraDistance();
+        const targetY = 2.0;
+
+        if (view) {
+            this._setCameraView(view);
+        } else {
+            const offset = this.camera.position.clone().sub(this.controls.target);
+            if (offset.lengthSq() < 1e-4) {
+                this.camera.position.set(0, targetY, dist);
+            } else {
+                offset.setLength(dist);
+                this.camera.position.copy(new THREE.Vector3(0, targetY, 0)).add(offset);
+            }
+            this.controls.target.set(0, targetY, 0);
+            this.controls.update();
+        }
+    }
+
+    /**
+     * 縮放相機視野 (factor < 1 為放大靠近，factor > 1 為縮小拉遠)
+     */
+    _zoomCamera(factor) {
+        const offset = this.camera.position.clone().sub(this.controls.target);
+        const currentDist = offset.length();
+        const newDist = THREE.MathUtils.clamp(
+            currentDist * factor,
+            this.controls.minDistance,
+            this.controls.maxDistance
+        );
+        offset.setLength(newDist);
+        this.camera.position.copy(this.controls.target).add(offset);
+        this.controls.update();
+    }
+
     _setCameraView(view) {
         document.querySelectorAll('.gizmo-btn').forEach(b => b.classList.remove('active'));
 
-        const dist = 48;
-        const targetY = -4.0;
+        const dist = this._calculateIdealCameraDistance();
+        const targetY = 2.0;
         switch (view) {
             case 'front':
                 this.camera.position.set(0, targetY, dist);
@@ -441,13 +522,16 @@ class App {
                     this._updateSlidersUI();
                     this.lastLandmarks2D = pose.landmarks2D;
 
+                    // 識別完成後自動將視角調至最適全身比例，讓使用者第一眼看到完整人體骨架
+                    this._fitCameraToSkeleton('front');
+
                     if (pose.landmarks2D) {
                         this.btnToggle2D.style.display = 'inline-block';
                         this.landmarkCanvas.style.display = 'block';
                         this._draw2DLandmarks();
                     }
 
-                    this.statusText.textContent = "✅ 姿態與手勢識別完成！MediaPipe Holistic 全身與手掌 21 骨節解算手掌法向與手勢";
+                    this.statusText.textContent = "✅ 姿態與手勢識別完成！骨架已縮小適應全身視野，支援滑鼠滾輪與按鈕自由放大縮小";
                 } else {
                     this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
                 }
@@ -795,7 +879,8 @@ class App {
         this._applyPose(targetPose);
         this.aiPoseBackup = { ...targetPose };
         this._updateSlidersUI();
-        this.statusText.textContent = `✅ 已載入 ${type === 'sampleA' ? '範例 A (抬手站姿)' : '範例 B (側彎對抗)'}！`;
+        this._fitCameraToSkeleton('front');
+        this.statusText.textContent = `✅ 已載入 ${type === 'sampleA' ? '範例 A (抬手站姿)' : '範例 B (側彎對抗)'}！已自動適應全身骨架`;
     }
 
     _applyPose(pose) {
