@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=3.2';
-import { TorsoPoseEstimator } from './poseDetector.js?v=3.2';
+import { AnatomicalTorso } from './anatomy.js?v=3.3';
+import { TorsoPoseEstimator } from './poseDetector.js?v=3.3';
 
 class App {
     constructor() {
@@ -485,7 +485,7 @@ class App {
         const pMS = toScreen(lm.midShoulder);
         const pMH = toScreen(lm.midHip);
 
-        // 0. 頭部五官特徵線 (Eyes & Nose - 藝用頭部朝向)
+        // 0. 頭部五官特徵線 (Eyes & Nose - 藝用 2D 面部幾何與左右面積比)
         if (lm.leftEye && lm.rightEye) {
             const pLE = toScreen(lm.leftEye);
             const pRE = toScreen(lm.rightEye);
@@ -498,9 +498,32 @@ class App {
                 const pN = toScreen(lm.nose);
                 ctx.lineTo(pN.x, pN.y);
                 ctx.lineTo(pRE.x, pRE.y);
-                this._drawPoint(ctx, pN, '#f72585', 4.5);
+                this._drawPoint(ctx, pN, '#f72585', 5);
             }
             ctx.stroke();
+
+            // 雙眼寬度與耳側跨度
+            if (lm.leftEyeInner && lm.leftEyeOuter) {
+                const pLI = toScreen(lm.leftEyeInner);
+                const pLO = toScreen(lm.leftEyeOuter);
+                ctx.strokeStyle = '#4cc9f0';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(pLI.x, pLI.y);
+                ctx.lineTo(pLO.x, pLO.y);
+                ctx.stroke();
+            }
+            if (lm.rightEyeInner && lm.rightEyeOuter) {
+                const pRI = toScreen(lm.rightEyeInner);
+                const pRO = toScreen(lm.rightEyeOuter);
+                ctx.strokeStyle = '#4cc9f0';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(pRI.x, pRI.y);
+                ctx.lineTo(pRO.x, pRO.y);
+                ctx.stroke();
+            }
+
             this._drawPoint(ctx, pLE, '#4cc9f0', 3.5);
             this._drawPoint(ctx, pRE, '#4cc9f0', 3.5);
         }

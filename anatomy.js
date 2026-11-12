@@ -190,15 +190,16 @@ export class AnatomicalTorso {
         this._buildLowerLimb('left');
         this._buildLowerLimb('right');
 
-        // 頸椎 (C7 -> C1)
+        // 頸椎 (C7 -> C1) - 符合人體解剖學標準比例 (約佔胸椎高度之 30%~35%)
+        const cervicalHeight = 0.38;
         tParent.add(this.cervicalGroup);
-        this.cervicalGroup.position.set(0, thoracicHeight, 0);
+        this.cervicalGroup.position.set(0, 0.45, 0);
 
         let cParent = this.cervicalGroup;
         for (let i = 0; i < 7; i++) {
             const cIndex = 7 - i;
-            const vert = this._createVertebraMesh(`C${cIndex}`, 1.4 - i * 0.03, 0.75, 'cervical');
-            vert.position.set(0, (i === 0) ? 0 : 0.75, Math.sin((i / 6) * Math.PI) * 0.2);
+            const vert = this._createVertebraMesh(`C${cIndex}`, 1.25 - i * 0.02, cervicalHeight, 'cervical');
+            vert.position.set(0, (i === 0) ? 0 : cervicalHeight, Math.sin((i / 6) * Math.PI) * 0.06);
             cParent.add(vert);
             this.cervicalVertebrae.push(vert);
             cParent = vert;
@@ -207,18 +208,18 @@ export class AnatomicalTorso {
         // 寰枕關節與藝用解剖頭骨系統 (Atlanto-Occipital Joint & Skull)
         this.headJoint = new THREE.Group();
         this.headJoint.name = "AtlantoOccipital_Joint";
-        this.headJoint.position.set(0, 0.85, 0.1);
+        this.headJoint.position.set(0, 0.35, 0.05);
         cParent.add(this.headJoint);
 
         this.skullGroup = this._createSkullMesh();
         this.headJoint.add(this.skullGroup);
 
         this._addLandmark("HeadBase", new THREE.Vector3(0, 0, 0), this.headJoint);
-        this._addLandmark("SkullCrown", new THREE.Vector3(0, 4.3, -0.2), this.headJoint);
-        this._addLandmark("Glabella", new THREE.Vector3(0, 2.2, 1.4), this.headJoint);
-        this._addLandmark("ChinPoint", new THREE.Vector3(0, -0.85, 1.4), this.headJoint);
-        this._addLandmark("Zygomatic_L", new THREE.Vector3(1.5, 1.3, 1.05), this.headJoint);
-        this._addLandmark("Zygomatic_R", new THREE.Vector3(-1.5, 1.3, 1.05), this.headJoint);
+        this._addLandmark("SkullCrown", new THREE.Vector3(0, 3.4, -0.2), this.headJoint);
+        this._addLandmark("Glabella", new THREE.Vector3(0, 1.25, 1.30), this.headJoint);
+        this._addLandmark("ChinPoint", new THREE.Vector3(0, -1.35, 1.25), this.headJoint);
+        this._addLandmark("Zygomatic_L", new THREE.Vector3(1.45, 0.50, 0.95), this.headJoint);
+        this._addLandmark("Zygomatic_R", new THREE.Vector3(-1.45, 0.50, 0.95), this.headJoint);
     }
 
     /**
@@ -1486,10 +1487,10 @@ export class AnatomicalTorso {
         group.name = "Human_Skull";
 
         // 1. 腦顱骨穹隆 (Cranial Vault / Calvaria) - 頂骨、枕骨、額骨
-        const craniumGeo = new THREE.SphereGeometry(1.9, 16, 16);
+        const craniumGeo = new THREE.SphereGeometry(1.85, 16, 16);
         const craniumMesh = new THREE.Mesh(craniumGeo, this.materials.bone);
-        craniumMesh.scale.set(1.0, 1.15, 1.25);
-        craniumMesh.position.set(0, 2.4, -0.4);
+        craniumMesh.scale.set(1.0, 1.12, 1.22);
+        craniumMesh.position.set(0, 1.45, -0.35);
         craniumMesh.castShadow = true;
         group.add(craniumMesh);
 
@@ -1497,98 +1498,98 @@ export class AnatomicalTorso {
         const occiputGeo = new THREE.SphereGeometry(0.5, 8, 8);
         const occiputMesh = new THREE.Mesh(occiputGeo, this.materials.boneHighlight);
         occiputMesh.scale.set(1.1, 0.8, 0.9);
-        occiputMesh.position.set(0, 1.3, -1.8);
+        occiputMesh.position.set(0, 0.45, -1.65);
         group.add(occiputMesh);
 
         // 2. 額骨前壁與眉弓隆起 (Frontal Bone & Superciliary Arches / Glabella)
-        const browGeo = new THREE.BoxGeometry(2.3, 0.45, 0.7);
+        const browGeo = new THREE.BoxGeometry(2.25, 0.42, 0.65);
         const browMesh = new THREE.Mesh(browGeo, this.materials.boneHighlight);
-        browMesh.position.set(0, 2.2, 1.35);
+        browMesh.position.set(0, 1.25, 1.30);
         group.add(browMesh);
 
         // 3. 雙側眼眶骨架 (Orbital Cavities & Rims)
         [-1, 1].forEach(sign => {
-            const orbitRimGeo = new THREE.TorusGeometry(0.55, 0.16, 8, 14);
+            const orbitRimGeo = new THREE.TorusGeometry(0.52, 0.15, 8, 14);
             const orbitRimMesh = new THREE.Mesh(orbitRimGeo, this.materials.boneHighlight);
-            orbitRimMesh.position.set(sign * 0.85, 1.6, 1.45);
+            orbitRimMesh.position.set(sign * 0.82, 0.75, 1.35);
             group.add(orbitRimMesh);
 
-            const darkOrbitGeo = new THREE.CylinderGeometry(0.48, 0.35, 0.4, 10);
+            const darkOrbitGeo = new THREE.CylinderGeometry(0.46, 0.35, 0.4, 10);
             const darkOrbitMat = new THREE.MeshBasicMaterial({ color: 0x1a1512 });
             const darkOrbitMesh = new THREE.Mesh(darkOrbitGeo, darkOrbitMat);
             darkOrbitMesh.rotation.x = Math.PI * 0.5;
-            darkOrbitMesh.position.set(sign * 0.85, 1.6, 1.3);
+            darkOrbitMesh.position.set(sign * 0.82, 0.75, 1.25);
             group.add(darkOrbitMesh);
         });
 
         // 4. 顴骨與顴弓 (Zygomatic Bones & Zygomatic Arches - 臉部最寬藝用骨點)
         [-1, 1].forEach(sign => {
-            const zygoGeo = new THREE.BoxGeometry(0.65, 0.75, 0.8);
+            const zygoGeo = new THREE.BoxGeometry(0.65, 0.72, 0.75);
             const zygoMesh = new THREE.Mesh(zygoGeo, this.materials.boneHighlight);
-            zygoMesh.position.set(sign * 1.5, 1.3, 1.05);
+            zygoMesh.position.set(sign * 1.45, 0.50, 0.95);
             group.add(zygoMesh);
 
-            const archP0 = new THREE.Vector3(sign * 1.5, 1.3, 1.05);
-            const archP1 = new THREE.Vector3(sign * 1.85, 1.25, 0.2);
-            const archP2 = new THREE.Vector3(sign * 1.75, 1.2, -0.6);
+            const archP0 = new THREE.Vector3(sign * 1.45, 0.50, 0.95);
+            const archP1 = new THREE.Vector3(sign * 1.75, 0.45, 0.1);
+            const archP2 = new THREE.Vector3(sign * 1.65, 0.40, -0.65);
             const archCurve = new THREE.CatmullRomCurve3([archP0, archP1, archP2]);
-            const archGeo = new THREE.TubeGeometry(archCurve, 8, 0.15, 6, false);
+            const archGeo = new THREE.TubeGeometry(archCurve, 8, 0.14, 6, false);
             const archMesh = new THREE.Mesh(archGeo, this.materials.boneHighlight);
             group.add(archMesh);
         });
 
         // 5. 鼻骨與梨狀孔 (Nasal Bone & Piriform Aperture)
-        const nasalBridgeGeo = new THREE.ConeGeometry(0.3, 0.95, 5);
+        const nasalBridgeGeo = new THREE.ConeGeometry(0.28, 0.90, 5);
         const nasalBridgeMesh = new THREE.Mesh(nasalBridgeGeo, this.materials.boneHighlight);
         nasalBridgeMesh.rotation.x = -0.32;
-        nasalBridgeMesh.position.set(0, 1.65, 1.75);
+        nasalBridgeMesh.position.set(0, 0.75, 1.65);
         group.add(nasalBridgeMesh);
 
-        const piriformGeo = new THREE.BoxGeometry(0.45, 0.75, 0.4);
+        const piriformGeo = new THREE.BoxGeometry(0.42, 0.70, 0.4);
         const piriformMat = new THREE.MeshBasicMaterial({ color: 0x151110 });
         const piriformMesh = new THREE.Mesh(piriformGeo, piriformMat);
-        piriformMesh.position.set(0, 1.05, 1.45);
+        piriformMesh.position.set(0, 0.25, 1.35);
         group.add(piriformMesh);
 
         // 6. 上頜骨與上牙弓 (Maxilla & Upper Dentition)
-        const maxillaGeo = new THREE.BoxGeometry(1.6, 0.85, 1.1);
+        const maxillaGeo = new THREE.BoxGeometry(1.55, 0.80, 1.05);
         const maxillaMesh = new THREE.Mesh(maxillaGeo, this.materials.bone);
-        maxillaMesh.position.set(0, 0.45, 1.15);
+        maxillaMesh.position.set(0, -0.25, 1.05);
         group.add(maxillaMesh);
 
-        const upperTeethGeo = new THREE.CylinderGeometry(0.65, 0.7, 0.35, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
+        const upperTeethGeo = new THREE.CylinderGeometry(0.62, 0.68, 0.32, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
         const teethMat = new THREE.MeshStandardMaterial({ color: 0xfaf5ec, roughness: 0.25 });
         const upperTeethMesh = new THREE.Mesh(upperTeethGeo, teethMat);
-        upperTeethMesh.position.set(0, 0.05, 1.15);
+        upperTeethMesh.position.set(0, -0.60, 1.05);
         group.add(upperTeethMesh);
 
         // 7. 下頜骨系統 (Mandible: 下頜體、下頜角、下頜支與下巴頦結節)
         const mandibleGroup = new THREE.Group();
         mandibleGroup.name = "Mandible";
 
-        const chinGeo = new THREE.BoxGeometry(0.85, 0.65, 0.75);
+        const chinGeo = new THREE.BoxGeometry(0.82, 0.62, 0.72);
         const chinMesh = new THREE.Mesh(chinGeo, this.materials.boneHighlight);
-        chinMesh.position.set(0, -0.85, 1.35);
+        chinMesh.position.set(0, -1.35, 1.25);
         mandibleGroup.add(chinMesh);
 
-        const lowerTeethGeo = new THREE.CylinderGeometry(0.6, 0.65, 0.32, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
+        const lowerTeethGeo = new THREE.CylinderGeometry(0.58, 0.63, 0.30, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
         const lowerTeethMesh = new THREE.Mesh(lowerTeethGeo, teethMat);
-        lowerTeethMesh.position.set(0, -0.35, 1.12);
+        lowerTeethMesh.position.set(0, -0.90, 1.02);
         mandibleGroup.add(lowerTeethMesh);
 
         [-1, 1].forEach(sign => {
-            const jawP0 = new THREE.Vector3(0, -0.85, 1.35);
-            const jawP1 = new THREE.Vector3(sign * 1.1, -0.75, 0.8);
-            const jawP2 = new THREE.Vector3(sign * 1.45, -0.4, 0.0);
-            const jawP3 = new THREE.Vector3(sign * 1.4, 0.65, -0.15);
+            const jawP0 = new THREE.Vector3(0, -1.35, 1.25);
+            const jawP1 = new THREE.Vector3(sign * 1.05, -1.25, 0.75);
+            const jawP2 = new THREE.Vector3(sign * 1.40, -0.85, -0.05);
+            const jawP3 = new THREE.Vector3(sign * 1.35, 0.15, -0.20);
 
             const jawCurve = new THREE.CatmullRomCurve3([jawP0, jawP1, jawP2, jawP3]);
-            const jawGeo = new THREE.TubeGeometry(jawCurve, 12, 0.24, 6, false);
+            const jawGeo = new THREE.TubeGeometry(jawCurve, 12, 0.22, 6, false);
             const jawMesh = new THREE.Mesh(jawGeo, this.materials.bone);
             jawMesh.castShadow = true;
             mandibleGroup.add(jawMesh);
 
-            const gonionGeo = new THREE.SphereGeometry(0.28, 6, 6);
+            const gonionGeo = new THREE.SphereGeometry(0.26, 6, 6);
             const gonionMesh = new THREE.Mesh(gonionGeo, this.materials.boneHighlight);
             gonionMesh.position.copy(jawP2);
             mandibleGroup.add(gonionMesh);

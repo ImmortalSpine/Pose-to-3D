@@ -218,6 +218,8 @@ export class TorsoPoseEstimator {
 
         // -------------------------------------------------------------
         // 藝用解剖頭部姿態解算 (Head Yaw, Pitch, Roll)
+        // 核心：純 2D 幾何五官比例與兩側投影面積 (Eye & Facial Area Symmetry)
+        // 徹底杜絕單圖 3D z 深度噪聲與單臂舉天造成的假性旋轉
         // -------------------------------------------------------------
         let headRoll = 0;
         if (leftEye && rightEye) {
@@ -226,33 +228,40 @@ export class TorsoPoseEstimator {
             headRoll = -Math.atan2(eyeDy, Math.max(0.01, eyeDx));
         }
 
+        // 1. 眼睛投影寬度/面積縮小率 (Eye Width / Area Foreshortening)
+        let eyeWidthAsym = 0;
+        if (leftEyeInner && leftEyeOuter && rightEyeInner && rightEyeOuter) {
+            const leftEyeW = Math.hypot((leftEyeOuter.x - leftEyeInner.x) * ar, leftEyeOuter.y - leftEyeInner.y);
+            const rightEyeW = Math.hypot((rightEyeOuter.x - rightEyeInner.x) * ar, rightEyeOuter.y - rightEyeInner.y);
+            eyeWidthAsym = (rightEyeW - leftEyeW) / Math.max(0.005, rightEyeW + leftEyeW);
+        }
+
+        // 2. 鼻樑正中線分割面部左右兩側跨度與面積比 (Facial Halves Area & Span Ratio)
         let headYaw = 0;
         if (leftEye && rightEye && nose) {
-            const eyeDx = (leftEye.x - rightEye.x) * ar;
-            const midEyeX = (leftEye.x + rightEye.x) * 0.5;
-            // 2D 雙眼與鼻樑對稱度偏移量 (鼻尖朝向人物左側時為正)
-            const eyeSpanRaw = Math.max(0.02, Math.abs(leftEye.x - rightEye.x));
-            const noseOffset2D = (nose.x - midEyeX) / eyeSpanRaw;
-            const yawFrom2D = noseOffset2D * 1.5;
+            // 人物左半臉跨度 (鼻尖至左眼外角 / 左眼)
+            const leftRefX = (leftEyeOuter ? leftEyeOuter.x : leftEye.x);
+            const rightRefX = (rightEyeOuter ? rightEyeOuter.x : rightEye.x);
+            const spanLeftEye = Math.abs(leftRefX - nose.x) * ar;
+            const spanRightEye = Math.abs(rightRefX - nose.x) * ar;
+            const eyeSpanAsym = (spanRightEye - spanLeftEye) / Math.max(0.01, spanRightEye + spanLeftEye);
 
-            // 3D 雙眼深度差
-            const eyeDz = (leftEye.z || 0) - (rightEye.z || 0);
-            const yawFrom3D = Math.atan2(eyeDz, Math.max(0.02, eyeDx));
-
-            // 耳朵可見性輔助 (雙耳可見時進一步校驗)
-            let earYaw = 0;
-            let hasEarBonus = false;
+            let earSpanAsym = 0;
+            let hasBothEars = false;
             if (leftEar && rightEar) {
-                const earDx = (leftEar.x - rightEar.x) * ar;
-                const earDz = (leftEar.z || 0) - (rightEar.z || 0);
-                earYaw = Math.atan2(earDz, Math.max(0.04, earDx));
-                hasEarBonus = true;
+                const spanLeftEar = Math.abs(leftEar.x - nose.x) * ar;
+                const spanRightEar = Math.abs(rightEar.x - nose.x) * ar;
+                earSpanAsym = (spanRightEar - spanLeftEar) / Math.max(0.02, spanRightEar + spanLeftEar);
+                hasBothEars = true;
             }
 
-            if (hasEarBonus) {
-                headYaw = yawFrom2D * 0.45 + yawFrom3D * 0.25 + earYaw * 0.30;
+            // 純 2D 幾何解算 Head Yaw (零深度噪聲干擾)
+            if (hasBothEars) {
+                // 雙耳皆可見時：耳鼻跨度比與眼鼻跨度比強強聯合，高度穩定
+                headYaw = (earSpanAsym * 0.60 + eyeSpanAsym * 0.40) * 1.55;
             } else {
-                headYaw = yawFrom2D * 0.65 + yawFrom3D * 0.35;
+                // 單側耳遮擋時：結合眼鼻跨度比與眼睛面積縮小率
+                headYaw = (eyeSpanAsym * 0.70 + eyeWidthAsym * 0.30) * 1.65;
             }
         }
         headYaw = this._clamp(headYaw, -1.3, 1.3);
@@ -262,22 +271,24 @@ export class TorsoPoseEstimator {
             const midEyeY = (leftEye.y + rightEye.y) * 0.5;
             const eyeNoseDy = nose.y - midEyeY;
             const pitchOffset = (eyeNoseDy / Math.max(0.05, torsoHeight * 0.22)) - 0.45;
-            headPitch = -pitchOffset * 0.8 + ((nose.z || 0) - ((leftEye.z || 0) + (rightEye.z || 0)) * 0.5) * 1.2;
+            headPitch = -pitchOffset * 0.75;
         }
         headPitch = this._clamp(headPitch, -0.45, 0.45);
 
         // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
-        // 結合 MediaPipe 雙肩與雙髖在 3D 相機空間中的真實法向投影 (atan2(Δz, Δx))
-        // 透過平滑死區濾波 (Deadzone Filter, 門檻 0.055)：
-        // - 正面站姿下單圖深度噪聲全部平滑歸零 (0° 正面，絕不產生假性側轉)
-        // - 側身與 3/4 轉向 (如迪斯可舞姿、側身夾克/西裝模特兒) 靈敏還原其真實側向偏轉角
-        const rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
-        const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
-        const combinedDz = (rawDz * 0.70 + hipDz * 0.30);
-
+        const hipDzMag = Math.abs(hipDz);
         const deadzoneThreshold = 0.055;
+        let effHipDz = 0.0;
+        if (hipDzMag > deadzoneThreshold) {
+            effHipDz = Math.sign(hipDz) * (hipDzMag - deadzoneThreshold);
+        }
+        let pelvisYaw = Math.atan2(effHipDz, Math.max(0.02, Math.abs(hipDx)));
+        pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
+
+        const rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
+        const combinedDz = (rawDz * 0.70 + hipDz * 0.30);
         const dzMag = Math.abs(combinedDz);
         let effDz = 0.0;
         if (dzMag > deadzoneThreshold) {
@@ -285,22 +296,25 @@ export class TorsoPoseEstimator {
         }
         let thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
 
-        // 生理頸椎轉動範圍極限保護 (Cervical Physiological Constraint):
-        // 人體頸椎最大生理主動旋轉約 ±40°~45° (約 0.70 rad)。在自然姿態下，胸腔轉向與頭部朝向差值不可超出此極限！
-        // 當頭部正對鏡頭時 (headYaw ≈ 0°)，即便單手高舉造成 MediaPipe 肩部深度噪聲 (Δz)，
-        // 胸腔轉動角 (thoracicYaw) 亦被安全約束在 [headYaw - 0.48, headYaw + 0.48] 範圍內 (約 ±27.5°)，
-        // 徹底杜絕正面照誤判成 70° 大側身的問題！
-        const maxCervicalTwist = 0.48;
-        thoracicYaw = this._clamp(thoracicYaw, headYaw - maxCervicalTwist, headYaw + maxCervicalTwist);
-        thoracicYaw = this._clamp(thoracicYaw, -1.2, 1.2);
+        // 脊椎動態鏈生理雙向約束 (Spine Biomechanical Dual-Anchor Guardrail):
+        // 胸廓位於骨盆與頭部之間，其水平偏轉不可超出腰椎與頸椎之主動旋轉生理極限！
+        const maxSpineTwist = 0.40; // 約 23°
+        const minThoracicYaw = Math.max(pelvisYaw - maxSpineTwist, headYaw - maxSpineTwist);
+        const maxThoracicYaw = Math.min(pelvisYaw + maxSpineTwist, headYaw + maxSpineTwist);
 
-        const hipDzMag = Math.abs(hipDz);
-        let effHipDz = 0.0;
-        if (hipDzMag > deadzoneThreshold) {
-            effHipDz = Math.sign(hipDz) * (hipDzMag - deadzoneThreshold);
+        if (minThoracicYaw <= maxThoracicYaw) {
+            thoracicYaw = this._clamp(thoracicYaw, minThoracicYaw, maxThoracicYaw);
+        } else {
+            const midYaw = (pelvisYaw + headYaw) * 0.5;
+            thoracicYaw = this._clamp(thoracicYaw, midYaw - 0.35, midYaw + 0.35);
         }
-        let pelvisYaw = Math.atan2(effHipDz, Math.max(0.02, Math.abs(hipDx)));
-        pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
+
+        // 解剖特例保護：當骨盆與面部均正視鏡頭 (|yaw| < 0.20)，且雙肩寬度未在相機平面壓縮 (shoulderSpan / torsoHeight > 0.65) 時，
+        // 單側抬手舉高產生的肩部假性深度噪聲全部平滑歸零，胸廓穩定維持自然正面 (±8°)
+        const normShoulderSpan = shoulderSpan / torsoHeight;
+        if (normShoulderSpan > 0.65 && Math.abs(headYaw) < 0.20 && Math.abs(pelvisYaw) < 0.20) {
+            thoracicYaw = this._clamp(thoracicYaw, -0.14, 0.14);
+        }
 
         // 6. 胸廓側傾 (Roll - 高低肩)
         let thoracicRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
@@ -600,6 +614,8 @@ export class TorsoPoseEstimator {
                 midShoulder, midHip,
                 nose,
                 leftEye, rightEye,
+                leftEyeInner, leftEyeOuter,
+                rightEyeInner, rightEyeOuter,
                 leftEar, rightEar,
                 leftHand2D: matchedLeftHand,
                 rightHand2D: matchedRightHand
