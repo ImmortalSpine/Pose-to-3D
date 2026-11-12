@@ -758,50 +758,62 @@ export class TorsoPoseEstimator {
         let uArm = vArmCam.clone().applyQuaternion(qThoraxInv).normalize();
         let uFore = vForeCam.clone().applyQuaternion(qThoraxInv).normalize();
 
-        // 4. 生理防穿插約束與人體肌肉外輪廓包絡面 (Biomechanical Clearance)
+        // 4. 生理防穿插約束與人體軀幹/骨盆外輪廓包絡面 (Biomechanical Clearance & Flank Guard)
         // A. 後背壁防穿透：大臂在胸腔坐標系中 Z 軸不可向後過度延伸
         if (uArm.z < -0.22) {
             uArm.z = -0.22;
             uArm.normalize();
         }
 
-        // B. 肋骨防穿插約束：僅在手臂下垂且在軀幹高度時維持側向安全間距
-        const pShoulderLocal = new THREE.Vector3(sign * 6.5, 8.8, -0.6);
+        // 盂肱關節在胸廓坐標系中之解剖位置
+        const pShoulderLocal = new THREE.Vector3(sign * 5.35, 8.6, -1.0);
         let pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
 
-        if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.8 && uArm.z < 0.5) {
-            pElbowLocal.x = sign * 4.8;
+        // B. 肋骨與側胸防穿插：在手臂下垂時維持側向安全間距 (X 軸不穿入肋骨)
+        if (uArm.y < 0 && pElbowLocal.y < 8.5 && pElbowLocal.y > 0.0 && sign * pElbowLocal.x < 4.6 && uArm.z < 0.5) {
+            pElbowLocal.x = sign * 4.6;
             uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
             pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
         }
 
-        // C. 前臂與手腕人體肌肉防穿插 (純向前推進深度 Z，100% 保證相機正視角的 2D 傾角不變形)
         let pWristLocal = pElbowLocal.clone().addScaledVector(uFore, 7.4);
 
-        if (pWristLocal.y < -1.5 && Math.abs(pWristLocal.x) < 5.2) {
-            // 骨盆、大腿肌肉與裙面前側深度防線 (Z >= 1.8)
-            if (pWristLocal.z < 1.8) {
-                pWristLocal.z = 1.8;
+        // C. 插腰 (Hand on Hip / Akimbo) 專屬側腰與髂脊力學防線
+        if (isHandOnHip) {
+            // 1. 肘部自然向外展開，形成人體三角骨架支撐
+            pElbowLocal.x = sign * Math.max(6.8, Math.abs(pElbowLocal.x));
+            pElbowLocal.z = THREE.MathUtils.clamp(pElbowLocal.z, -0.3, 0.8);
+            uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
+            pElbowLocal = pShoulderLocal.clone().addScaledVector(uArm, 8.5);
+
+            // 2. 手腕緊貼側腰外緣與髂脊上方 (X 軸嚴格 >= 4.6，從根本上杜絕刺穿骨盆腔)
+            pWristLocal.x = sign * Math.max(4.6, Math.abs(pWristLocal.x));
+            pWristLocal.y = THREE.MathUtils.clamp(pWristLocal.y, -1.2, 1.2);
+            pWristLocal.z = THREE.MathUtils.clamp(pWristLocal.z, 0.35, 1.30);
+            uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
+        } else {
+            // D. 通用骨盆腔與大腿防穿插保護 (Pelvic Basin Penetration Guard)
+            if (pWristLocal.y < 0.8 && pWristLocal.y > -4.5 && Math.abs(pWristLocal.x) < 4.6) {
+                // 若手腕位於腰側邊緣 (|X| > 3.2)，向側外推至側腰輪廓表面
+                if (Math.abs(pWristLocal.x) > 3.2 && pWristLocal.z < 1.4) {
+                    pWristLocal.x = sign * 4.6;
+                } else if (pWristLocal.z < 1.8) {
+                    // 若在腹前/恥骨前方，則向前推進至大腿/下腹前表面
+                    pWristLocal.z = 1.8;
+                }
                 uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
-            }
-        } else if (pWristLocal.y >= -1.5 && pWristLocal.y <= 3.0) {
-            // 腰側與腹前區
-            if (Math.abs(pWristLocal.x) < 4.8) {
+            } else if (pWristLocal.y >= 0.8 && pWristLocal.y <= 3.0 && Math.abs(pWristLocal.x) < 4.6) {
+                // 腹前區防穿插
                 if (pWristLocal.z < 2.0) {
                     pWristLocal.z = 2.0;
                     uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
                 }
-            } else if (Math.abs(pWristLocal.x) <= 5.8) {
-                if (pWristLocal.z < 1.2) {
-                    pWristLocal.z = 1.4;
+            } else if (pWristLocal.y > 3.0 && Math.abs(pWristLocal.x) < 4.5) {
+                // 胸大肌前側防線
+                if (pWristLocal.z < 2.2 && pWristLocal.z > -0.5) {
+                    pWristLocal.z = 2.2;
                     uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
                 }
-            }
-        } else if (pWristLocal.y > 3.0 && Math.abs(pWristLocal.x) < 4.5) {
-            // 胸大肌前側防線
-            if (pWristLocal.z < 2.2 && pWristLocal.z > -0.5) {
-                pWristLocal.z = 2.2;
-                uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
             }
         }
 
@@ -972,8 +984,8 @@ export class TorsoPoseEstimator {
         let uFemur = vFemurCam.clone().applyQuaternion(qPelvisInv).normalize();
         let uTibia = vTibiaCam.clone().applyQuaternion(qPelvisInv).normalize();
 
-        // 4. 生理防穿插與正常站立角度約束
-        // 股骨在骨盆坐標系中下垂長軸 (Three.js 股骨自然下垂沿 -Y)
+        // 4. 下肢雙骨單自由度鉸鏈 IK (Two-Bone Planar Hinge IK for Lower Limb)
+        // 股骨長軸 (Three.js 股骨在局部坐標系中沿 -Y 下垂，故局部 +Y 軸對應 -uFemur)
         const yAxis = uFemur.clone().negate().normalize();
 
         // 膝關節屈曲角度 (Flexion)
@@ -981,36 +993,37 @@ export class TorsoPoseEstimator {
         let flex = Math.acos(dotFlex);
         flex = this._clamp(flex, 0.02, 2.4);
 
-        // 4. 下肢雙骨平面 IK (Two-Bone Planar IK for Lower Limb)
-        // 膝關節為單自由度鉸鏈關節 (Ginglymus Hinge Joint)，其彎曲運動面嚴格由 Hip-Knee-Ankle 三點構成之平面唯一確定！
-        // 任何外展、內收或外旋姿態下，膝關節旋轉軸 (Hinge Axis) 必須嚴格垂直於該平面，從根本上杜絕膝關節側向折斷或錯位！
-        let zDef = new THREE.Vector3(sign * 0.08, 0.0, 0.99).normalize();
+        // 基準前方向量 zDef (面朝骨盆前方 +Z，帶微自然外旋 ~6°)
+        let zDef = new THREE.Vector3(sign * 0.10, 0.0, 0.99).normalize();
         const dotZY = zDef.dot(yAxis);
         zDef.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
         if (zDef.lengthSq() < 1e-4) {
             zDef = new THREE.Vector3(0, 0, 1);
         }
-        let xDef = new THREE.Vector3().crossVectors(yAxis, zDef).normalize();
 
-        // 運動平面法向 (Hinge Axis = uFemur x uTibia)
-        let rawHinge = new THREE.Vector3().crossVectors(uFemur, uTibia);
-        const hingeLen = rawHinge.length(); // 相當於 sin(flex)
+        // 小腿屈曲垂直分量 (uTibia 在垂直於 uFemur 切平面上的正交投影)
+        const uTibiaPerp = uTibia.clone().sub(uFemur.clone().multiplyScalar(uFemur.dot(uTibia)));
+        const lTibiaPerp = uTibiaPerp.length();
 
-        let xAxis;
-        if (hingeLen > 0.04) {
-            let hAxis = rawHinge.normalize();
-            if (hAxis.dot(xDef) < 0) {
-                hAxis.negate();
+        // 髕骨正前法向 (zAxis):
+        // 解剖學原理：膝關節為單向鉸鏈 (kneeJoint.rotation.x = flex)，小腿恆向後方 popliteal fossa 彎折
+        // 因此正前側髕骨方向 zFlex 必然指向 -uTibiaPerp！
+        let zAxis;
+        if (lTibiaPerp > 0.04 && flex > 0.06) {
+            let zFlex = uTibiaPerp.clone().negate().normalize();
+            // 髖關節旋轉極限約束：髕骨法向不可與人體前方相背，杜絕單視角深度噪聲導致關節逆向折斷
+            if (zFlex.dot(zDef) < 0.15) {
+                zFlex.lerp(zDef, 0.70).normalize();
             }
-            const t = THREE.MathUtils.clamp((hingeLen - 0.04) / 0.12, 0.0, 1.0);
-            xAxis = xDef.clone().multiplyScalar(1.0 - t).addScaledVector(hAxis, t).normalize();
+            const t = THREE.MathUtils.clamp((flex - 0.06) / 0.15, 0.0, 1.0);
+            zAxis = zDef.clone().multiplyScalar(1.0 - t).addScaledVector(zFlex, t).normalize();
         } else {
-            xAxis = xDef.clone();
+            zAxis = zDef.clone();
         }
 
-        // 髕骨法向 (zAxis) 為 xAxis 與 yAxis 之正交外積，面朝髕骨正前側
-        const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis).normalize();
-        xAxis.crossVectors(yAxis, zAxis).normalize();
+        // xAxis: 膝關節橫向鉸鏈軸 (由 yAxis 與 zAxis 外積嚴格保證右手正交系)
+        const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
+        zAxis.crossVectors(xAxis, yAxis).normalize();
 
         const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
         const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');

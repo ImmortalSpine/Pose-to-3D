@@ -252,25 +252,25 @@ export class AnatomicalTorso {
         // 1. 胸鎖關節 (SC Joint)
         const scJoint = new THREE.Group();
         scJoint.name = `SC_Joint_${side}`;
-        scJoint.position.set(sign * 1.15, 10.2, 4.6);
+        scJoint.position.set(sign * 1.15, 10.2, 4.2);
         this.thoracicCageUnit.add(scJoint);
 
         const clavicleMesh = this._createClavicleMesh(side);
         scJoint.add(clavicleMesh);
         this.shoulderGirdle[side].clavicle = scJoint;
 
-        // 2. 肩胛骨 (背側 Z <= -0.8)
-        const acromialRelative = new THREE.Vector3(sign * 5.0, -0.2, -5.4);
+        // 2. 肩胛骨 (Scapula Unit) - 嚴格解剖學：直接依附於胸廓背壁 (Ribs 2-7, 後背平貼 Z ~ -1.2)
+        // 建立肩胛胸壁生理滑動結構 (Scapulothoracic sliding joint)，徹底消除脫臼懸空與異常起翹
         const scapulaUnit = new THREE.Group();
         scapulaUnit.name = `Scapula_Unit_${side}`;
-        scapulaUnit.position.copy(acromialRelative);
-        scJoint.add(scapulaUnit);
+        scapulaUnit.position.set(sign * 5.0, 9.8, -1.2);
+        this.thoracicCageUnit.add(scapulaUnit);
 
         const scapulaMesh = this._createScapulaMesh(side);
         scapulaUnit.add(scapulaMesh);
         this.shoulderGirdle[side].scapula = scapulaUnit;
 
-        // 3. 盂肱關節 (GH Joint)
+        // 3. 盂肱關節 (GH Joint / Glenohumeral Joint) - 緊扣肩胛骨外側角肩臼窩
         const ghJoint = new THREE.Group();
         ghJoint.name = `GH_Joint_${side}`;
         ghJoint.position.set(sign * 0.35, -1.2, 0.2);
@@ -321,8 +321,8 @@ export class AnatomicalTorso {
         this._updateRadiusMesh(side, 0.2); // 預設微旋前
 
         // 標記關鍵解剖骨點
-        this._addLandmark(`Olecranon_${side}`, new THREE.Vector3(sign * 6.2, 1.5, -1.6), this.thoracicCageUnit);
-        this._addLandmark(`AcromionPoint_${side}`, new THREE.Vector3(sign * 6.2, 10.0, -0.8), this.thoracicCageUnit);
+        this._addLandmark(`Olecranon_${side}`, new THREE.Vector3(sign * 5.8, 1.5, -1.2), this.thoracicCageUnit);
+        this._addLandmark(`AcromionPoint_${side}`, new THREE.Vector3(sign * 5.0, 9.8, -0.9), this.thoracicCageUnit);
     }
 
     /**
@@ -1292,21 +1292,31 @@ export class AnatomicalTorso {
         const group = new THREE.Group();
         group.name = `Clavicle_${side}`;
 
+        // 鎖骨起自胸鎖關節 (0,0,0)，呈經典人體雙曲「S」形走向肩胛岡肩峰端
+        // 內側 2/3 前凸微隆起，外側 1/3 後凹走向後背肩峰 (3.85, -0.40, -5.10)
         const p0 = new THREE.Vector3(0, 0, 0);
-        const p1 = new THREE.Vector3(sign * 1.8, 0.12, 0.45);
-        const p2 = new THREE.Vector3(sign * 3.6, -0.05, -2.4);
-        const p3 = new THREE.Vector3(sign * 5.0, -0.2, -5.4);
+        const p1 = new THREE.Vector3(sign * 1.5, 0.12, 0.20);
+        const p2 = new THREE.Vector3(sign * 2.8, -0.10, -2.5);
+        const p3 = new THREE.Vector3(sign * 3.85, -0.40, -5.10);
 
         const curve = new THREE.CatmullRomCurve3([p0, p1, p2, p3]);
-        const tubeGeo = new THREE.TubeGeometry(curve, 22, 0.22, 10, false);
+        const tubeGeo = new THREE.TubeGeometry(curve, 24, 0.22, 10, false);
         const mesh = new THREE.Mesh(tubeGeo, this.materials.boneHighlight);
         mesh.castShadow = true;
         group.add(mesh);
 
+        // 胸骨端關節頭 (Sternal End)
         const headGeo = new THREE.SphereGeometry(0.35, 10, 10);
         const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
         headMesh.scale.set(1.1, 1.2, 1.1);
         group.add(headMesh);
+
+        // 肩峰端扁平關節面 (Acromial End)
+        const acromialHeadGeo = new THREE.SphereGeometry(0.32, 10, 10);
+        const acromialHead = new THREE.Mesh(acromialHeadGeo, this.materials.boneHighlight);
+        acromialHead.position.copy(p3);
+        acromialHead.scale.set(1.1, 0.7, 1.1);
+        group.add(acromialHead);
 
         return group;
     }
@@ -1316,39 +1326,50 @@ export class AnatomicalTorso {
         const group = new THREE.Group();
         group.name = `Scapula_${side}`;
 
-        const acromionGeo = new THREE.BoxGeometry(0.9, 0.35, 1.3);
+        // 1. 肩峰 (Acromion Process) - 位於肩胛骨頂外側，與鎖骨外側端精密咬合形成 AC Joint
+        const acromionGeo = new THREE.BoxGeometry(0.85, 0.32, 1.2);
         const acromionMesh = new THREE.Mesh(acromionGeo, this.materials.boneHighlight);
         acromionMesh.position.set(0, 0, 0.3);
         group.add(acromionMesh);
 
-        const spineP0 = new THREE.Vector3(0, 0, 0.2);
-        const spineP1 = new THREE.Vector3(-sign * 1.6, -0.4, -0.2);
-        const spineP2 = new THREE.Vector3(-sign * 3.4, -1.0, -0.5);
+        // 2. 肩胛岡 (Spine of Scapula) - 從肩峰向脊椎內下方橫越肩胛骨背側
+        const spineP0 = new THREE.Vector3(0, 0, 0.3);
+        const spineP1 = new THREE.Vector3(-sign * 1.6, -0.35, -0.1);
+        const spineP2 = new THREE.Vector3(-sign * 3.4, -0.85, -0.2);
 
         const spineCurve = new THREE.CatmullRomCurve3([spineP0, spineP1, spineP2]);
-        const spineGeo = new THREE.TubeGeometry(spineCurve, 14, 0.22, 8, false);
+        const spineGeo = new THREE.TubeGeometry(spineCurve, 14, 0.20, 8, false);
         const spineMesh = new THREE.Mesh(spineGeo, this.materials.boneHighlight);
         spineMesh.castShadow = true;
         group.add(spineMesh);
 
+        // 3. 肩胛骨主體薄板 (Scapular Blade) - 三角形翼狀骨板，緊密平貼背部肋骨表面 (Z ~ -0.2)
         const scapulaShape = new THREE.Shape();
         scapulaShape.moveTo(0, 0);
-        scapulaShape.lineTo(-sign * 3.6, -0.8);
-        scapulaShape.lineTo(-sign * 3.0, -5.2);
-        scapulaShape.lineTo(0.3, -2.4);
+        scapulaShape.lineTo(-sign * 3.6, -0.8);  // 上角 (Superior Angle)
+        scapulaShape.lineTo(-sign * 3.0, -5.2);  // 下角 (Inferior Angle, 達第7肋水準)
+        scapulaShape.lineTo(0.3, -2.4);          // 外側緣 (Lateral Border)
         scapulaShape.closePath();
 
-        const extrudeSettings = { depth: 0.16, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.06, bevelThickness: 0.06 };
+        const extrudeSettings = { depth: 0.16, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.05, bevelThickness: 0.05 };
         const bladeGeo = new THREE.ExtrudeGeometry(scapulaShape, extrudeSettings);
         const bladeMesh = new THREE.Mesh(bladeGeo, this.materials.bone);
         bladeMesh.position.set(0, -0.3, -0.2);
         group.add(bladeMesh);
 
+        // 4. 肩臼 (Glenoid Fossa) - 承接肱骨頭
         const glenoidGeo = new THREE.CylinderGeometry(0.55, 0.62, 0.4, 12);
         const glenoidMesh = new THREE.Mesh(glenoidGeo, this.materials.bone);
         glenoidMesh.rotation.z = Math.PI * 0.5;
-        glenoidMesh.position.set(sign * 0.3, -1.1, 0.2);
+        glenoidMesh.position.set(sign * 0.35, -1.1, 0.2);
         group.add(glenoidMesh);
+
+        // 5. 喙突 (Coracoid Process) - 從肩胛頸向前外側突起
+        const coracoidGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.75, 8);
+        const coracoidMesh = new THREE.Mesh(coracoidGeo, this.materials.boneHighlight);
+        coracoidMesh.rotation.x = Math.PI * 0.38;
+        coracoidMesh.position.set(sign * 0.1, -0.5, 0.65);
+        group.add(coracoidMesh);
 
         return group;
     }
@@ -1748,7 +1769,7 @@ export class AnatomicalTorso {
             this.headJoint.rotation.z = headRoll - accumCervicalRoll;
         }
 
-        // 5. 左大臂肱骨
+        // 5. 左大臂肱骨與肩胛胸壁滑動節律 (Scapulohumeral Rhythm)
         if (this.shoulderGirdle.left.humerusJoint) {
             const jL = this.shoulderGirdle.left.humerusJoint;
             const safeRollL = leftArmRoll;
@@ -1757,15 +1778,27 @@ export class AnatomicalTorso {
             jL.rotation.y = leftArmYaw;
             jL.rotation.z = safeRollL;
 
+            // 生理肩肱節律 (2:1 比例動態耦合)：
+            // 計算上肢相對於垂直下垂位的綜合抬高角 (Elevation angle)
+            const elevL = Math.max(0, Math.hypot(leftArmPitch, safeRollL) - 0.35);
+            const scapRotL = Math.min(0.55, elevL * 0.32);
+            const scapElevL = scapRotL * 0.75;
+
+            // 肩胛骨在胸廓後背表面向上旋轉與微升滑動 (平貼肋骨背側，Z ~ -1.2，絕不懸空脫臼)
+            if (this.shoulderGirdle.left.scapula) {
+                const scL = this.shoulderGirdle.left.scapula;
+                scL.rotation.z = -scapRotL;
+                scL.rotation.y = -scapRotL * 0.15;
+                scL.position.set(5.0 + scapRotL * 0.20, 9.8 + scapElevL, -1.2 + scapRotL * 0.15);
+            }
+
             if (this.shoulderGirdle.left.clavicle) {
-                // 生理肩肱節律 (Scapulohumeral Rhythm: 只有在外展超過 ~45° 時鎖骨才自然微抬)
-                const elevL = Math.max(0, safeRollL - 0.75) * 0.12;
-                this.shoulderGirdle.left.clavicle.rotation.z = elevL;
-                this.shoulderGirdle.left.clavicle.rotation.y = -leftArmPitch * 0.05;
+                this.shoulderGirdle.left.clavicle.rotation.z = scapRotL * 0.65;
+                this.shoulderGirdle.left.clavicle.rotation.y = -scapRotL * 0.18;
             }
         }
 
-        // 6. 右大臂肱骨
+        // 6. 右大臂肱骨與肩胛胸壁滑動節律
         if (this.shoulderGirdle.right.humerusJoint) {
             const jR = this.shoulderGirdle.right.humerusJoint;
             const safeRollR = rightArmRoll;
@@ -1774,10 +1807,20 @@ export class AnatomicalTorso {
             jR.rotation.y = rightArmYaw;
             jR.rotation.z = safeRollR;
 
+            const elevR = Math.max(0, Math.hypot(rightArmPitch, safeRollR) - 0.35);
+            const scapRotR = Math.min(0.55, elevR * 0.32);
+            const scapElevR = scapRotR * 0.75;
+
+            if (this.shoulderGirdle.right.scapula) {
+                const scR = this.shoulderGirdle.right.scapula;
+                scR.rotation.z = scapRotR;
+                scR.rotation.y = scapRotR * 0.15;
+                scR.position.set(-5.0 - scapRotR * 0.20, 9.8 + scapElevR, -1.2 + scapRotR * 0.15);
+            }
+
             if (this.shoulderGirdle.right.clavicle) {
-                const elevR = Math.min(0, safeRollR + 0.75) * 0.12;
-                this.shoulderGirdle.right.clavicle.rotation.z = elevR;
-                this.shoulderGirdle.right.clavicle.rotation.y = -rightArmPitch * 0.05;
+                this.shoulderGirdle.right.clavicle.rotation.z = -scapRotR * 0.65;
+                this.shoulderGirdle.right.clavicle.rotation.y = scapRotR * 0.18;
             }
         }
 
@@ -1856,6 +1899,9 @@ export class AnatomicalTorso {
         ['left', 'right'].forEach(side => {
             if (this.shoulderGirdle[side].clavicle) {
                 this.shoulderGirdle[side].clavicle.visible = visible;
+            }
+            if (this.shoulderGirdle[side].scapula) {
+                this.shoulderGirdle[side].scapula.visible = visible;
             }
         });
     }
