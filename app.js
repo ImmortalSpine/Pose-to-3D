@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=5.6';
-import { TorsoPoseEstimator } from './poseDetector.js?v=5.6';
+import { AnatomicalTorso } from './anatomy.js?v=5.7';
+import { TorsoPoseEstimator } from './poseDetector.js?v=5.7';
 
 class App {
     constructor() {
@@ -642,9 +642,20 @@ class App {
             this.currentPose.pelvisYaw = Math.PI;
             this.currentPose.thoracicYaw = Math.PI;
             if (mode === 'over_shoulder') {
-                this.currentPose.headYaw = Math.PI - 1.25;
+                const faceX = this.lastLandmarks2D?.nose?.x ?? 0.6;
+                const midSX = this.lastLandmarks2D?.midShoulder?.x ?? 0.5;
+                const turnSign = (faceX > midSX) ? -1.0 : 1.0;
+                this.currentPose.headYaw = Math.PI + turnSign * 1.25;
+                this.currentPose.cervicalYaw = turnSign * 0.81;
+                this.currentPose.cervicalPitch = 0.02;
+                this.currentPose.headPitch = 0.01;
+                this.currentPose.headRoll = 0.0;
             } else {
                 this.currentPose.headYaw = Math.PI;
+                this.currentPose.cervicalYaw = 0.0;
+                this.currentPose.cervicalPitch = 0.0;
+                this.currentPose.headPitch = 0.0;
+                this.currentPose.headRoll = 0.0;
             }
         } else {
             this.currentPose.isBackStance = false;

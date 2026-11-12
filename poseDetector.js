@@ -719,8 +719,15 @@ export class TorsoPoseEstimator {
                 // 判斷回眸朝向：看畫面左側或右側 (以 midEyeX 或 nose.x 與雙肩中心比較)
                 const faceCenterX = (midEyeX || (nose ? nose.x : midShoulder.x));
                 const lookOverRightSide = faceCenterX > midShoulder.x;
-                const turnSign = lookOverRightSide ? 1.0 : -1.0;
+                // 注意：背身 Yaw = 180° 下，局部座標系與相機 X 軸反向，轉向畫面右側 (lookOverRightSide) 需為負轉向角！
+                const turnSign = lookOverRightSide ? -1.0 : 1.0;
                 headYaw = thoracicYaw + turnSign * 1.25;
+
+                // 回眸平視/微收下巴姿態 (-0.02 ~ 0.08 rad)，消除五官側向投影失真造成的假性仰天
+                const safeMidEyeY = (leftEye && rightEye) ? (leftEye.y + rightEye.y) * 0.5 : (leftEye?.y || rightEye?.y || nose?.y || 0.2);
+                const eyeNoseDy = (nose && (leftEye || rightEye)) ? (nose.y - safeMidEyeY) : 0.045;
+                const lookPitchOffset = THREE.MathUtils.clamp(eyeNoseDy - 0.045, -0.06, 0.12);
+                headPitch = lookPitchOffset * 1.0 + 0.03; // 優雅微低頭平視
             } else {
                 // 純背身：頭骨跟隨胸廓轉向 180° 後背
                 headYaw = thoracicYaw;

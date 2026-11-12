@@ -212,6 +212,7 @@ export class AnatomicalTorso {
         for (let i = 0; i < 7; i++) {
             const cIndex = 7 - i;
             const vert = this._createVertebraMesh(`C${cIndex}`, 1.30 - i * 0.02, cervicalHeight, 'cervical');
+            vert.rotation.order = 'YXZ';
             vert.position.set(0, (i === 0) ? 0 : cervicalHeight, Math.sin((i / 6) * Math.PI) * 0.12);
             cParent.add(vert);
             this.cervicalVertebrae.push(vert);
@@ -1955,6 +1956,7 @@ export class AnatomicalTorso {
         const cranialPartYaw = safeRelativeYaw - cervicalPartYaw;
 
         this.cervicalVertebrae.forEach((vert, idx) => {
+            vert.rotation.order = 'YXZ';
             // 7 節頸椎平滑分擔 cervicalPitch 與 cervicalPartYaw
             const rotX = cervicalPitch / cCount;
             const rotY = cervicalPartYaw / cCount;
