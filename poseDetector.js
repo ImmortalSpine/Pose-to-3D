@@ -618,7 +618,39 @@ export class TorsoPoseEstimator {
         headToBodyRatio = parseFloat(headToBodyRatio.toFixed(1));
         const skullScale = parseFloat(((48.0 / headToBodyRatio) / 4.60).toFixed(2));
 
+        // -------------------------------------------------------------
+        // 13. 性別骨骼形態自適應判定 (Gender Skeletal Dimorphism)
+        // -------------------------------------------------------------
+        let suggestedGender = 'female';
+        let genderConfidence = 0.5;
+        let shoulderToHipRatio = 1.35;
+
+        if (leftShoulder && rightShoulder && leftHip && rightHip) {
+            const dxShoulders = Math.abs(rightShoulder.x - leftShoulder.x) * ar;
+            const dyShoulders = Math.abs(rightShoulder.y - leftShoulder.y);
+            const shoulderWidth2D = Math.hypot(dxShoulders, dyShoulders);
+
+            const dxHips = Math.abs(rightHip.x - leftHip.x) * ar;
+            const dyHips = Math.abs(rightHip.y - leftHip.y);
+            const hipWidth2D = Math.hypot(dxHips, dyHips);
+
+            shoulderToHipRatio = parseFloat((shoulderWidth2D / (hipWidth2D + 1e-5)).toFixed(2));
+
+            // 在標準相片中，男性雙肩寬度相對於骨盆顯著寬大 (倒三角，比值 >= 1.40)
+            // 女性肩部窄順且骨盆寬圓 (比值 < 1.40)
+            if (shoulderToHipRatio >= 1.40) {
+                suggestedGender = 'male';
+                genderConfidence = Math.min(0.95, 0.55 + (shoulderToHipRatio - 1.40) * 1.5);
+            } else {
+                suggestedGender = 'female';
+                genderConfidence = Math.min(0.95, 0.55 + (1.40 - shoulderToHipRatio) * 1.5);
+            }
+        }
+
         return {
+            suggestedGender,
+            genderConfidence,
+            shoulderToHipRatio,
             headToBodyRatio,
             skullScale,
             pelvisRoll: this._clamp(pelvisRoll, -0.4, 0.4),

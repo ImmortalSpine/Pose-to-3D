@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=3.8';
-import { TorsoPoseEstimator } from './poseDetector.js?v=3.8';
+import { AnatomicalTorso } from './anatomy.js?v=3.9';
+import { TorsoPoseEstimator } from './poseDetector.js?v=3.9';
 
 class App {
     constructor() {
@@ -21,6 +21,10 @@ class App {
         this.show2DLandmarks = true;
         this.lastLandmarks2D = null;
         this.originalImageElement = null;
+
+        // 性別形態控制 ('auto' | 'female' | 'male')
+        this.genderMode = 'auto';
+        this.currentGender = 'female';
 
         // 當前姿態狀態 (含骨盆、脊椎、胸廓、左右肱骨、前臂雙骨與下肢骨骼)
         this.currentPose = {
@@ -323,6 +327,24 @@ class App {
             this._updateSlidersUI();
         });
 
+        // 性別骨骼形態切換
+        document.getElementById('btnGenderAuto')?.addEventListener('click', () => {
+            this.genderMode = 'auto';
+            if (this.currentPose && this.currentPose.suggestedGender) {
+                this._setGender(this.currentPose.suggestedGender, false);
+            } else {
+                this._updateGenderUI();
+            }
+        });
+        document.getElementById('btnGenderFemale')?.addEventListener('click', () => {
+            this.genderMode = 'female';
+            this._setGender('female', true);
+        });
+        document.getElementById('btnGenderMale')?.addEventListener('click', () => {
+            this.genderMode = 'male';
+            this._setGender('male', true);
+        });
+
         // 人體體型與頭身比控制 (支援亞洲寫實 7.0、模特 7.5、古典 8.0)
         const sliderRatio = document.getElementById('sliderHeadRatio');
         if (sliderRatio) {
@@ -450,6 +472,39 @@ class App {
         return `${ratio.toFixed(1)} 頭身 (${desc})`;
     }
 
+    _setGender(gender, isManual = false) {
+        this.currentGender = gender;
+        this.anatomicalTorso.setGender(gender);
+        this._updateGenderUI();
+    }
+
+    _updateGenderUI() {
+        const btnAuto = document.getElementById('btnGenderAuto');
+        const btnFemale = document.getElementById('btnGenderFemale');
+        const btnMale = document.getElementById('btnGenderMale');
+        const badge = document.getElementById('valGenderBadge');
+
+        btnAuto?.classList.toggle('active', this.genderMode === 'auto');
+        btnFemale?.classList.toggle('active', this.genderMode === 'female');
+        btnMale?.classList.toggle('active', this.genderMode === 'male');
+
+        if (badge) {
+            const ratioDesc = (this.currentPose && this.currentPose.shoulderToHipRatio)
+                ? ` (肩臀比 ${this.currentPose.shoulderToHipRatio})`
+                : '';
+            if (this.genderMode === 'auto') {
+                badge.style.color = '#6ee7b7';
+                badge.textContent = (this.currentGender === 'female' ? '♀ 女性 (自適應)' : '♂ 男性 (自適應)') + ratioDesc;
+            } else if (this.genderMode === 'female') {
+                badge.style.color = '#f472b6';
+                badge.textContent = '♀ 女性形態 (纖細柔美、寬圓骨盆)';
+            } else {
+                badge.style.color = '#60a5fa';
+                badge.textContent = '♂ 男性形態 (寬肩倒三角、剛挺粗壯)';
+            }
+        }
+    }
+
     _setHeadRatio(ratio) {
         this.currentPose.headToBodyRatio = ratio;
         this.currentPose.skullScale = (48.0 / ratio) / 4.60;
@@ -574,9 +629,15 @@ class App {
 
                 const pose = await this.poseEstimator.estimateFromImage(img);
                 if (pose) {
+                    if (this.genderMode === 'auto' && pose.suggestedGender) {
+                        this._setGender(pose.suggestedGender, false);
+                    } else if (this.genderMode !== 'auto') {
+                        this.anatomicalTorso.setGender(this.genderMode);
+                    }
                     this._applyPose(pose);
                     this.aiPoseBackup = { ...pose };
                     this._updateSlidersUI();
+                    this._updateGenderUI();
                     this.lastLandmarks2D = pose.landmarks2D;
 
                     // 識別完成後自動將視角調至最適全身比例，讓使用者第一眼看到完整人體骨架
@@ -589,7 +650,8 @@ class App {
                     }
 
                     const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
-                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})，支援手動微調體型與縮放`;
+                    const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
+                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr}) 與性別 (${genderStr})`;
                 } else {
                     this.statusText.textContent = "未識別到完整人體，已使用預設解剖姿態";
                 }
@@ -843,7 +905,10 @@ class App {
         let targetPose;
         if (type === 'sampleA') {
             ctx.fillText("範例 A：微側身挺胸 + 抬手姿態", 40, 60);
+            this._setGender('female');
             targetPose = {
+                suggestedGender: 'female',
+                shoulderToHipRatio: 1.28,
                 headToBodyRatio: 7.2,
                 skullScale: 1.45,
                 pelvisRoll: -0.06,
@@ -887,7 +952,10 @@ class App {
             };
         } else {
             ctx.fillText("範例 B：側彎對抗 (Contrapposto)", 40, 60);
+            this._setGender('female');
             targetPose = {
+                suggestedGender: 'female',
+                shoulderToHipRatio: 1.30,
                 headToBodyRatio: 7.2,
                 skullScale: 1.45,
                 pelvisRoll: 0.22,

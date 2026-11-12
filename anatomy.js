@@ -86,6 +86,11 @@ export class AnatomicalTorso {
 
         this.landmarks = {};
 
+        // 性別骨骼形態系統 (Gender Skeletal Dimorphism)
+        this.currentGender = 'female';
+        this.shoulderBaseX = 4.45;
+        this.carryingAngle = 0.20;
+
         // 材質
         this.materials = {
             bone: new THREE.MeshStandardMaterial({
@@ -120,6 +125,7 @@ export class AnatomicalTorso {
         };
 
         this._buildAnatomy();
+        this.setGender('female');
     }
 
     _buildAnatomy() {
@@ -228,6 +234,147 @@ export class AnatomicalTorso {
     }
 
     /**
+     * 獲取性別形態配置參數 (Gender Morphometrics)
+     */
+    getGenderMorphConfig(gender = 'female') {
+        if (gender === 'female') {
+            return {
+                name: 'female',
+                pelvisScale: [1.08, 0.94, 0.96],  // 寬而較淺之女性真假骨盆 (Gynaecoid)
+                hipJointX: 3.88,                   // 較開之雙側髖臼距離
+                ribScale: [0.86, 1.0, 0.88],       // 小巧纖細之圓潤胸廓 (Thoracic egg)
+                sternumScale: [0.88, 0.94, 0.88],  // 胸骨體型縮減
+                shoulderWidth: 4.45,               // 雙肩自然內縮 (形成修長窄肩)
+                scJointX: 1.05,                    // 鎖骨起點微內收
+                boneRadiusScale: 0.84,             // 長骨纖細度 (84% 骨徑，秀氣修長)
+                carryingAngle: 0.22,               // 生理手肘提攜角增大至 ~13°
+                qAngle: 0.08,                      // 股骨內傾 Q 角偏角
+                headAspect: [0.94, 0.98, 0.96]     // 小巧尖下巴、柔和下顎輪廓
+            };
+        } else if (gender === 'male') {
+            return {
+                name: 'male',
+                pelvisScale: [0.96, 1.02, 1.02],  // 狹窄厚實心型男性骨盆 (Android)
+                hipJointX: 3.52,                   // 緊湊之髖臼間距
+                ribScale: [1.04, 1.0, 1.04],       // 寬厚桶狀胸廓 (寬闊倒三角)
+                sternumScale: [1.04, 1.0, 1.04],   // 胸骨厚重
+                shoulderWidth: 5.25,               // 雙肩開闊展現倒三角肩寬
+                scJointX: 1.20,                    // 鎖骨起點向外舒展
+                boneRadiusScale: 1.05,             // 粗壯骨幹 (105% 骨徑，肌突隆起)
+                carryingAngle: 0.12,               // 提攜角約 7°
+                qAngle: 0.03,                      // 股骨直立少內傾
+                headAspect: [1.02, 1.0, 1.02]      // 方正寬下顎、眉弓厚重
+            };
+        } else {
+            return {
+                name: 'neutral',
+                pelvisScale: [1.0, 1.0, 1.0],
+                hipJointX: 3.60,
+                ribScale: [1.0, 1.0, 1.0],
+                sternumScale: [1.0, 1.0, 1.0],
+                shoulderWidth: 5.00,
+                scJointX: 1.15,
+                boneRadiusScale: 1.0,
+                carryingAngle: 0.14,
+                qAngle: 0.05,
+                headAspect: [1.0, 1.0, 1.0]
+            };
+        }
+    }
+
+    /**
+     * 設定性別骨骼形態 (Gender Skeletal Dimorphism)
+     * 支援 'female' (女性: 寬骨盆、窄肩、纖細長骨、小胸廓) 與 'male' (男性: 寬肩倒三角、厚實粗骨、心型窄骨盆)
+     * @param {string} gender 'female' | 'male' | 'neutral'
+     */
+    setGender(gender = 'female') {
+        const config = this.getGenderMorphConfig(gender);
+        this.currentGender = config.name;
+        this.shoulderBaseX = config.shoulderWidth;
+        this.carryingAngle = config.carryingAngle;
+
+        // 1. 骨盆形態動態重塑 (Pelvic Basin Morph)
+        if (this.pelvisUnit) {
+            const bonyPelvis = this.pelvisUnit.getObjectByName("Bony_Pelvis");
+            if (bonyPelvis) {
+                bonyPelvis.scale.set(config.pelvisScale[0], config.pelvisScale[1], config.pelvisScale[2]);
+            }
+        }
+
+        // 2. 髖關節間距與位置動態同步 (Acetabulofemoral Alignment)
+        ['left', 'right'].forEach(side => {
+            const sign = (side === 'left') ? 1 : -1;
+            if (this.lowerLimbs && this.lowerLimbs[side] && this.lowerLimbs[side].hipJoint) {
+                const hip = this.lowerLimbs[side].hipJoint;
+                hip.position.x = sign * config.hipJointX;
+                hip.position.y = -3.4 * config.pelvisScale[1];
+                hip.position.z = 0.6 * config.pelvisScale[2];
+            }
+        });
+
+        // 3. 胸廓容積與肋骨寬度重塑 (Thoracic Cage Morph)
+        this.ribsLeft.forEach(rib => {
+            rib.scale.set(config.ribScale[0], config.ribScale[1], config.ribScale[2]);
+        });
+        this.ribsRight.forEach(rib => {
+            rib.scale.set(config.ribScale[0], config.ribScale[1], config.ribScale[2]);
+        });
+        if (this.sternum) {
+            this.sternum.scale.set(config.sternumScale[0], config.sternumScale[1], config.sternumScale[2]);
+        }
+
+        // 4. 肩帶雙肩寬度與胸鎖關節位置 (Shoulder Girdle & Clavicle)
+        ['left', 'right'].forEach(side => {
+            const sign = (side === 'left') ? 1 : -1;
+            if (this.shoulderGirdle && this.shoulderGirdle[side]) {
+                if (this.shoulderGirdle[side].clavicle) {
+                    this.shoulderGirdle[side].clavicle.position.x = sign * config.scJointX;
+                    const clavMesh = this.shoulderGirdle[side].clavicle.getObjectByName(`Clavicle_${side}`);
+                    if (clavMesh) {
+                        const spanRatio = config.shoulderWidth / 5.0;
+                        clavMesh.scale.set(spanRatio, 1.0, spanRatio);
+                    }
+                }
+                if (this.shoulderGirdle[side].scapula) {
+                    this.shoulderGirdle[side].scapula.position.x = sign * config.shoulderWidth;
+                }
+                if (this.shoulderGirdle[side].humerusJoint) {
+                    this.shoulderGirdle[side].humerusJoint.rotation.z = sign * config.carryingAngle;
+                }
+            }
+        });
+
+        // 5. 四肢長骨粗細度 (Bone Caliber & Gracility: 女性纖細秀氣 vs 男性粗壯結實)
+        const r = config.boneRadiusScale;
+        ['left', 'right'].forEach(side => {
+            if (this.shoulderGirdle && this.shoulderGirdle[side]) {
+                if (this.shoulderGirdle[side].humerus) this.shoulderGirdle[side].humerus.scale.set(r, 1.0, r);
+                if (this.shoulderGirdle[side].ulna) this.shoulderGirdle[side].ulna.scale.set(r, 1.0, r);
+                if (this.shoulderGirdle[side].radiusGroup) this.shoulderGirdle[side].radiusGroup.scale.set(r, 1.0, r);
+                if (this.shoulderGirdle[side].handGroup) this.shoulderGirdle[side].handGroup.scale.set(r, r, r);
+            }
+            if (this.lowerLimbs && this.lowerLimbs[side]) {
+                if (this.lowerLimbs[side].femur) this.lowerLimbs[side].femur.scale.set(r, 1.0, r);
+                if (this.lowerLimbs[side].tibia) this.lowerLimbs[side].tibia.scale.set(r, 1.0, r);
+                if (this.lowerLimbs[side].fibula) this.lowerLimbs[side].fibula.scale.set(r, 1.0, r);
+                if (this.lowerLimbs[side].footGroup) this.lowerLimbs[side].footGroup.scale.set(r, 1.0, r);
+            }
+        });
+
+        // 6. 頭骨下巴與面部比例微調
+        if (this.skullGroup) {
+            const s = this.headScale || 1.47;
+            this.skullGroup.scale.set(
+                s * config.headAspect[0],
+                s * config.headAspect[1],
+                s * config.headAspect[2]
+            );
+        }
+
+        return this.currentGender;
+    }
+
+    /**
      * 設定頭身比縮放率 (可依照片推算或使用者手動調整，支援 6.5 ~ 8.5 頭身)
      * @param {number} ratio 目標頭身比 (如 7.0、7.5、8.0)
      */
@@ -238,7 +385,12 @@ export class AnatomicalTorso {
         const targetHeadHeight = 48.0 / safeRatio;
         this.headScale = targetHeadHeight / 4.60;
         if (this.skullGroup) {
-            this.skullGroup.scale.setScalar(this.headScale);
+            const config = this.getGenderMorphConfig(this.currentGender);
+            this.skullGroup.scale.set(
+                this.headScale * config.headAspect[0],
+                this.headScale * config.headAspect[1],
+                this.headScale * config.headAspect[2]
+            );
         }
         return this.headScale;
     }
@@ -1785,11 +1937,12 @@ export class AnatomicalTorso {
             const scapElevL = scapRotL * 0.75;
 
             // 肩胛骨在胸廓後背表面向上旋轉與微升滑動 (平貼肋骨背側，Z ~ -1.2，絕不懸空脫臼)
+            const baseX = this.shoulderBaseX || 4.45;
             if (this.shoulderGirdle.left.scapula) {
                 const scL = this.shoulderGirdle.left.scapula;
                 scL.rotation.z = -scapRotL;
                 scL.rotation.y = -scapRotL * 0.15;
-                scL.position.set(5.0 + scapRotL * 0.20, 9.8 + scapElevL, -1.2 + scapRotL * 0.15);
+                scL.position.set(baseX + scapRotL * 0.20, 9.8 + scapElevL, -1.2 + scapRotL * 0.15);
             }
 
             if (this.shoulderGirdle.left.clavicle) {
@@ -1811,11 +1964,12 @@ export class AnatomicalTorso {
             const scapRotR = Math.min(0.55, elevR * 0.32);
             const scapElevR = scapRotR * 0.75;
 
+            const baseX = this.shoulderBaseX || 4.45;
             if (this.shoulderGirdle.right.scapula) {
                 const scR = this.shoulderGirdle.right.scapula;
                 scR.rotation.z = scapRotR;
                 scR.rotation.y = scapRotR * 0.15;
-                scR.position.set(-5.0 - scapRotR * 0.20, 9.8 + scapElevR, -1.2 + scapRotR * 0.15);
+                scR.position.set(-baseX - scapRotR * 0.20, 9.8 + scapElevR, -1.2 + scapRotR * 0.15);
             }
 
             if (this.shoulderGirdle.right.clavicle) {
