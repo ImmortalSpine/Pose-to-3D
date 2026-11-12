@@ -195,6 +195,8 @@ export class TorsoPoseEstimator {
         const rightEyeOuter = lm[6];
         const leftEar = lm[7];
         const rightEar = lm[8];
+        const leftMouth = lm[9];
+        const rightMouth = lm[10];
         const leftShoulder = lm[11];  // 人物左肩 (畫面右方)
         const rightShoulder = lm[12]; // 人物右肩 (畫面左方)
         const leftElbow = lm[13];
@@ -295,10 +297,25 @@ export class TorsoPoseEstimator {
         if (leftEye && rightEye && nose) {
             const midEyeY = (leftEye.y + rightEye.y) * 0.5;
             const eyeNoseDy = nose.y - midEyeY;
-            const pitchOffset = (eyeNoseDy / Math.max(0.05, torsoHeight * 0.22)) - 0.45;
-            headPitch = -pitchOffset * 0.75;
+            let faceScale = Math.max(0.02, eyeNoseDy);
+            if (leftMouth && rightMouth) {
+                const midMouthY = (leftMouth.y + rightMouth.y) * 0.5;
+                faceScale = Math.max(0.025, (midMouthY - midEyeY) * 0.65);
+            }
+            if (leftEar && rightEar && (leftEar.visibility === undefined || leftEar.visibility > 0.45) &&
+                (rightEar.visibility === undefined || rightEar.visibility > 0.45)) {
+                const midEarY = (leftEar.y + rightEar.y) * 0.5;
+                // 耳朵高於眼睛即為低頭 (pitch > 0)，耳朵低於眼睛即為仰頭 (pitch < 0)
+                const earEyeDy = (midEarY - midEyeY) / faceScale;
+                headPitch = THREE.MathUtils.clamp(-earEyeDy * 0.85, -0.40, 0.40);
+            } else {
+                // 無耳朵可見時，根據鼻眼垂直投影壓縮比推算仰俯
+                const normNose = eyeNoseDy / faceScale;
+                const pitchOffset = normNose - 1.0;
+                headPitch = THREE.MathUtils.clamp(-pitchOffset * 0.60, -0.35, 0.35);
+            }
         }
-        headPitch = this._clamp(headPitch, -0.45, 0.45);
+        headPitch = this._clamp(headPitch, -0.40, 0.40);
 
         // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
@@ -633,17 +650,49 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // 12. 人體真實 2D 頭身比動態估算 (Dynamic Head-to-Body Ratio)
         // -------------------------------------------------------------
-        let headToBodyRatio = 7.1; // 預設亞洲大眾寫實體型
-        if (leftEye && rightEye && nose && leftShoulder && rightShoulder) {
+        let headToBodyRatio = 7.3; // 預設亞洲大眾寫實體型
+        if (leftEye && rightEye && nose) {
             const midEyeY = (leftEye.y + rightEye.y) * 0.5;
-            const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
-            const eyeShoulderDy = Math.max(0.04, midShoulderY - midEyeY);
-            // 2D 影像上頭部邊界估算 (頭頂至下巴)
-            const headTopY = midEyeY - eyeShoulderDy * 0.65;
-            const chinY = midEyeY + eyeShoulderDy * 0.75;
-            const headSpan2D = Math.max(0.035, chinY - headTopY);
+            let headSpan2D = 0;
+            let headTopY = midEyeY - 0.05;
 
-            // 尋找雙腳在 2D 影像中的最低點 (Foot / Ankle)
+            // 1. 優先使用五官解剖黃金比例 (眼-口垂直軸佔全頭骨垂直高度約 35.5%)
+            if (leftMouth && rightMouth) {
+                const midMouthY = (leftMouth.y + rightMouth.y) * 0.5;
+                const eyeMouthDy = Math.abs(midMouthY - midEyeY);
+                if (eyeMouthDy > 0.015) {
+                    headSpan2D = eyeMouthDy / 0.355;
+                    headTopY = midEyeY - headSpan2D * 0.50;
+                }
+            }
+
+            // 2. 次選使用眼-鼻軸推算 (眼-鼻垂直軸佔全頭高約 22%)
+            if (headSpan2D <= 0 && nose) {
+                const eyeNoseDy = Math.abs(nose.y - midEyeY);
+                if (eyeNoseDy > 0.01) {
+                    headSpan2D = eyeNoseDy / 0.22;
+                    headTopY = midEyeY - headSpan2D * 0.50;
+                }
+            }
+
+            // 3. 次選使用雙耳橫向跨度推算 (頭寬佔全頭高約 64%)
+            if (headSpan2D <= 0 && leftEar && rightEar) {
+                const earDist = Math.abs(leftEar.x - rightEar.x) * ar;
+                if (earDist > 0.02) {
+                    headSpan2D = earDist / 0.64;
+                    headTopY = midEyeY - headSpan2D * 0.50;
+                }
+            }
+
+            // 4. 最後備援：使用眼肩距折算 (眼至下巴約 0.50 頭高，脖子約 0.35 頭高)
+            if (headSpan2D <= 0 && leftShoulder && rightShoulder) {
+                const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
+                const eyeShoulderDy = Math.max(0.04, midShoulderY - midEyeY);
+                headSpan2D = eyeShoulderDy * 1.18;
+                headTopY = midEyeY - headSpan2D * 0.50;
+            }
+
+            // 尋找雙腳在 2D 影像中的最低點 (Foot / Ankle / Heel / FootIndex)
             const footYValues = [
                 leftAnkle ? leftAnkle.y : null,
                 rightAnkle ? rightAnkle.y : null,
@@ -653,12 +702,12 @@ export class TorsoPoseEstimator {
                 rightFootIndex ? rightFootIndex.y : null
             ].filter(v => v !== null && !isNaN(v));
 
-            if (footYValues.length > 0 && midHip) {
+            if (footYValues.length > 0 && midHip && headSpan2D > 0.02) {
                 const bottomY = Math.max(...footYValues);
                 if (bottomY > midHip.y + 0.15) {
                     const totalBodySpan2D = bottomY - headTopY;
                     const rawRatio = totalBodySpan2D / headSpan2D;
-                    headToBodyRatio = THREE.MathUtils.clamp(rawRatio, 6.6, 8.4);
+                    headToBodyRatio = THREE.MathUtils.clamp(rawRatio, 6.7, 8.4);
                 }
             }
         }
@@ -670,7 +719,7 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         let suggestedGender = 'female';
         let genderConfidence = 0.5;
-        let shoulderToHipRatio = 1.35;
+        let shoulderToHipRatio = 1.75;
 
         if (leftShoulder && rightShoulder && leftHip && rightHip) {
             const dxShoulders = Math.abs(rightShoulder.x - leftShoulder.x) * ar;
@@ -683,14 +732,18 @@ export class TorsoPoseEstimator {
 
             shoulderToHipRatio = parseFloat((shoulderWidth2D / (hipWidth2D + 1e-5)).toFixed(2));
 
-            // 在標準相片中，男性雙肩寬度相對於骨盆顯著寬大 (倒三角，比值 >= 1.40)
-            // 女性肩部窄順且骨盆寬圓 (比值 < 1.40)
-            if (shoulderToHipRatio >= 1.40) {
+            // MediaPipe Pose 的 Landmark 23/24 為體內股骨頭關節中心 (Acetabulum)，
+            // 其解剖距離本就遠窄於外部骨盆/側腰輪廓，故男女基準比值通常在 1.65 ~ 2.40 之間。
+            // 結合肩寬軀幹比 (Shoulder-to-Torso Ratio) 進行綜合形態打分：
+            const shoulderToTorsoRatio = shoulderWidth2D / Math.max(0.1, torsoHeight);
+            const maleScore = (shoulderToHipRatio - 1.84) * 2.0 + (shoulderToTorsoRatio - 0.78) * 1.5;
+
+            if (maleScore >= 0) {
                 suggestedGender = 'male';
-                genderConfidence = Math.min(0.95, 0.55 + (shoulderToHipRatio - 1.40) * 1.5);
+                genderConfidence = Math.min(0.95, 0.55 + Math.abs(maleScore) * 0.25);
             } else {
                 suggestedGender = 'female';
-                genderConfidence = Math.min(0.95, 0.55 + (1.40 - shoulderToHipRatio) * 1.5);
+                genderConfidence = Math.min(0.95, 0.55 + Math.abs(maleScore) * 0.25);
             }
         }
 
