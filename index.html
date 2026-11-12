@@ -44,6 +44,7 @@
                 <span class="panel-header-title">📷 參考圖片 (Reference Image)</span>
                 <div class="panel-header-tools">
                     <button class="btn btn-xs" id="btnToggleMirror">左右鏡像</button>
+                    <button class="btn btn-xs" id="btnToggleBackStance" title="一鍵快速翻轉正面/背身模式">🔄 正/背身翻轉</button>
                     <button class="btn btn-xs" id="btnToggle2DLandmarks" style="display:none;">顯示骨架特徵線</button>
                 </div>
             </div>
@@ -248,12 +249,25 @@
                     <button class="btn btn-sm" id="btnResetPose">重置為 AI 姿態</button>
                 </div>
 
+                <!-- 人體面向模式 (Stance Orientation) -->
+                <div class="control-row" style="margin-bottom: 8px;">
+                    <div class="control-label-wrap">
+                        <span>人體面向模式 (Stance Mode)</span>
+                        <span class="control-val" id="valStanceBadge" style="color: #6ee7b7; font-weight: 600;">🧍 正面模式</span>
+                    </div>
+                    <div class="gender-buttons">
+                        <button class="btn btn-sm active" id="btnStanceFront" title="標準正面朝向">🧍 正面</button>
+                        <button class="btn btn-sm" id="btnStanceBack" title="180° 純後背視角（後背脊椎、肩胛骨、薦骨朝向鏡頭）">🔄 純背身 (180°)</button>
+                        <button class="btn btn-sm" id="btnStanceOverShoulder" title="背身回眸（後背朝向，頭部側轉看鏡頭）">👀 背身回眸</button>
+                    </div>
+                </div>
+
                 <div class="control-row">
                     <div class="control-label-wrap">
                         <span>胸廓朝向 (Thoracic Yaw / 側身)</span>
                         <span class="control-val" id="valThoracicYaw">0°</span>
                     </div>
-                    <input type="range" class="range-slider" id="sliderThoracicYaw" min="-85" max="85" value="0">
+                    <input type="range" class="range-slider" id="sliderThoracicYaw" min="-180" max="180" value="0">
                 </div>
 
                 <div class="control-row">
@@ -301,7 +315,7 @@
                         <span>頭部水平轉向 (Head Yaw)</span>
                         <span class="control-val" id="valHeadYaw">0°</span>
                     </div>
-                    <input type="range" class="range-slider" id="sliderHeadYaw" min="-75" max="75" value="0">
+                    <input type="range" class="range-slider" id="sliderHeadYaw" min="-180" max="180" value="0">
                 </div>
 
                 <div class="control-row">
@@ -542,7 +556,7 @@
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=5.4"></script>
+    <script type="module" src="app.js?v=5.5"></script>
 </body>
 </html>
 

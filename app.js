@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=5.4';
-import { TorsoPoseEstimator } from './poseDetector.js?v=5.4';
+import { AnatomicalTorso } from './anatomy.js?v=5.5';
+import { TorsoPoseEstimator } from './poseDetector.js?v=5.5';
 
 class App {
     constructor() {
@@ -25,6 +25,9 @@ class App {
         // 性別形態控制 ('auto' | 'female' | 'male')
         this.genderMode = 'auto';
         this.currentGender = 'female';
+
+        // 人體面向狀態 ('front' | 'back' | 'over_shoulder')
+        this.currentStance = 'front';
 
         // 當前姿態狀態 (含骨盆、脊椎、胸廓、左右肱骨、前臂雙骨與下肢骨骼)
         this.currentPose = {
@@ -296,6 +299,18 @@ class App {
             this._updateSlidersUI();
         });
 
+        // 正/背身翻轉切換開關 (快捷翻轉)
+        const btnToggleBack = document.getElementById('btnToggleBackStance');
+        btnToggleBack?.addEventListener('click', () => {
+            const nextMode = (this.currentStance === 'front') ? 'over_shoulder' : 'front';
+            this.setStanceMode(nextMode);
+        });
+
+        // 人體面向模式按鈕群 (正面 / 純背身 / 背身回眸)
+        document.getElementById('btnStanceFront')?.addEventListener('click', () => this.setStanceMode('front'));
+        document.getElementById('btnStanceBack')?.addEventListener('click', () => this.setStanceMode('back'));
+        document.getElementById('btnStanceOverShoulder')?.addEventListener('click', () => this.setStanceMode('over_shoulder'));
+
         // 姿態微調滑桿
         this._bindSlider('sliderHeadYaw', 'valHeadYaw', 'headYaw');
         this._bindSlider('sliderHeadPitch', 'valHeadPitch', 'headPitch');
@@ -437,6 +452,8 @@ class App {
             }
             this._updateGenderUI();
         });
+
+        this._updateStanceUI();
 
         // 鍵盤快速鍵支援 (+/- 放大縮小，F/0 全身置中)
         window.addEventListener('keydown', (e) => {
@@ -593,6 +610,74 @@ class App {
         }
     }
 
+    setStanceMode(mode) {
+        this.currentStance = mode;
+        this._updateStanceUI();
+
+        // 1. 若有原圖 MediaPipe 特徵點，透過 poseEstimator.reprocessWithStance 重新解算完整逆運動學
+        const newPose = this.poseEstimator.reprocessWithStance(mode);
+        if (newPose) {
+            this._applyPose(newPose);
+            this.aiPoseBackup = { ...newPose };
+            this.currentPose = { ...newPose };
+            this._updateSlidersUI();
+
+            const ratioStr = newPose.headToBodyRatio ? `${newPose.headToBodyRatio} 頭身` : '7.1 頭身';
+            const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
+            const backStr = newPose.isBackStance ? (newPose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '、正面模式';
+            const profileStr = newPose.isProfileStance ? `、側身模式 (${newPose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
+            const handTrackStr = (newPose.rightHandAngles || newPose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
+            this.statusText.textContent = `✅ 姿態已切換！已適應人物頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}${handTrackStr}`;
+            return;
+        }
+
+        // 2. 備援手動翻轉 (無影像特徵時直接翻轉當前 3D 骨架模型)
+        if (mode === 'back' || mode === 'over_shoulder') {
+            this.currentPose.isBackStance = true;
+            this.currentPose.isOverShoulderLook = (mode === 'over_shoulder');
+            this.currentPose.pelvisYaw = Math.PI;
+            this.currentPose.thoracicYaw = Math.PI;
+            if (mode === 'over_shoulder') {
+                this.currentPose.headYaw = Math.PI - 1.25;
+            } else {
+                this.currentPose.headYaw = Math.PI;
+            }
+        } else {
+            this.currentPose.isBackStance = false;
+            this.currentPose.isOverShoulderLook = false;
+            this.currentPose.pelvisYaw = 0;
+            this.currentPose.thoracicYaw = 0;
+            this.currentPose.headYaw = 0;
+        }
+        this._applyPose(this.currentPose);
+        this._updateSlidersUI();
+        this.statusText.textContent = `✅ 已手動切換為 ${mode === 'back' ? '純背身模式 (180°)' : (mode === 'over_shoulder' ? '背身回眸模式' : '正面模式')}`;
+    }
+
+    _updateStanceUI() {
+        const btnFront = document.getElementById('btnStanceFront');
+        const btnBack = document.getElementById('btnStanceBack');
+        const btnOver = document.getElementById('btnStanceOverShoulder');
+        const badge = document.getElementById('valStanceBadge');
+
+        btnFront?.classList.toggle('active', this.currentStance === 'front');
+        btnBack?.classList.toggle('active', this.currentStance === 'back');
+        btnOver?.classList.toggle('active', this.currentStance === 'over_shoulder');
+
+        if (badge) {
+            if (this.currentStance === 'back') {
+                badge.textContent = '🔄 純背身 (180°)';
+                badge.style.color = '#f59e0b';
+            } else if (this.currentStance === 'over_shoulder') {
+                badge.textContent = '👀 背身回眸';
+                badge.style.color = '#ec4899';
+            } else {
+                badge.textContent = '🧍 正面模式';
+                badge.style.color = '#6ee7b7';
+            }
+        }
+    }
+
     _setHeadRatio(ratio) {
         this.currentPose.headToBodyRatio = ratio;
         this.currentPose.skullScale = (48.0 / ratio) / 4.60;
@@ -735,6 +820,13 @@ class App {
                     this._updateGenderUI();
                     this.lastLandmarks2D = pose.landmarks2D;
 
+                    if (pose.isBackStance) {
+                        this.currentStance = pose.isOverShoulderLook ? 'over_shoulder' : 'back';
+                    } else {
+                        this.currentStance = 'front';
+                    }
+                    this._updateStanceUI();
+
                     // 識別完成後自動將視角調至最適全身比例，讓使用者第一眼看到完整人體骨架
                     this._fitCameraToSkeleton('front');
 
@@ -814,6 +906,8 @@ class App {
         this.aiPoseBackup = { ...defaultPose };
         this._updateSlidersUI();
         this.lastLandmarks2D = null;
+        this.currentStance = 'front';
+        this._updateStanceUI();
 
         if (this.landmarkCanvas) {
             const ctx = this.landmarkCanvas.getContext('2d');

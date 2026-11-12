@@ -44,6 +44,8 @@ export class TorsoPoseEstimator {
         this.holistic = null;
         this.poseDetector = null;
         this.isMirrored = false;
+        this.lastRawResults = null;
+        this.lastPose = null;
         this.readyPromise = this._initMediaPipe();
     }
 
@@ -229,7 +231,11 @@ export class TorsoPoseEstimator {
         if (rawResults && rawResults.poseLandmarks && rawResults.poseLandmarks.length > 0) {
             try {
                 const pose = this._processLandmarks(rawResults);
-                if (pose) return pose;
+                if (pose) {
+                    this.lastRawResults = rawResults;
+                    this.lastPose = pose;
+                    return pose;
+                }
             } catch (err) {
                 console.error("[AnatoPose] Landmark processing error:", err);
             }
@@ -248,7 +254,11 @@ export class TorsoPoseEstimator {
             if (enhResults && enhResults.poseLandmarks && enhResults.poseLandmarks.length > 0) {
                 try {
                     const pose = this._processLandmarks(enhResults);
-                    if (pose) return pose;
+                    if (pose) {
+                        this.lastRawResults = enhResults;
+                        this.lastPose = pose;
+                        return pose;
+                    }
                 } catch (err) {
                     console.error("[AnatoPose] Enhanced contrast processing error:", err);
                 }
@@ -271,7 +281,11 @@ export class TorsoPoseEstimator {
                         rightHandLandmarks: this._inverseRotateLandmarks(rotResults.rightHandLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height)
                     };
                     const pose = this._processLandmarks(invResults);
-                    if (pose) return pose;
+                    if (pose) {
+                        this.lastRawResults = invResults;
+                        this.lastPose = pose;
+                        return pose;
+                    }
                 } catch (err) {
                     console.error(`[AnatoPose] TTA ${angle}° processing error:`, err);
                 }
@@ -281,7 +295,23 @@ export class TorsoPoseEstimator {
         return null;
     }
 
-    _processLandmarks(results) {
+    /**
+     * 手動重算當前影像姿態 (支援正面、純背身、背身回眸即時切換)
+     */
+    reprocessWithStance(mode = 'toggle') {
+        if (!this.lastRawResults) return null;
+        let targetMode = mode;
+        if (mode === 'toggle') {
+            targetMode = (this.lastPose && this.lastPose.isBackStance) ? 'front' : 'over_shoulder';
+        }
+        const pose = this._processLandmarks(this.lastRawResults, targetMode);
+        if (pose) {
+            this.lastPose = pose;
+        }
+        return pose;
+    }
+
+    _processLandmarks(results, forceStanceMode = null) {
         if (!results || !results.poseLandmarks || results.poseLandmarks.length === 0) {
             return null;
         }
@@ -549,52 +579,91 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         // C. 背身狀態機判定 (Back Stance Machine / BSM Trigger)
         // -------------------------------------------------------------
-        // 1. 面部五官整體隱匿度分析 (純背身時五官信賴度極低或完全缺失)
-        const faceVisList = [
-            nose?.visibility,
-            leftEye?.visibility,
-            rightEye?.visibility,
-            leftMouth?.visibility,
-            rightMouth?.visibility
-        ].filter(v => v !== null && v !== undefined && !isNaN(v));
+        let isBackStance = false;
+        let isOverShoulderLook = false;
 
-        const avgFaceVis = faceVisList.length > 0
-            ? (faceVisList.reduce((a, b) => a + b, 0) / faceVisList.length)
-            : 0.0;
+        if (forceStanceMode === 'back') {
+            isBackStance = true;
+            isOverShoulderLook = false;
+        } else if (forceStanceMode === 'over_shoulder') {
+            isBackStance = true;
+            isOverShoulderLook = true;
+        } else if (forceStanceMode === 'front') {
+            isBackStance = false;
+            isOverShoulderLook = false;
+        } else {
+            // 1. 面部五官整體隱匿度分析 (純背身時五官信賴度極低或完全缺失)
+            const faceVisList = [
+                nose?.visibility,
+                leftEye?.visibility,
+                rightEye?.visibility,
+                leftMouth?.visibility,
+                rightMouth?.visibility
+            ].filter(v => v !== null && v !== undefined && !isNaN(v));
 
-        // 2. 雙耳拓撲交叉 (人體背對相機時，左耳出現在畫面左側，右耳出現在畫面右側)
-        let isEarInverted = false;
-        if (leftEar && rightEar && (leftEar.visibility ?? 1.0) > 0.25 && (rightEar.visibility ?? 1.0) > 0.25) {
-            isEarInverted = (leftEar.x < rightEar.x - 0.015);
+            const avgFaceVis = faceVisList.length > 0
+                ? (faceVisList.reduce((a, b) => a + b, 0) / faceVisList.length)
+                : 0.0;
+
+            // 2. 雙耳拓撲交叉 (人體背對相機時，左耳出現在畫面左側，右耳出現在畫面右側)
+            let isEarInverted = false;
+            if (leftEar && rightEar && (leftEar.visibility ?? 1.0) > 0.25 && (rightEar.visibility ?? 1.0) > 0.25) {
+                isEarInverted = (leftEar.x < rightEar.x - 0.015);
+            }
+
+            // 3. 雙肩水平拓撲顛倒 (若 MediaPipe 內建模型已識別背面並將 11/12 標籤對調)
+            const isShoulderInverted = (leftShoulder && rightShoulder && leftShoulder.x < rightShoulder.x - 0.02);
+
+            // 4. 雙髖水平拓撲顛倒
+            const isHipInverted = (leftHip && rightHip && leftHip.x < rightHip.x - 0.02);
+
+            // 5. 正面明確特徵評分 (正面保護，杜絕正臉誤判為背身)
+            const hasClearFrontFace = (leftEye && rightEye && nose) &&
+                                      (leftEye.visibility ?? 0) > 0.65 &&
+                                      (rightEye.visibility ?? 0) > 0.65 &&
+                                      (nose.visibility ?? 0) > 0.65 &&
+                                      !isEarInverted;
+
+            // 6. 腳後跟與腳尖前後深度 (Heel vs Foot Index Depth)
+            let heelInFrontCount = 0;
+            if (leftHeel && leftFootIndex && (leftHeel.visibility ?? 0) > 0.35 && (leftFootIndex.visibility ?? 0) > 0.35) {
+                if ((leftHeel.z || 0) < (leftFootIndex.z || 0) - 0.015) heelInFrontCount++;
+            }
+            if (rightHeel && rightFootIndex && (rightHeel.visibility ?? 0) > 0.35 && (rightFootIndex.visibility ?? 0) > 0.35) {
+                if ((rightHeel.z || 0) < (rightFootIndex.z || 0) - 0.015) heelInFrontCount++;
+            }
+
+            // 7. 手臂觸摸對側後肩/後頸 (如紅裙撫肩背身姿勢)
+            const isRightHandNearLeftNeck = rightWrist && leftShoulder && Math.hypot((rightWrist.x - leftShoulder.x) * ar, rightWrist.y - leftShoulder.y) < 0.22;
+            const isLeftHandNearRightNeck = leftWrist && rightShoulder && Math.hypot((leftWrist.x - rightShoulder.x) * ar, leftWrist.y - rightShoulder.y) < 0.22;
+
+            // 背身綜合特徵評分
+            let backScore = 0;
+            if (isEarInverted) backScore += 4.5;
+            if (isShoulderInverted) backScore += 4.0;
+            if (isHipInverted) backScore += 3.0;
+            if (avgFaceVis < 0.28) backScore += 3.5;
+            else if (avgFaceVis < 0.45) backScore += 1.5;
+
+            if (heelInFrontCount >= 1) backScore += (heelInFrontCount * 2.5);
+
+            // 側顏特徵 (isFaceProfile 或單耳或 noseExtruding 或 |headYaw| > 0.45) 配合寬軀幹 (normShoulderSpan > 0.38)
+            if (!hasClearFrontFace && (isFaceProfile || hasSingleEar || isNoseExtruding || Math.abs(headYaw) > 0.45)) {
+                if (normShoulderSpan > 0.38) {
+                    backScore += 2.0;
+                }
+            }
+
+            if ((isRightHandNearLeftNeck || isLeftHandNearRightNeck) && !hasClearFrontFace) {
+                backScore += 2.5;
+            }
+
+            if (hasClearFrontFace) backScore -= 6.0;
+
+            // 是否為純背身或背身回眸 (Back Stance Active)
+            isBackStance = (backScore >= 3.5) && !hasClearFrontFace;
+            isOverShoulderLook = isBackStance && (avgFaceVis > 0.30 || eyeDx > 0.02 || hasSingleEar || Math.abs(headYaw) > 0.40);
         }
-
-        // 3. 雙肩水平拓撲顛倒 (MediaPipe 內建模型已識別背面並將 11/12 標籤對調)
-        const isShoulderInverted = (leftShoulder && rightShoulder && leftShoulder.x < rightShoulder.x - 0.02);
-
-        // 4. 雙髖水平拓撲顛倒
-        const isHipInverted = (leftHip && rightHip && leftHip.x < rightHip.x - 0.02);
-
-        // 5. 正面明確特徵評分 (正面保護，杜絕正臉誤判為背身)
-        const hasClearFrontFace = (leftEye && rightEye && nose) &&
-                                  (leftEye.visibility ?? 0) > 0.65 &&
-                                  (rightEye.visibility ?? 0) > 0.65 &&
-                                  (nose.visibility ?? 0) > 0.65 &&
-                                  !isEarInverted;
-
-        // 背身綜合特徵評分
-        let backScore = 0;
-        if (isEarInverted) backScore += 4.5;
-        if (isShoulderInverted) backScore += 4.0;
-        if (isHipInverted) backScore += 3.0;
-        if (avgFaceVis < 0.28) backScore += 3.5;
-        else if (avgFaceVis < 0.45) backScore += 1.5;
-
-        if (hasClearFrontFace) backScore -= 6.0;
-
-        // 是否為純背身或背身回眸 (Back Stance Active)
-        const isBackStance = (backScore >= 3.5) && !hasClearFrontFace;
-        // 是否為背身回眸 (背對相機但頭部側轉看鏡頭)
-        const isOverShoulderLook = isBackStance && (avgFaceVis > 0.35 || eyeDx > 0.025 || hasSingleEar);
 
         // 側身狀態機觸發條件 (Profile Stance Active)
         const isProfileStance = !isBackStance && (isTorsoUltraNarrow || (isTorsoNarrow && isFaceProfile));
