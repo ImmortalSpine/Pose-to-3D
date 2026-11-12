@@ -996,7 +996,49 @@ export class TorsoPoseEstimator {
             }
         }
 
-        // 14. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援側身矢狀投影)
+        // -------------------------------------------------------------
+        // 14. 下肢截斷裁切照片安全防護 (Lower Limb Truncation Guard)
+        // -------------------------------------------------------------
+        // 當照片為半身照或裁切至大腿 (膝/踝出鏡或被模型擠壓在畫布邊緣，如經典長裙半身照) 時，
+        // 鎖定下肢為自然筆直站立姿態，徹底防止假性屈曲與誤觸地面跪姿吸附！
+        const lLegSpan = (leftHip && leftAnkle) ? (leftAnkle.y - leftHip.y) : (leftHip && leftKnee ? (leftKnee.y - leftHip.y) : 0);
+        const rLegSpan = (rightHip && rightAnkle) ? (rightAnkle.y - rightHip.y) : (rightHip && rightKnee ? (rightKnee.y - rightHip.y) : 0);
+        const maxLegSpan = Math.max(lLegSpan, rLegSpan);
+
+        const lFemurDy = (leftHip && leftKnee) ? (leftKnee.y - leftHip.y) : 0;
+        const lFemurDx = (leftHip && leftKnee) ? Math.abs((leftKnee.x - leftHip.x) * ar) : 0;
+        const isLeftFemurVertical = lFemurDy > 0.08 * torsoHeight && lFemurDx < 0.65 * lFemurDy;
+
+        const rFemurDy = (rightHip && rightKnee) ? (rightKnee.y - rightHip.y) : 0;
+        const rFemurDx = (rightHip && rightKnee) ? Math.abs((rightKnee.x - rightHip.x) * ar) : 0;
+        const isRightFemurVertical = rFemurDy > 0.08 * torsoHeight && rFemurDx < 0.65 * rFemurDy;
+
+        const isAnyFemurVertical = isLeftFemurVertical || isRightFemurVertical;
+
+        const lShinDy = (leftKnee && leftAnkle) ? (leftAnkle.y - leftKnee.y) : 0;
+        const rShinDy = (rightKnee && rightAnkle) ? (rightAnkle.y - rightKnee.y) : 0;
+        const isLeftShinTruncated = lFemurDy > 0.08 && lShinDy < 0.60 * lFemurDy;
+        const isRightShinTruncated = rFemurDy > 0.08 && rShinDy < 0.60 * rFemurDy;
+        const isShinTruncated = isLeftShinTruncated || isRightShinTruncated;
+
+        const isShinHorizontal = (leftAnkle && leftKnee && Math.abs((leftAnkle.x - leftKnee.x) * ar) > 0.12) ||
+                                 (rightAnkle && rightKnee && Math.abs((rightAnkle.x - rightKnee.x) * ar) > 0.12);
+
+        const isLegSpanCompressed = maxLegSpan > 0 && maxLegSpan < 1.35 * torsoHeight;
+        const isKneeNearBottom = (leftKnee && leftKnee.y > 0.70) || (rightKnee && rightKnee.y > 0.70);
+        const isAnkleNearBottom = (leftAnkle && leftAnkle.y > 0.75) || (rightAnkle && rightAnkle.y > 0.75);
+        const isAnkleMissingOrLowVis = (!leftAnkle || (leftAnkle.visibility != null && leftAnkle.visibility < 0.50)) &&
+                                       (!rightAnkle || (rightAnkle.visibility != null && rightAnkle.visibility < 0.50));
+        const isHipNearBottom = (midHip && midHip.y > 0.70);
+        const isSpineUpright = Math.abs(spineDy) > 0.70 * torsoHeight && Math.abs(spineDx) < 0.55 * torsoHeight;
+
+        const isLegsTruncated = !isProfileStance && !isShinHorizontal && (
+            (isSpineUpright && isAnyFemurVertical && (isLegSpanCompressed || isShinTruncated) && (isKneeNearBottom || isAnkleNearBottom || isAnkleMissingOrLowVis)) ||
+            (isShinTruncated && (isKneeNearBottom || isAnkleNearBottom)) ||
+            isHipNearBottom
+        );
+
+        // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援側身矢狀投影)
         const leftLegPose = this._solveLegKinematics(
             leftHip, leftKnee, leftAnkle, leftFootIndex, leftHeel, 'left',
             pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign
@@ -1007,54 +1049,21 @@ export class TorsoPoseEstimator {
             pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign
         );
 
-        let leftHipPitch = leftLegPose.pitch;
-        let leftHipRoll = leftLegPose.roll;
-        let leftHipYaw = leftLegPose.yaw;
-        let leftKneeFlex = leftLegPose.kneeFlex;
-        let leftAnklePitch = leftLegPose.anklePitch;
-        let leftAnkleYaw = leftLegPose.ankleYaw;
-        let leftAnkleRoll = leftLegPose.ankleRoll;
+        let leftHipPitch = isLegsTruncated ? 0.0 : leftLegPose.pitch;
+        let leftHipRoll = isLegsTruncated ? 0.04 : leftLegPose.roll;
+        let leftHipYaw = isLegsTruncated ? 0.0 : leftLegPose.yaw;
+        let leftKneeFlex = isLegsTruncated ? 0.03 : leftLegPose.kneeFlex;
+        let leftAnklePitch = isLegsTruncated ? 0.0 : leftLegPose.anklePitch;
+        let leftAnkleYaw = isLegsTruncated ? 0.06 : leftLegPose.ankleYaw;
+        let leftAnkleRoll = isLegsTruncated ? 0.0 : leftLegPose.ankleRoll;
 
-        let rightHipPitch = rightLegPose.pitch;
-        let rightHipRoll = rightLegPose.roll;
-        let rightHipYaw = rightLegPose.yaw;
-        let rightKneeFlex = rightLegPose.kneeFlex;
-        let rightAnklePitch = rightLegPose.anklePitch;
-        let rightAnkleYaw = rightLegPose.ankleYaw;
-        let rightAnkleRoll = rightLegPose.ankleRoll;
-
-        // 15. 下肢截斷裁切照片安全防護 (Lower Limb Truncation Guard)
-        // 當照片為半身照或裁切至大腿 (膝/踝出鏡或被模型擠壓在畫布邊緣，如 Image 1) 時，
-        // 鎖定下肢為自然筆直站立姿態，徹底防止假性屈曲與誤觸地面跪姿吸附！
-        const lLegSpan = (leftHip && leftAnkle) ? (leftAnkle.y - leftHip.y) : 0;
-        const rLegSpan = (rightHip && rightAnkle) ? (rightAnkle.y - rightHip.y) : 0;
-        const leftAnkleAtEdge = leftAnkle && leftAnkle.y > 0.82;
-        const rightAnkleAtEdge = rightAnkle && rightAnkle.y > 0.82;
-        const isLegSpanCompressed = (lLegSpan > 0 && lLegSpan < 0.95 * torsoHeight) || (rLegSpan > 0 && rLegSpan < 0.95 * torsoHeight);
-        const isAnkleLowVis = (!leftAnkle || (leftAnkle.visibility != null && leftAnkle.visibility < 0.35)) &&
-                              (!rightAnkle || (rightAnkle.visibility != null && rightAnkle.visibility < 0.35));
-
-        const isLegsTruncated = !isProfileStance && (
-            (isLegSpanCompressed && (leftAnkleAtEdge || rightAnkleAtEdge)) ||
-            (isAnkleLowVis && (leftKnee ? leftKnee.y > 0.68 : true))
-        );
-
-        if (isLegsTruncated) {
-            leftHipPitch = 0.0;
-            rightHipPitch = 0.0;
-            leftHipRoll = 0.04;
-            rightHipRoll = -0.04;
-            leftHipYaw = 0.0;
-            rightHipYaw = 0.0;
-            leftKneeFlex = 0.03;
-            rightKneeFlex = 0.03;
-            leftAnklePitch = 0.0;
-            rightAnklePitch = 0.0;
-            leftAnkleYaw = 0.06;
-            rightAnkleYaw = -0.06;
-            leftAnkleRoll = 0.0;
-            rightAnkleRoll = 0.0;
-        }
+        let rightHipPitch = isLegsTruncated ? 0.0 : rightLegPose.pitch;
+        let rightHipRoll = isLegsTruncated ? -0.04 : rightLegPose.roll;
+        let rightHipYaw = isLegsTruncated ? 0.0 : rightLegPose.yaw;
+        let rightKneeFlex = isLegsTruncated ? 0.03 : rightLegPose.kneeFlex;
+        let rightAnklePitch = isLegsTruncated ? 0.0 : rightLegPose.anklePitch;
+        let rightAnkleYaw = isLegsTruncated ? -0.06 : rightLegPose.ankleYaw;
+        let rightAnkleRoll = isLegsTruncated ? 0.0 : rightLegPose.ankleRoll;
 
         // 鏡像反轉
         if (this.isMirrored) {
@@ -1138,22 +1147,34 @@ export class TorsoPoseEstimator {
         // -------------------------------------------------------------
         let headToBodyRatio = 7.3; // 預設亞洲大眾寫實體型
         if (leftEye && rightEye && nose) {
-            // 尋找雙腳在 2D 影像中的最低點 (Foot / Ankle / Heel / FootIndex)
-            const footYValues = [
-                leftAnkle ? leftAnkle.y : null,
-                rightAnkle ? rightAnkle.y : null,
-                leftHeel ? leftHeel.y : null,
-                rightHeel ? rightHeel.y : null,
-                leftFootIndex ? leftFootIndex.y : null,
-                rightFootIndex ? rightFootIndex.y : null
-            ].filter(v => v !== null && !isNaN(v));
+            if (isLegsTruncated) {
+                // 下肢裁切半身照防護：不可使用被截斷之假腳踝計算身軀全高！
+                // 改以人體黃金比例由軀幹高度 (torsoHeight) 與頭部長度 (headSpan2D) 推估真實生理頭身比
+                if (headSpan2D > 0.02 && torsoHeight > 0.05) {
+                    const estimatedTotalBodySpan = torsoHeight * 3.12;
+                    const rawRatio = estimatedTotalBodySpan / headSpan2D;
+                    headToBodyRatio = THREE.MathUtils.clamp(rawRatio, 7.1, 7.6);
+                } else {
+                    headToBodyRatio = 7.3;
+                }
+            } else {
+                // 尋找雙腳在 2D 影像中的最低點 (Foot / Ankle / Heel / FootIndex)
+                const footYValues = [
+                    leftAnkle ? leftAnkle.y : null,
+                    rightAnkle ? rightAnkle.y : null,
+                    leftHeel ? leftHeel.y : null,
+                    rightHeel ? rightHeel.y : null,
+                    leftFootIndex ? leftFootIndex.y : null,
+                    rightFootIndex ? rightFootIndex.y : null
+                ].filter(v => v !== null && !isNaN(v));
 
-            if (footYValues.length > 0 && midHip && headSpan2D > 0.02) {
-                const bottomY = Math.max(...footYValues);
-                if (bottomY > midHip.y + 0.15) {
-                    const totalBodySpan2D = bottomY - headTopY;
-                    const rawRatio = totalBodySpan2D / headSpan2D;
-                    headToBodyRatio = THREE.MathUtils.clamp(rawRatio, 6.7, 8.4);
+                if (footYValues.length > 0 && midHip && headSpan2D > 0.02) {
+                    const bottomY = Math.max(...footYValues);
+                    if (bottomY > midHip.y + 0.15) {
+                        const totalBodySpan2D = bottomY - headTopY;
+                        const rawRatio = totalBodySpan2D / headSpan2D;
+                        headToBodyRatio = THREE.MathUtils.clamp(rawRatio, 6.7, 8.4);
+                    }
                 }
             }
         }
@@ -1765,9 +1786,15 @@ export class TorsoPoseEstimator {
             if (isProfileStance && profileSign !== 0) {
                 dzShin = profileSign * sign * 0.04 * LTibia;
             } else if (lShin2D < LTibia * 0.95) {
-                // 人體小腿彎曲必然向後 (-Z)，絕不允許向前反折
-                const zShinMag = Math.max(0.15, Math.min(0.85, Math.abs(mpDzShin)));
-                dzShin = -rawDzShin * zShinMag;
+                // 若大腿垂直下垂但小腿嚴重短縮 (常為裁切照或裙襬假特徵)，不可推估過深深度避免假性屈膝跪姿
+                const isFemurDown = dyFemur < -0.08 && Math.abs(dxFemur) < 0.65 * Math.abs(dyFemur);
+                if (isFemurDown && lShin2D < 0.60 * lFemur2D) {
+                    dzShin = -0.04 * LTibia;
+                } else {
+                    // 人體小腿彎曲必然向後 (-Z)，絕不允許向前反折
+                    const zShinMag = Math.max(0.15, Math.min(0.85, Math.abs(mpDzShin)));
+                    dzShin = -rawDzShin * zShinMag;
+                }
             }
 
             vTibiaCam = new THREE.Vector3(dxShin, dyShin, dzShin);
