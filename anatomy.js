@@ -1663,17 +1663,21 @@ export class AnatomicalTorso {
         this.pelvisUnit.rotation.y = pelvisYaw;
         this.pelvisUnit.rotation.z = pelvisRoll;
 
-        // 2. 腰椎 S 型曲度 (累加脊椎曲度)
+        // 2. 腰椎 S 型曲度 (嚴格生理極限約束，防止 S 型螺旋扭曲或自骨盆脫臼)
         const lCount = this.lumbarVertebrae.length;
         let accumPitch = pelvisPitch;
         let accumYaw = pelvisYaw;
         let accumRoll = pelvisRoll;
 
+        const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch, -0.22, 0.22);
+        const safeLumbarYaw = THREE.MathUtils.clamp(lumbarYaw, -0.12, 0.12);
+        const safeLumbarRoll = THREE.MathUtils.clamp(lumbarRoll, -0.20, 0.20);
+
         this.lumbarVertebrae.forEach((vert, idx) => {
             const factor = Math.sin(((idx + 1) / lCount) * (Math.PI * 0.5));
-            const rotX = lumbarPitch * factor * 0.25;
-            const rotY = lumbarYaw * factor * 0.25;
-            const rotZ = lumbarRoll * factor * 0.25;
+            const rotX = safeLumbarPitch * factor * 0.20;
+            const rotY = safeLumbarYaw * factor * 0.20;
+            const rotZ = safeLumbarRoll * factor * 0.20;
             vert.rotation.x = rotX;
             vert.rotation.y = rotY;
             vert.rotation.z = rotZ;
@@ -1695,9 +1699,9 @@ export class AnatomicalTorso {
 
         this.cervicalVertebrae.forEach((vert, idx) => {
             const factor = (idx + 1) / cCount;
-            const rotX = (headPitch - thoracicPitch) * factor * 0.10;
-            const rotY = (headYaw - thoracicYaw) * factor * 0.10;
-            const rotZ = (headRoll - thoracicRoll) * factor * 0.10;
+            const rotX = (headPitch - thoracicPitch) * factor * 0.08;
+            const rotY = (headYaw - thoracicYaw) * factor * 0.08;
+            const rotZ = (headRoll - thoracicRoll) * factor * 0.08;
             vert.rotation.x = rotX;
             vert.rotation.y = rotY;
             vert.rotation.z = rotZ;

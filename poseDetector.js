@@ -236,35 +236,32 @@ export class TorsoPoseEstimator {
             eyeWidthAsym = (rightEyeW - leftEyeW) / Math.max(0.005, rightEyeW + leftEyeW);
         }
 
-        // 2. 鼻樑正中線分割面部左右兩側跨度與面積比 (Facial Halves Area & Span Ratio)
+        // 2. 鼻樑正中線與眼距比例解算純 2D Head Yaw (零單圖深度噪聲干擾)
         let headYaw = 0;
         if (leftEye && rightEye && nose) {
-            // 人物左半臉跨度 (鼻尖至左眼外角 / 左眼)
-            const leftRefX = (leftEyeOuter ? leftEyeOuter.x : leftEye.x);
-            const rightRefX = (rightEyeOuter ? rightEyeOuter.x : rightEye.x);
-            const spanLeftEye = Math.abs(leftRefX - nose.x) * ar;
-            const spanRightEye = Math.abs(rightRefX - nose.x) * ar;
-            const eyeSpanAsym = (spanRightEye - spanLeftEye) / Math.max(0.01, spanRightEye + spanLeftEye);
+            const midEyeX = (leftEye.x + rightEye.x) * 0.5;
+            const eyeDist = Math.max(0.015, Math.abs(leftEye.x - rightEye.x) * ar);
+            // 鼻尖相對雙眼中點之水平偏移量 (在 2D 影像上，鼻子偏向哪一側即代表臉部朝向該側)
+            const noseOffset = (nose.x - midEyeX) * ar;
+            const eyeYawRatio = noseOffset / (eyeDist * 0.5);
 
-            let earSpanAsym = 0;
-            let hasBothEars = false;
-            if (leftEar && rightEar) {
-                const spanLeftEar = Math.abs(leftEar.x - nose.x) * ar;
-                const spanRightEar = Math.abs(rightEar.x - nose.x) * ar;
-                earSpanAsym = (spanRightEar - spanLeftEar) / Math.max(0.02, spanRightEar + spanLeftEar);
-                hasBothEars = true;
+            let earYawRatio = 0;
+            let hasValidEars = false;
+            if (leftEar && rightEar && (leftEar.visibility === undefined || leftEar.visibility > 0.45) &&
+                (rightEar.visibility === undefined || rightEar.visibility > 0.45)) {
+                const midEarX = (leftEar.x + rightEar.x) * 0.5;
+                const earDist = Math.max(0.025, Math.abs(leftEar.x - rightEar.x) * ar);
+                earYawRatio = (nose.x - midEarX) * ar / (earDist * 0.5);
+                hasValidEars = true;
             }
 
-            // 純 2D 幾何解算 Head Yaw (零深度噪聲干擾)
-            if (hasBothEars) {
-                // 雙耳皆可見時：耳鼻跨度比與眼鼻跨度比強強聯合，高度穩定
-                headYaw = (earSpanAsym * 0.60 + eyeSpanAsym * 0.40) * 1.55;
+            if (hasValidEars) {
+                headYaw = (earYawRatio * 0.60 + eyeYawRatio * 0.40) * 0.85;
             } else {
-                // 單側耳遮擋時：結合眼鼻跨度比與眼睛面積縮小率
-                headYaw = (eyeSpanAsym * 0.70 + eyeWidthAsym * 0.30) * 1.65;
+                headYaw = (eyeYawRatio * 0.75 + eyeWidthAsym * 0.25) * 0.90;
             }
         }
-        headYaw = this._clamp(headYaw, -1.3, 1.3);
+        headYaw = this._clamp(headYaw, -1.2, 1.2);
 
         let headPitch = 0;
         if (leftEye && rightEye && nose) {
@@ -288,32 +285,53 @@ export class TorsoPoseEstimator {
         let pelvisYaw = Math.atan2(effHipDz, Math.max(0.02, Math.abs(hipDx)));
         pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
 
-        const rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
-        const combinedDz = (rawDz * 0.70 + hipDz * 0.30);
-        const dzMag = Math.abs(combinedDz);
-        let effDz = 0.0;
-        if (dzMag > deadzoneThreshold) {
-            effDz = Math.sign(combinedDz) * (dzMag - deadzoneThreshold);
-        }
-        let thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+        let rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
 
-        // 脊椎動態鏈生理雙向約束 (Spine Biomechanical Dual-Anchor Guardrail):
-        // 胸廓位於骨盆與頭部之間，其水平偏轉不可超出腰椎與頸椎之主動旋轉生理極限！
-        const maxSpineTwist = 0.40; // 約 23°
-        const minThoracicYaw = Math.max(pelvisYaw - maxSpineTwist, headYaw - maxSpineTwist);
-        const maxThoracicYaw = Math.min(pelvisYaw + maxSpineTwist, headYaw + maxSpineTwist);
+        // 智慧檢測手臂舉高 (Arm Elevation False Depth Decoupling):
+        // 當單側手臂舉過肩膀水平線時 (如迪斯可高舉、投籃、致敬)，MediaPipe 單圖神經網路預測的肩部 Z 深度會嚴重失真 (被強行後推)
+        const isRightArmElevated = (rightWrist && rightWrist.y < rightShoulder.y - 0.05) ||
+                                   (rightElbow && rightElbow.y < rightShoulder.y - 0.05);
+        const isLeftArmElevated = (leftWrist && leftWrist.y < leftShoulder.y - 0.05) ||
+                                  (leftElbow && leftElbow.y < leftShoulder.y - 0.05);
+        const hasElevatedArm = isRightArmElevated || isLeftArmElevated;
 
-        if (minThoracicYaw <= maxThoracicYaw) {
-            thoracicYaw = this._clamp(thoracicYaw, minThoracicYaw, maxThoracicYaw);
+        const spineBaselineYaw = headYaw * 0.65 + pelvisYaw * 0.35;
+        let thoracicYaw;
+
+        if (hasElevatedArm && Math.abs(headYaw) < 0.38 && Math.abs(pelvisYaw) < 0.38) {
+            // 面部與骨盆均處於正面區間，手臂高舉產生的假性 shoulderDz 大幅衰減，直接錨定動態脊椎軸線
+            const dampenedDz = rawDz * 0.15 * 0.30 + effHipDz * 0.70;
+            let effDz = 0.0;
+            if (Math.abs(dampenedDz) > deadzoneThreshold) {
+                effDz = Math.sign(dampenedDz) * (Math.abs(dampenedDz) - deadzoneThreshold);
+            }
+            thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+            thoracicYaw = this._clamp(thoracicYaw, spineBaselineYaw - 0.14, spineBaselineYaw + 0.14);
         } else {
-            const midYaw = (pelvisYaw + headYaw) * 0.5;
-            thoracicYaw = this._clamp(thoracicYaw, midYaw - 0.35, midYaw + 0.35);
+            const combinedDz = (rawDz * 0.65 + hipDz * 0.35);
+            const dzMag = Math.abs(combinedDz);
+            let effDz = 0.0;
+            if (dzMag > deadzoneThreshold) {
+                effDz = Math.sign(combinedDz) * (dzMag - deadzoneThreshold);
+            }
+            thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+
+            // 脊椎動態鏈生理雙向約束 (Spine Biomechanical Dual-Anchor Guardrail)
+            const maxSpineTwist = 0.32; // 約 18°
+            const minThoracicYaw = Math.max(pelvisYaw - maxSpineTwist, headYaw - maxSpineTwist);
+            const maxThoracicYaw = Math.min(pelvisYaw + maxSpineTwist, headYaw + maxSpineTwist);
+
+            if (minThoracicYaw <= maxThoracicYaw) {
+                thoracicYaw = this._clamp(thoracicYaw, minThoracicYaw, maxThoracicYaw);
+            } else {
+                const midYaw = (pelvisYaw + headYaw) * 0.5;
+                thoracicYaw = this._clamp(thoracicYaw, midYaw - 0.28, midYaw + 0.28);
+            }
         }
 
-        // 解剖特例保護：當骨盆與面部均正視鏡頭 (|yaw| < 0.20)，且雙肩寬度未在相機平面壓縮 (shoulderSpan / torsoHeight > 0.65) 時，
-        // 單側抬手舉高產生的肩部假性深度噪聲全部平滑歸零，胸廓穩定維持自然正面 (±8°)
+        // 解剖防護：當骨盆與面部均正視鏡頭 (|yaw| < 0.25)，且雙肩寬度未在相機平面壓縮 (shoulderSpan / torsoHeight > 0.60)
         const normShoulderSpan = shoulderSpan / torsoHeight;
-        if (normShoulderSpan > 0.65 && Math.abs(headYaw) < 0.20 && Math.abs(pelvisYaw) < 0.20) {
+        if (normShoulderSpan > 0.60 && Math.abs(headYaw) < 0.25 && Math.abs(pelvisYaw) < 0.25) {
             thoracicYaw = this._clamp(thoracicYaw, -0.14, 0.14);
         }
 
@@ -324,8 +342,11 @@ export class TorsoPoseEstimator {
         let pelvisRoll = -Math.atan2(hipDy, Math.abs(hipDx) + 0.001);
 
         // 8. 腰椎受力側彎與旋轉 (Contrapposto & Lumbar Rotation)
-        let lumbarRoll = (thoracicRoll - pelvisRoll) * 0.55 - (spineDx * 0.5);
-        let lumbarYaw = (thoracicYaw - pelvisYaw) * 0.45;
+        // 嚴格人體生理約束：腰椎 L1-L5 關節突呈矢狀位，軸向主動旋轉極限僅約 5°~8° (0.09~0.14 rad)
+        let lumbarRoll = (thoracicRoll - pelvisRoll) * 0.45 - (spineDx * 0.4);
+        let lumbarYaw = (thoracicYaw - pelvisYaw) * 0.30;
+        lumbarYaw = this._clamp(lumbarYaw, -0.12, 0.12);
+        lumbarRoll = this._clamp(lumbarRoll, -0.22, 0.22);
 
         // 9. 俯仰 (Pitch - 挺胸/後仰或前傾)
         const midShoulderZ = ((leftShoulder.z || 0) + (rightShoulder.z || 0)) * 0.5;
@@ -923,35 +944,36 @@ export class TorsoPoseEstimator {
         let flex = Math.acos(dotFlex);
         flex = this._clamp(flex, 0.02, 2.4);
 
-        // 脛骨垂直分量 (uTibia 在垂直於 uFemur 切平面上的正交分量)
-        const uTibiaPerp = uTibia.clone().sub(uFemur.clone().multiplyScalar(dotFlex));
-        const lTibiaPerp = uTibiaPerp.length();
-
-        // 髕骨預設法向 (站立時面朝前方，微帶約 4° 生理外展)
+        // 4. 下肢雙骨平面 IK (Two-Bone Planar IK for Lower Limb)
+        // 膝關節為單自由度鉸鏈關節 (Ginglymus Hinge Joint)，其彎曲運動面嚴格由 Hip-Knee-Ankle 三點構成之平面唯一確定！
+        // 任何外展、內收或外旋姿態下，膝關節旋轉軸 (Hinge Axis) 必須嚴格垂直於該平面，從根本上杜絕膝關節側向折斷或錯位！
         let zDef = new THREE.Vector3(sign * 0.08, 0.0, 0.99).normalize();
         const dotZY = zDef.dot(yAxis);
         zDef.sub(yAxis.clone().multiplyScalar(dotZY)).normalize();
         if (zDef.lengthSq() < 1e-4) {
             zDef = new THREE.Vector3(0, 0, 1);
         }
+        let xDef = new THREE.Vector3().crossVectors(yAxis, zDef).normalize();
 
-        // 髕骨方向：膝蓋向後折疊 (-Z)，故髕骨 (+Z_local) 指向脛骨屈曲反方向
-        let zAxis;
-        if (lTibiaPerp > 0.05 && flex > 0.08) {
-            const zKnee = uTibiaPerp.clone().negate().normalize();
-            if (zKnee.z < 0) {
-                // 若檢測噪聲導致髕骨倒插骨盆內部，回退至預設前向
-                zAxis = zDef;
-            } else {
-                const t = THREE.MathUtils.clamp((flex - 0.08) / 0.18, 0.0, 1.0);
-                zAxis = zDef.clone().multiplyScalar(1.0 - t).addScaledVector(zKnee, t).normalize();
+        // 運動平面法向 (Hinge Axis = uFemur x uTibia)
+        let rawHinge = new THREE.Vector3().crossVectors(uFemur, uTibia);
+        const hingeLen = rawHinge.length(); // 相當於 sin(flex)
+
+        let xAxis;
+        if (hingeLen > 0.04) {
+            let hAxis = rawHinge.normalize();
+            if (hAxis.dot(xDef) < 0) {
+                hAxis.negate();
             }
+            const t = THREE.MathUtils.clamp((hingeLen - 0.04) / 0.12, 0.0, 1.0);
+            xAxis = xDef.clone().multiplyScalar(1.0 - t).addScaledVector(hAxis, t).normalize();
         } else {
-            zAxis = zDef;
+            xAxis = xDef.clone();
         }
 
-        const xAxis = new THREE.Vector3().crossVectors(yAxis, zAxis).normalize();
-        zAxis.crossVectors(xAxis, yAxis).normalize();
+        // 髕骨法向 (zAxis) 為 xAxis 與 yAxis 之正交外積，面朝髕骨正前側
+        const zAxis = new THREE.Vector3().crossVectors(xAxis, yAxis).normalize();
+        xAxis.crossVectors(yAxis, zAxis).normalize();
 
         const basisMat = new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis);
         const euler = new THREE.Euler().setFromRotationMatrix(basisMat, 'YXZ');
