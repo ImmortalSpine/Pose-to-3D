@@ -21,9 +21,10 @@ export class AnatomicalTorso {
         this.rootGroup = new THREE.Group();
         this.rootGroup.name = "AnatomicalTorsoRoot";
 
-        // 骨盆單元
+        // 骨盆單元 (採用 YXZ 歐拉順序：航向偏航 Yaw 先行，保證局部矢狀面俯仰在相機平面無畸變)
         this.pelvisUnit = new THREE.Group();
         this.pelvisUnit.name = "Pelvis_Unit";
+        this.pelvisUnit.rotation.order = 'YXZ';
         this.rootGroup.add(this.pelvisUnit);
 
         // 地面自動吸附與接地高度
@@ -45,6 +46,7 @@ export class AnatomicalTorso {
         // 胸椎與肋骨整體單元
         this.thoracicCageUnit = new THREE.Group();
         this.thoracicCageUnit.name = "ThoracicCage_Unit";
+        this.thoracicCageUnit.rotation.order = 'YXZ';
         this.lumbarGroup.add(this.thoracicCageUnit);
 
         this.thoracicVertebrae = [];
@@ -143,6 +145,7 @@ export class AnatomicalTorso {
         for (let i = 0; i < 5; i++) {
             const lIndex = 5 - i;
             const vert = this._createVertebraMesh(`L${lIndex}`, 2.3 - i * 0.08, lumbarHeight, 'lumbar');
+            vert.rotation.order = 'YXZ';
             vert.position.set(0, (i === 0) ? 0 : lumbarHeight, Math.sin((i / 4) * Math.PI) * 0.25);
             parentNode.add(vert);
             this.lumbarVertebrae.push(vert);
@@ -1914,7 +1917,7 @@ export class AnatomicalTorso {
         let accumYaw = pelvisYaw;
         let accumRoll = pelvisRoll;
 
-        const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch, -0.32, 0.32);
+        const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch, -0.45, 0.45);
         const safeLumbarYaw = THREE.MathUtils.clamp(lumbarYaw, -0.15, 0.15);
         const safeLumbarRoll = THREE.MathUtils.clamp(lumbarRoll, -0.35, 0.35);
 
