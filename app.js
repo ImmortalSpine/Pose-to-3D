@@ -419,6 +419,25 @@ class App {
         document.getElementById('btnFloatZoomOut')?.addEventListener('click', () => this._zoomCamera(1.25));
         document.getElementById('btnFloatFit')?.addEventListener('click', () => this._fitCameraToSkeleton('front'));
 
+        // 浮動性別一鍵循環切換按鈕 (自適應 -> 強制女性 -> 強制男性 -> 自適應)
+        document.getElementById('btnFloatGender')?.addEventListener('click', () => {
+            if (this.genderMode === 'auto') {
+                this.genderMode = 'female';
+                this._setGender('female', true);
+            } else if (this.genderMode === 'female') {
+                this.genderMode = 'male';
+                this._setGender('male', true);
+            } else {
+                this.genderMode = 'auto';
+                if (this.currentPose && this.currentPose.suggestedGender) {
+                    this._setGender(this.currentPose.suggestedGender, false);
+                } else {
+                    this._setGender('female', false);
+                }
+            }
+            this._updateGenderUI();
+        });
+
         // 鍵盤快速鍵支援 (+/- 放大縮小，F/0 全身置中)
         window.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
@@ -542,6 +561,20 @@ class App {
         btnAuto?.classList.toggle('active', this.genderMode === 'auto');
         btnFemale?.classList.toggle('active', this.genderMode === 'female');
         btnMale?.classList.toggle('active', this.genderMode === 'male');
+
+        const btnFloatG = document.getElementById('btnFloatGender');
+        if (btnFloatG) {
+            if (this.genderMode === 'auto') {
+                btnFloatG.textContent = '⚖️';
+                btnFloatG.title = `骨骼性別：AI 自適應 (${this.currentGender === 'female' ? '♀ 女' : '♂ 男'}，點擊強制女性)`;
+            } else if (this.genderMode === 'female') {
+                btnFloatG.textContent = '♀';
+                btnFloatG.title = '骨骼性別：強制女性 (點擊切換為男性)';
+            } else {
+                btnFloatG.textContent = '♂';
+                btnFloatG.title = '骨骼性別：強制男性 (點擊切換為自適應)';
+            }
+        }
 
         if (badge) {
             const ratioDesc = (this.currentPose && this.currentPose.shoulderToHipRatio)
@@ -713,11 +746,13 @@ class App {
 
                     const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
                     const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
+                    const profileStr = pose.isProfileStance ? `、側身模式 (${pose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
+                    const claspedStr = pose.isOverheadClasped ? '、過頂拱手閉環' : '';
                     const handTrackStr = (pose.rightHandAngles || pose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
-                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})、性別 (${genderStr})${handTrackStr}`;
+                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})、性別 (${genderStr})${profileStr}${claspedStr}${handTrackStr}`;
                 } else {
                     this._resetToNeutralPose();
-                    this.statusText.textContent = "未識別到完整人體，已重置為標準解剖姿態";
+                    this.statusText.textContent = "未識別到完整人體 (可能為純背面或過度遮擋視角)，已重置為標準解剖姿態";
                 }
             };
             img.src = e.target.result;

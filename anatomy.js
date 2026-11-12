@@ -1908,21 +1908,20 @@ export class AnatomicalTorso {
         this.pelvisUnit.rotation.y = pelvisYaw;
         this.pelvisUnit.rotation.z = pelvisRoll;
 
-        // 2. 腰椎 S 型曲度 (嚴格生理極限約束，防止 S 型螺旋扭曲或自骨盆脫臼)
+        // 2. 腰椎生理連續曲度與側彎分配 (Smooth Continuous Lumbar Arc)
         const lCount = this.lumbarVertebrae.length;
         let accumPitch = pelvisPitch;
         let accumYaw = pelvisYaw;
         let accumRoll = pelvisRoll;
 
-        const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch, -0.22, 0.22);
-        const safeLumbarYaw = THREE.MathUtils.clamp(lumbarYaw, -0.12, 0.12);
-        const safeLumbarRoll = THREE.MathUtils.clamp(lumbarRoll, -0.20, 0.20);
+        const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch, -0.32, 0.32);
+        const safeLumbarYaw = THREE.MathUtils.clamp(lumbarYaw, -0.15, 0.15);
+        const safeLumbarRoll = THREE.MathUtils.clamp(lumbarRoll, -0.35, 0.35);
 
         this.lumbarVertebrae.forEach((vert, idx) => {
-            const factor = Math.sin(((idx + 1) / lCount) * (Math.PI * 0.5));
-            const rotX = safeLumbarPitch * factor * 0.20;
-            const rotY = safeLumbarYaw * factor * 0.20;
-            const rotZ = safeLumbarRoll * factor * 0.20;
+            const rotX = safeLumbarPitch / lCount;
+            const rotY = safeLumbarYaw / lCount;
+            const rotZ = safeLumbarRoll / lCount;
             vert.rotation.x = rotX;
             vert.rotation.y = rotY;
             vert.rotation.z = rotZ;

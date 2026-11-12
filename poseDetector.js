@@ -487,114 +487,176 @@ export class TorsoPoseEstimator {
         }
 
         // -------------------------------------------------------------
-        // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
+        // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw & 側身狀態機)
         // -------------------------------------------------------------
         const normShoulderSpan = shoulderSpan / Math.max(0.1, torsoHeight);
         const normHipSpan = Math.abs(hipDx) / Math.max(0.1, torsoHeight);
 
-        // 正面姿態特徵判定 (Frontal Stance Protection)：
-        // 1. 面部朝向正面 (|headYaw| < 0.35)
-        // 2. 雙肩水平展開無嚴重側面投影壓縮 (normShoulderSpan > 0.46)
-        // 3. 雙胯水平展開無重疊 (normHipSpan > 0.20)
+        // A. 側身狀態機特徵指標 (Profile Stance Cues: 75° ~ 90° View)
+        const eyeDx = (leftEye && rightEye) ? Math.abs(leftEye.x - rightEye.x) * ar : 0.05;
+        const normEyeSpan = eyeDx / Math.max(0.03, headSpan2D || 0.15); // 正面常態約 0.35~0.55，側面 < 0.22
+
+        const leftEarVis = leftEar ? (leftEar.visibility ?? 0.5) : 0;
+        const rightEarVis = rightEar ? (rightEar.visibility ?? 0.5) : 0;
+        const hasSingleEar = (leftEarVis > 0.40 && rightEarVis < 0.32) || (rightEarVis > 0.40 && leftEarVis < 0.32);
+
+        const midEyeX = (leftEye && rightEye) ? (leftEye.x + rightEye.x) * 0.5 : (nose ? nose.x : 0);
+        const noseOffset = nose ? (nose.x - midEyeX) * ar : 0;
+        const isNoseExtruding = Math.abs(noseOffset) > Math.max(0.012, eyeDx * 0.45);
+
+        // 雙肩與雙髖水平投影壓縮 (橫向寬度相對軀幹高度之比例)
+        const normShoulderX = Math.abs(shoulderDx) / Math.max(0.1, torsoHeight); // 正面 > 0.46，側面 < 0.30
+        const normHipX = Math.abs(hipDx) / Math.max(0.1, torsoHeight); // 正面 > 0.20，側面 < 0.18
+
+        const isTorsoUltraNarrow = normShoulderX < 0.22;
+        const isTorsoNarrow = normShoulderX < 0.32 && normHipX < 0.22;
+        const isFaceProfile = (eyeDx < 0.032) || (normEyeSpan < 0.22) || (hasSingleEar && isNoseExtruding) || Math.abs(headYaw) > 0.45;
+
+        // 側身狀態機觸發條件 (Profile Stance Active)
+        const isProfileStance = isTorsoUltraNarrow || (isTorsoNarrow && isFaceProfile);
+
+        // B. 正面姿態特徵判定 (Frontal Stance Protection)
         const isFaceFrontal = Math.abs(headYaw) < 0.35;
         const isShouldersFrontal = normShoulderSpan > 0.46;
         const isHipsFrontal = normHipSpan > 0.20;
-        const isOverallFrontal = isFaceFrontal && isShouldersFrontal && isHipsFrontal;
+        const isOverallFrontal = !isProfileStance && isFaceFrontal && isShouldersFrontal && isHipsFrontal;
 
-        const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
-        const hipDzMag = Math.abs(hipDz);
-        const deadzoneThreshold = isOverallFrontal ? 0.08 : 0.055;
-        let effHipDz = 0.0;
-        if (hipDzMag > deadzoneThreshold) {
-            effHipDz = Math.sign(hipDz) * (hipDzMag - deadzoneThreshold);
-        }
-
-        // 正面站姿防護：嚴禁因插腰/插袋單側陰影將骨盆轉向放大為大角度側身
-        if (isOverallFrontal) {
-            effHipDz = THREE.MathUtils.clamp(effHipDz, -0.04, 0.04);
-        }
-
-        let pelvisYaw = Math.atan2(effHipDz, Math.max(0.02, Math.abs(hipDx)));
-        if (isOverallFrontal) {
-            pelvisYaw = this._clamp(pelvisYaw, -0.22, 0.22);
-        } else {
-            pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
-        }
+        let pelvisYaw = 0;
+        let thoracicYaw = 0;
+        let thoracicPitch = 0;
+        let pelvisPitch = 0;
+        let thoracicRoll = 0;
+        let pelvisRoll = 0;
+        let lumbarRoll = 0;
+        let lumbarYaw = 0;
+        let profileSign = 0;
 
         let rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
+        const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
 
-        // 智慧檢測手臂舉高 (Arm Elevation False Depth Decoupling):
-        // 當單側手臂舉過肩膀水平線時 (如迪斯可高舉、投籃、致敬)，MediaPipe 單圖神經網路預測的肩部 Z 深度會嚴重失真 (被強行後推)
-        const isRightArmElevated = (rightWrist && rightWrist.y < rightShoulder.y - 0.05) ||
-                                   (rightElbow && rightElbow.y < rightShoulder.y - 0.05);
-        const isLeftArmElevated = (leftWrist && leftWrist.y < leftShoulder.y - 0.05) ||
-                                  (leftElbow && leftElbow.y < leftShoulder.y - 0.05);
-        const hasElevatedArm = isRightArmElevated || isLeftArmElevated;
+        if (isProfileStance) {
+            // ---------------------------------------------------------
+            // 側身狀態機啟動 (Profile Stance Mode Active: 75° ~ 90°)
+            // ---------------------------------------------------------
+            // 1. 決定人物面朝方向：面朝左 (profileSign = -1) 或 面朝右 (profileSign = +1)
+            let leftScore = 0;
+            let rightScore = 0;
+            if (noseOffset < -0.008) leftScore += 2.0;
+            if (noseOffset > 0.008) rightScore += 2.0;
+            if (rightEarVis > leftEarVis + 0.10) leftScore += 2.5; // 右耳面向鏡頭 -> 人物面朝左
+            if (leftEarVis > rightEarVis + 0.10) rightScore += 2.5; // 左耳面向鏡頭 -> 人物面朝右
+            if (headYaw < -0.20) leftScore += 1.5;
+            if (headYaw > 0.20) rightScore += 1.5;
+            if (rawDz > 0.02) leftScore += 1.0;
+            if (rawDz < -0.02) rightScore += 1.0;
 
-        const spineBaselineYaw = headYaw * 0.65 + pelvisYaw * 0.35;
-        let thoracicYaw;
+            profileSign = (leftScore >= rightScore) ? -1 : 1;
 
-        if (isOverallFrontal) {
-            // 正面站姿胸廓鎖定：避免手肘外展與單側手臂景深噪聲扭曲胸廓
-            const combinedDz = (rawDz * 0.40 + hipDz * 0.60);
-            const clampedDz = THREE.MathUtils.clamp(combinedDz, -0.06, 0.06);
-            let effDz = 0.0;
-            if (Math.abs(clampedDz) > deadzoneThreshold) {
-                effDz = Math.sign(clampedDz) * (Math.abs(clampedDz) - deadzoneThreshold);
-            }
-            thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
-            thoracicYaw = this._clamp(thoracicYaw, -0.20, 0.20);
-        } else if (hasElevatedArm && Math.abs(headYaw) < 0.38 && Math.abs(pelvisYaw) < 0.38) {
-            // 面部與骨盆均處於正面區間，手臂高舉產生的假性 shoulderDz 大幅衰減，直接錨定動態脊椎軸線
-            const dampenedDz = rawDz * 0.15 * 0.30 + effHipDz * 0.70;
-            let effDz = 0.0;
-            if (Math.abs(dampenedDz) > deadzoneThreshold) {
-                effDz = Math.sign(dampenedDz) * (Math.abs(dampenedDz) - deadzoneThreshold);
-            }
-            thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
-            thoracicYaw = this._clamp(thoracicYaw, spineBaselineYaw - 0.14, spineBaselineYaw + 0.14);
+            // 2. 直接賦予解剖側身轉向角 (±82° ~ ±88°)，徹底擺脫單目深度噪聲坍縮
+            const profileTargetYaw = profileSign * 1.48; // ~85°
+            pelvisYaw = profileTargetYaw;
+            thoracicYaw = profileTargetYaw;
+
+            // 頭部保持側向，允許微幅看鏡頭或偏轉
+            headYaw = profileTargetYaw + profileSign * THREE.MathUtils.clamp(headYaw * 0.35, -0.22, 0.22);
+
+            // 3. 側身矢狀面俯仰解算 (Profile Sagittal Pitch Mapping)
+            // 2D 畫面上的水平脊椎軸位移 (midShoulder.x - midHip.x) 直接對應身體矢狀面的前後傾倒！
+            const profileLean2D = (midShoulder.x - midHip.x) * ar;
+            // profileSign = -1 (面朝左): 往右 (profileLean2D > 0) 代表後仰 (pitch > 0)
+            // profileSign = +1 (面朝右): 往左 (profileLean2D < 0) 代表後仰 (pitch > 0)
+            const sagittalLean = -profileSign * profileLean2D;
+            thoracicPitch = THREE.MathUtils.clamp(Math.atan2(sagittalLean, Math.max(0.1, Math.abs(spineDy))) * 0.95, -0.55, 0.55);
+            pelvisPitch = thoracicPitch * 0.40;
+
+            // 4. 側身模式側傾防護 (避免因一肩略高產生假性高低肩扭曲)
+            thoracicRoll = THREE.MathUtils.clamp(-Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001) * 0.2, -0.08, 0.08);
+            pelvisRoll = THREE.MathUtils.clamp(-Math.atan2(hipDy, Math.abs(hipDx) + 0.001) * 0.2, -0.08, 0.08);
+            lumbarRoll = 0.0;
+            lumbarYaw = 0.0;
         } else {
-            const combinedDz = (rawDz * 0.65 + hipDz * 0.35);
-            const dzMag = Math.abs(combinedDz);
-            let effDz = 0.0;
-            if (dzMag > deadzoneThreshold) {
-                effDz = Math.sign(combinedDz) * (dzMag - deadzoneThreshold);
+            // ---------------------------------------------------------
+            // 正面與斜正面解算模式 (Frontal & Three-Quarter Mode)
+            // ---------------------------------------------------------
+            const hipDzMag = Math.abs(hipDz);
+            const deadzoneThreshold = isOverallFrontal ? 0.08 : 0.055;
+            let effHipDz = 0.0;
+            if (hipDzMag > deadzoneThreshold) {
+                effHipDz = Math.sign(hipDz) * (hipDzMag - deadzoneThreshold);
             }
-            thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
 
-            // 脊椎動態鏈生理雙向約束 (Spine Biomechanical Dual-Anchor Guardrail)
-            const maxSpineTwist = 0.32; // 約 18°
-            const minThoracicYaw = Math.max(pelvisYaw - maxSpineTwist, headYaw - maxSpineTwist);
-            const maxThoracicYaw = Math.min(pelvisYaw + maxSpineTwist, headYaw + maxSpineTwist);
+            if (isOverallFrontal) {
+                effHipDz = THREE.MathUtils.clamp(effHipDz, -0.04, 0.04);
+            }
 
-            if (minThoracicYaw <= maxThoracicYaw) {
-                thoracicYaw = this._clamp(thoracicYaw, minThoracicYaw, maxThoracicYaw);
+            pelvisYaw = Math.atan2(effHipDz, Math.max(0.02, Math.abs(hipDx)));
+            if (isOverallFrontal) {
+                pelvisYaw = this._clamp(pelvisYaw, -0.22, 0.22);
             } else {
-                const midYaw = (pelvisYaw + headYaw) * 0.5;
-                thoracicYaw = this._clamp(thoracicYaw, midYaw - 0.28, midYaw + 0.28);
+                pelvisYaw = this._clamp(pelvisYaw, -1.0, 1.0);
             }
+
+            const isRightArmElevated = (rightWrist && rightWrist.y < rightShoulder.y - 0.05) ||
+                                       (rightElbow && rightElbow.y < rightShoulder.y - 0.05);
+            const isLeftArmElevated = (leftWrist && leftWrist.y < leftShoulder.y - 0.05) ||
+                                      (leftElbow && leftElbow.y < leftShoulder.y - 0.05);
+            const hasElevatedArm = isRightArmElevated || isLeftArmElevated;
+
+            const spineBaselineYaw = headYaw * 0.65 + pelvisYaw * 0.35;
+
+            if (isOverallFrontal) {
+                const combinedDz = (rawDz * 0.40 + hipDz * 0.60);
+                const clampedDz = THREE.MathUtils.clamp(combinedDz, -0.06, 0.06);
+                let effDz = 0.0;
+                if (Math.abs(clampedDz) > deadzoneThreshold) {
+                    effDz = Math.sign(clampedDz) * (Math.abs(clampedDz) - deadzoneThreshold);
+                }
+                thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+                thoracicYaw = this._clamp(thoracicYaw, -0.20, 0.20);
+            } else if (hasElevatedArm && Math.abs(headYaw) < 0.38 && Math.abs(pelvisYaw) < 0.38) {
+                const dampenedDz = rawDz * 0.15 * 0.30 + effHipDz * 0.70;
+                let effDz = 0.0;
+                if (Math.abs(dampenedDz) > deadzoneThreshold) {
+                    effDz = Math.sign(dampenedDz) * (Math.abs(dampenedDz) - deadzoneThreshold);
+                }
+                thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+                thoracicYaw = this._clamp(thoracicYaw, spineBaselineYaw - 0.14, spineBaselineYaw + 0.14);
+            } else {
+                const combinedDz = (rawDz * 0.65 + hipDz * 0.35);
+                const dzMag = Math.abs(combinedDz);
+                let effDz = 0.0;
+                if (dzMag > deadzoneThreshold) {
+                    effDz = Math.sign(combinedDz) * (dzMag - deadzoneThreshold);
+                }
+                thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+
+                const maxSpineTwist = 0.32; // 約 18°
+                const minThoracicYaw = Math.max(pelvisYaw - maxSpineTwist, headYaw - maxSpineTwist);
+                const maxThoracicYaw = Math.min(pelvisYaw + maxSpineTwist, headYaw + maxSpineTwist);
+
+                if (minThoracicYaw <= maxThoracicYaw) {
+                    thoracicYaw = this._clamp(thoracicYaw, minThoracicYaw, maxThoracicYaw);
+                } else {
+                    const midYaw = (pelvisYaw + headYaw) * 0.5;
+                    thoracicYaw = this._clamp(thoracicYaw, midYaw - 0.28, midYaw + 0.28);
+                }
+            }
+
+            thoracicRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
+            pelvisRoll = -Math.atan2(hipDy, Math.abs(hipDx) + 0.001);
+
+            lumbarRoll = (thoracicRoll - pelvisRoll) * 0.45 - (spineDx * 0.4);
+            lumbarYaw = (thoracicYaw - pelvisYaw) * 0.30;
+            lumbarYaw = this._clamp(lumbarYaw, -0.12, 0.12);
+            lumbarRoll = this._clamp(lumbarRoll, -0.32, 0.32);
+
+            const midShoulderZ = ((leftShoulder.z || 0) + (rightShoulder.z || 0)) * 0.5;
+            const midHipZ = ((leftHip.z || 0) + (rightHip.z || 0)) * 0.5;
+            const spineDz = midShoulderZ - midHipZ;
+            thoracicPitch = Math.atan2(spineDz * 0.6, Math.max(0.05, Math.abs(spineDy)));
+            thoracicPitch = this._clamp(thoracicPitch, -0.35, 0.35);
+            pelvisPitch = thoracicPitch * 0.35;
         }
-
-        // 6. 胸廓側傾 (Roll - 高低肩)
-        let thoracicRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
-
-        // 7. 骨盆傾斜 (Pelvis Roll / Hip Tilt)
-        let pelvisRoll = -Math.atan2(hipDy, Math.abs(hipDx) + 0.001);
-
-        // 8. 腰椎受力側彎與旋轉 (Contrapposto & Lumbar Rotation)
-        // 嚴格人體生理約束：腰椎 L1-L5 關節突呈矢狀位，軸向主動旋轉極限僅約 5°~8° (0.09~0.14 rad)
-        let lumbarRoll = (thoracicRoll - pelvisRoll) * 0.45 - (spineDx * 0.4);
-        let lumbarYaw = (thoracicYaw - pelvisYaw) * 0.30;
-        lumbarYaw = this._clamp(lumbarYaw, -0.12, 0.12);
-        lumbarRoll = this._clamp(lumbarRoll, -0.22, 0.22);
-
-        // 9. 俯仰 (Pitch - 挺胸/後仰或前傾)
-        const midShoulderZ = ((leftShoulder.z || 0) + (rightShoulder.z || 0)) * 0.5;
-        const midHipZ = ((leftHip.z || 0) + (rightHip.z || 0)) * 0.5;
-        const spineDz = midShoulderZ - midHipZ;
-        let thoracicPitch = Math.atan2(spineDz * 0.6, Math.max(0.05, Math.abs(spineDy)));
-        thoracicPitch = this._clamp(thoracicPitch, -0.35, 0.35);
-        let pelvisPitch = thoracicPitch * 0.35;
 
         // 10. 頸椎與寰枕關節仰俯協同分配 (Biomechanical Head/Neck Coupling)
         // 人體生理生物力學：頭部相對於胸廓之仰俯角，由頸椎 (60%) 與寰枕關節 (40%) 協同承擔
@@ -742,24 +804,45 @@ export class TorsoPoseEstimator {
         const isLeftTouchingHead = checkTouchingHead(leftShoulder, leftElbow, activeLeftWrist, matchedLeftHand, 'left');
         const isRightTouchingHead = checkTouchingHead(rightShoulder, rightElbow, activeRightWrist, matchedRightHand, 'right');
 
-        const isLeftHandOnHip = !isLeftTouchingHead && checkHandOnHip(leftShoulder, leftElbow, activeLeftWrist, 'left');
-        const isRightHandOnHip = !isRightTouchingHead && checkHandOnHip(rightShoulder, rightElbow, activeRightWrist, 'right');
+        // 判定是否為過頂拱手 / 芭蕾五位手閉環姿態 (Overhead Clasped / Arched Arms IK)
+        const checkOverheadClasped = () => {
+            if (!activeLeftWrist || !activeRightWrist || !leftShoulder || !rightShoulder) return false;
+            const refHeadY = headTopY || (leftEye && rightEye ? (leftEye.y + rightEye.y) * 0.5 - 0.08 : leftShoulder.y - 0.15);
+            // 雙手手腕均在頭頂高度或附近
+            const bothWristsHigh = (activeLeftWrist.y < refHeadY + 0.06) && (activeRightWrist.y < refHeadY + 0.06);
+            // 雙腕水平間距在頭頂上方接近
+            const wristDx = Math.abs(activeLeftWrist.x - activeRightWrist.x) * ar;
+            const isWristClose = wristDx < 0.22;
+            return bothWristsHigh && isWristClose;
+        };
 
-        const isLeftFrontOfPelvis = !isLeftHandOnHip && !isLeftTouchingHead && checkFrontOfPelvis(activeLeftWrist);
-        const isRightFrontOfPelvis = !isRightHandOnHip && !isRightTouchingHead && checkFrontOfPelvis(activeRightWrist);
+        const isOverheadClasped = checkOverheadClasped();
+        const overheadClaspedInfo = isOverheadClasped ? {
+            isClasped: true,
+            midWristX: (activeLeftWrist.x + activeRightWrist.x) * 0.5,
+            topWristY: Math.min(activeLeftWrist.y, activeRightWrist.y),
+            headTopY: headTopY
+        } : null;
+
+        const isLeftHandOnHip = !isLeftTouchingHead && !isOverheadClasped && checkHandOnHip(leftShoulder, leftElbow, activeLeftWrist, 'left');
+        const isRightHandOnHip = !isRightTouchingHead && !isOverheadClasped && checkHandOnHip(rightShoulder, rightElbow, activeRightWrist, 'right');
+
+        const isLeftFrontOfPelvis = !isLeftHandOnHip && !isLeftTouchingHead && !isOverheadClasped && checkFrontOfPelvis(activeLeftWrist);
+        const isRightFrontOfPelvis = !isRightHandOnHip && !isRightTouchingHead && !isOverheadClasped && checkFrontOfPelvis(activeRightWrist);
 
         const headTargetInfo = (nose && leftEye && rightEye) ? {
             nose: nose,
             midEyeY: (leftEye.y + rightEye.y) * 0.5
         } : null;
 
-        // 12. 左右大臂與前臂解算 (含摸頭/撫面逆向運動學、肌肉包絡面避障、插腰側腰定位與相機真實投影傾角保真)
+        // 12. 左右大臂與前臂解算 (含摸頭/撫面、過頂芭蕾拱手閉環、側身狀態機支持、肌肉包絡面避障與真實相機投影)
         const leftArmPose = this._solveArmKinematics(
             leftShoulder, leftElbow, activeLeftWrist, 'left',
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             leftThumb, leftPinky,
             leftHip, rightHip, isLeftFrontOfPelvis, isLeftHandOnHip,
-            isLeftTouchingHead, headTargetInfo, matchedLeftHand
+            isLeftTouchingHead, headTargetInfo, matchedLeftHand,
+            overheadClaspedInfo, isProfileStance
         );
 
         const rightArmPose = this._solveArmKinematics(
@@ -767,7 +850,8 @@ export class TorsoPoseEstimator {
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             rightThumb, rightPinky,
             leftHip, rightHip, isRightFrontOfPelvis, isRightHandOnHip,
-            isRightTouchingHead, headTargetInfo, matchedRightHand
+            isRightTouchingHead, headTargetInfo, matchedRightHand,
+            overheadClaspedInfo, isProfileStance
         );
 
         let leftArmPitch = leftArmPose.pitch;
@@ -798,6 +882,9 @@ export class TorsoPoseEstimator {
             if (isLeftTouchingHead) {
                 leftHandGesture = 'open';
                 leftHandDetectedPreset = 'open';
+            } else if (isOverheadClasped) {
+                leftHandGesture = 'open';
+                leftHandDetectedPreset = 'open';
             } else if (leftWrist.y < leftShoulder.y + 0.15 && leftElbow.y > leftWrist.y) {
                 leftHandGesture = 'peace';
                 leftHandDetectedPreset = 'peace';
@@ -814,21 +901,24 @@ export class TorsoPoseEstimator {
             if (isRightTouchingHead) {
                 rightHandGesture = 'open';
                 rightHandDetectedPreset = 'open';
+            } else if (isOverheadClasped) {
+                rightHandGesture = 'open';
+                rightHandDetectedPreset = 'open';
             } else if (rightWrist.y < rightShoulder.y + 0.15 && rightElbow.y > rightWrist.y) {
                 rightHandGesture = 'peace';
                 rightHandDetectedPreset = 'peace';
             }
         }
 
-        // 14. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝)
+        // 14. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援側身矢狀投影)
         const leftLegPose = this._solveLegKinematics(
             leftHip, leftKnee, leftAnkle, leftFootIndex, leftHeel, 'left',
-            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
+            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance
         );
 
         const rightLegPose = this._solveLegKinematics(
             rightHip, rightKnee, rightAnkle, rightFootIndex, rightHeel, 'right',
-            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
+            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance
         );
 
         let leftHipPitch = leftLegPose.pitch;
@@ -972,17 +1062,26 @@ export class TorsoPoseEstimator {
             // MediaPipe Pose 的 Landmark 23/24 為體內股骨頭關節中心 (Acetabulum)，
             // 其解剖距離本就遠窄於外部骨盆/側腰輪廓，故男女基準比值通常在 1.65 ~ 2.40 之間。
             // 判斷是否為跪姿或下肢折疊姿態 (Kneeling / Folded Legs Detection)
-            const isKneelingOrFolded = (leftKneeFlex > 1.1 || rightKneeFlex > 1.1) ||
-                (leftKnee && leftAnkle && Math.abs(leftAnkle.y - leftKnee.y) < 0.18 * torsoHeight);
+            const isKneelingOrFolded = (leftKneeFlex > 1.0 || rightKneeFlex > 1.0) ||
+                (leftKnee && leftAnkle && Math.abs(leftAnkle.y - leftKnee.y) < 0.20 * torsoHeight);
 
             // 結合肩寬軀幹比 (Shoulder-to-Torso Ratio) 進行綜合形態打分：
-            // 解剖學常態：MediaPipe 內部股骨頭間距基準比校準：女性約 1.65~1.85，男性約 1.95~2.30；決策分界線校準為 1.88
             const shoulderToTorsoRatio = shoulderWidth2D / Math.max(0.1, torsoHeight);
-            let maleScore = (shoulderToHipRatio - 1.88) * 2.0 + (shoulderToTorsoRatio - 0.73) * 1.5;
+            let maleScore = 0;
 
-            // 跪姿/坐姿補償：折疊下肢使骨盆在 2D 投影收窄，給予 -0.55 偏置防止誤判為男性
             if (isKneelingOrFolded) {
-                maleScore -= 0.55;
+                // 跪姿/坐姿模式：下肢折疊嚴重扭曲骨盆 2D 投影，優先信賴「肩寬軀幹比 (女性常態 < 0.68, 男性常態 > 0.72)」
+                maleScore = (shoulderToTorsoRatio - 0.71) * 3.5 + (shoulderToHipRatio - 2.15) * 0.8 - 0.45;
+            } else {
+                // 正常站姿模式：結合肩臀比與肩寬軀幹比
+                maleScore = (shoulderToHipRatio - 1.88) * 2.2 + (shoulderToTorsoRatio - 0.71) * 2.0;
+
+                // 寬鬆外套/西裝抗干擾補償 (Suit / Coat Compensation):
+                // 成人男士身形高大 (頭身比 >= 7.6) 且肩線展開 (shoulderToTorsoRatio >= 0.72) 時，
+                // 外套下擺撐大臀圍不扣分為女性
+                if (headToBodyRatio >= 7.6 && shoulderToTorsoRatio >= 0.72) {
+                    maleScore += 0.85;
+                }
             }
 
             if (maleScore >= 0) {
@@ -1000,19 +1099,22 @@ export class TorsoPoseEstimator {
             shoulderToHipRatio,
             headToBodyRatio,
             skullScale,
+            isProfileStance,
+            profileSign,
+            isOverheadClasped,
             pelvisRoll: this._clamp(pelvisRoll, -0.4, 0.4),
-            pelvisPitch: this._clamp(pelvisPitch, -0.2, 0.2),
-            pelvisYaw: this._clamp(pelvisYaw, -1.4, 1.4),
-            thoracicPitch: this._clamp(thoracicPitch, -0.35, 0.35),
-            thoracicYaw: this._clamp(thoracicYaw, -1.4, 1.4), // 支援大角度側身 (±80°)
+            pelvisPitch: this._clamp(pelvisPitch, -0.4, 0.4),
+            pelvisYaw: this._clamp(pelvisYaw, -1.57, 1.57),
+            thoracicPitch: this._clamp(thoracicPitch, -0.55, 0.55),
+            thoracicYaw: this._clamp(thoracicYaw, -1.57, 1.57), // 支援純正側面 90°
             thoracicRoll: this._clamp(thoracicRoll, -0.5, 0.5),
-            lumbarPitch: this._clamp(thoracicPitch * 0.3, -0.3, 0.3),
+            lumbarPitch: this._clamp(thoracicPitch * 0.35, -0.35, 0.35),
             lumbarRoll: this._clamp(lumbarRoll, -0.45, 0.45),
             lumbarYaw: this._clamp(lumbarYaw, -0.5, 0.5),
-            cervicalPitch: this._clamp(cervicalPitch, -0.45, 0.45),
-            cervicalYaw: this._clamp(cervicalYaw, -0.9, 0.9),
-            headPitch: this._clamp(cranialPitch, -0.40, 0.40),
-            headYaw: this._clamp(headYaw, -1.3, 1.3),
+            cervicalPitch: this._clamp(cervicalPitch, -0.55, 0.55),
+            cervicalYaw: this._clamp(cervicalYaw, -1.2, 1.2),
+            headPitch: this._clamp(cranialPitch, -0.45, 0.45),
+            headYaw: this._clamp(headYaw, -1.57, 1.57),
             headRoll: this._clamp(headRoll, -0.6, 0.6),
             leftArmPitch: this._clamp(leftArmPitch, -2.2, 2.2),
             leftArmRoll: this._clamp(leftArmRoll, -0.85, 3.23),
@@ -1086,7 +1188,9 @@ export class TorsoPoseEstimator {
         leftHip = null, rightHip = null,
         isFrontOfPelvis = false, isHandOnHip = false,
         isTouchingHead = false, headTargetInfo = null,
-        handLandmarks = null
+        handLandmarks = null,
+        overheadTargetInfo = null,
+        isProfileStance = false
     ) {
         const sign = (side === 'left') ? 1.0 : -1.0;
         const ar = this.aspectRatio || 1.0;
@@ -1110,7 +1214,39 @@ export class TorsoPoseEstimator {
         let pElbowLocal, pWristLocal, pHandTip;
         let isHeadSolve = false;
 
-        if (isTouchingHead && headTargetInfo && wrist) {
+        if (overheadTargetInfo && overheadTargetInfo.isClasped) {
+            // -------------------------------------------------------------
+            // 模式 1：過頂合攏手 / 芭蕾五位手閉環 IK (Clasped Overhead Arched IK)
+            // -------------------------------------------------------------
+            // 在胸廓局部坐標系中，頭頂中心約在 (0, 20.8, 0.5)
+            // 雙手手腕目標位置在頭頂上方微前傾交匯：X = sign * 0.70, Y = 22.8, Z = 1.05
+            const pWristTarget = new THREE.Vector3(sign * 0.70, 22.8, 1.05);
+
+            const vST = pWristTarget.clone().sub(pShoulderLocal);
+            const dST = vST.length();
+            const maxD = (L1 + L2) * 0.96;
+            const minD = Math.abs(L1 - L2) * 1.05;
+            const safeD = THREE.MathUtils.clamp(dST, minD, maxD);
+            const uST = vST.clone().normalize();
+
+            const cosAlpha = (L1 * L1 + safeD * safeD - L2 * L2) / (2 * L1 * safeD);
+            const alpha = Math.acos(THREE.MathUtils.clamp(cosAlpha, -1.0, 1.0));
+            const dProj = L1 * Math.cos(alpha);
+            const rCircle = L1 * Math.sin(alpha);
+
+            // 肘部極向量：芭蕾圓弧必然向外上方展開 (+X 外側, +Y 向上, +Z 略微向前)
+            const poleVec = new THREE.Vector3(sign * 1.85, 0.65, 0.40);
+            const dotP = poleVec.dot(uST);
+            const polePerp = poleVec.clone().sub(uST.clone().multiplyScalar(dotP)).normalize();
+
+            pElbowLocal = pShoulderLocal.clone().addScaledVector(uST, dProj).addScaledVector(polePerp, rCircle);
+            pWristLocal = pWristTarget;
+            pHandTip = pWristLocal.clone().addScaledVector(pWristLocal.clone().sub(pElbowLocal).normalize(), cfg.handClearance.handLen);
+
+            uArm = pElbowLocal.clone().sub(pShoulderLocal).normalize();
+            uFore = pWristLocal.clone().sub(pElbowLocal).normalize();
+            isHeadSolve = true;
+        } else if (isTouchingHead && headTargetInfo && wrist) {
             // -------------------------------------------------------------
             // 模式 0：摸頭/撫面/手觸臉部 專屬解剖解析逆向幾何求解器 (Analytical Two-Bone IK)
             // -------------------------------------------------------------
@@ -1190,7 +1326,10 @@ export class TorsoPoseEstimator {
             const mpDz = -((elbow.z || 0) - (shoulder.z || 0));
             let zSignArm = isFrontOfPelvis ? 0.30 : (mpDz < -0.05 ? -0.15 : 0.40);
             if (isHandOnHip) zSignArm = 0.25;
-            const dzArm = (lArm2D < LArm * 0.95) ? (rawDzArm * zSignArm) : 0.02 * LArm;
+            let dzArm = (lArm2D < LArm * 0.95) ? (rawDzArm * zSignArm) : 0.02 * LArm;
+            if (isProfileStance) {
+                dzArm = sign * 0.05 * LArm;
+            }
 
             const vArmCam = new THREE.Vector3(dxArm, dyArm, dzArm);
 
@@ -1211,7 +1350,10 @@ export class TorsoPoseEstimator {
                     // 僅在手明顯往後背伸 (如背手姿態) 且手腕位於體側後方時才允許向後
                     zSignFore = (wrist.y > elbow.y + 0.1) ? 0.15 : -0.15;
                 }
-                const dzFore = (lFore2D < LFore * 0.95) ? (rawDzFore * zSignFore) : 0.02 * LFore;
+                let dzFore = (lFore2D < LFore * 0.95) ? (rawDzFore * zSignFore) : 0.02 * LFore;
+                if (isProfileStance) {
+                    dzFore = sign * 0.04 * LFore;
+                }
 
                 vForeCam = new THREE.Vector3(dxFore, dyFore, dzFore);
             } else {
@@ -1229,9 +1371,10 @@ export class TorsoPoseEstimator {
 
             // 4. 生理防穿插約束與「脊椎解剖防護禁區」+「腹壁橢圓包絡面動態前推算法」
             // (Biomechanical Clearance, Spine Shield & Abdominal Ellipsoid Projection)
-            // A. 後背壁防穿透：大臂在胸腔坐標系中 Z 軸不可向後過度延伸
-            if (uArm.z < -0.15) {
-                uArm.z = -0.15;
+            // A. 後背壁防穿透：允許自然向後伸展支撐 (Extension)
+            const minZLimit = isProfileStance ? -0.75 : -0.55;
+            if (uArm.z < minZLimit) {
+                uArm.z = minZLimit;
                 uArm.normalize();
             }
 
@@ -1366,7 +1509,7 @@ export class TorsoPoseEstimator {
         const isRaised = (pWristLocal.y >= 1.0) && (flex >= 0.7);
 
         if (isHeadSolve) {
-            twist = 0.40; // 摸頭/撫面：掌心朝向頭部/面部，自然微旋後
+            twist = (overheadTargetInfo && overheadTargetInfo.isClasped) ? 1.15 : 0.40; // 摸頭/撫面：掌心朝向頭部/面部，自然微旋後；芭蕾拱手：掌心斜前下
         } else if (isHandOnHip) {
             twist = 2.65;
         } else if (isFrontOfPelvis) {
@@ -1428,7 +1571,8 @@ export class TorsoPoseEstimator {
      */
     _solveLegKinematics(
         hip, knee, ankle, footIndex, heel, side,
-        pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight
+        pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight,
+        isProfileStance = false
     ) {
         const sign = (side === 'left') ? 1.0 : -1.0;
         const ar = this.aspectRatio || 1.0;
@@ -1457,9 +1601,13 @@ export class TorsoPoseEstimator {
         // 2. 解剖深度推估 (Pythagorean Depth)
         const rawDzFemur = Math.sqrt(Math.max(0, LFemur * LFemur - lFemur2D * lFemur2D));
         const mpDzFemur = -((knee.z || 0) - (hip.z || 0));
-        const dzFemur = (lFemur2D < LFemur * 0.95)
-            ? this._clamp(rawDzFemur * mpDzFemur * 0.5, -0.35 * LFemur, 0.35 * LFemur)
-            : 0.0;
+        let dzFemur = 0.0;
+        if (isProfileStance) {
+            // 側身模式下，相機 Z 軸對應體側冠狀微偏移，肢體主要在相機平面 (X-Y) 屈伸
+            dzFemur = sign * 0.04 * LFemur;
+        } else if (lFemur2D < LFemur * 0.95) {
+            dzFemur = this._clamp(rawDzFemur * mpDzFemur * 0.5, -0.35 * LFemur, 0.35 * LFemur);
+        }
 
         const vFemurCam = new THREE.Vector3(dxFemur, dyFemur, dzFemur);
 
@@ -1471,9 +1619,14 @@ export class TorsoPoseEstimator {
             const lShin2D = Math.hypot(dxShin, dyShin);
             const rawDzShin = Math.sqrt(Math.max(0, LTibia * LTibia - lShin2D * lShin2D));
             const mpDzShin = -((ankle.z || 0) - (knee.z || 0));
-            // 人體小腿彎曲必然向後 (-Z)，絕不允許向前反折
-            const zShinMag = Math.max(0.15, Math.min(0.85, Math.abs(mpDzShin)));
-            const dzShin = (lShin2D < LTibia * 0.95) ? (-rawDzShin * zShinMag) : -0.05 * LTibia;
+            let dzShin = -0.05 * LTibia;
+            if (isProfileStance) {
+                dzShin = sign * 0.03 * LTibia;
+            } else if (lShin2D < LTibia * 0.95) {
+                // 人體小腿彎曲必然向後 (-Z)，絕不允許向前反折
+                const zShinMag = Math.max(0.15, Math.min(0.85, Math.abs(mpDzShin)));
+                dzShin = -rawDzShin * zShinMag;
+            }
 
             vTibiaCam = new THREE.Vector3(dxShin, dyShin, dzShin);
         } else {
