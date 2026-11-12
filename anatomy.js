@@ -76,11 +76,13 @@ export class AnatomicalTorso {
             }
         };
 
-        // 頸椎骨節
+        // 頸椎骨節與藝用解剖頭骨系統
         this.cervicalVertebrae = [];
         this.cervicalGroup = new THREE.Group();
         this.cervicalGroup.name = "CervicalSpine_Group";
         this.thoracicCageUnit.add(this.cervicalGroup);
+        this.headJoint = null;
+        this.skullGroup = null;
 
         this.landmarks = {};
 
@@ -202,7 +204,21 @@ export class AnatomicalTorso {
             cParent = vert;
         }
 
-        this._addLandmark("HeadBase", new THREE.Vector3(0, 0.8, 0), cParent);
+        // 寰枕關節與藝用解剖頭骨系統 (Atlanto-Occipital Joint & Skull)
+        this.headJoint = new THREE.Group();
+        this.headJoint.name = "AtlantoOccipital_Joint";
+        this.headJoint.position.set(0, 0.85, 0.1);
+        cParent.add(this.headJoint);
+
+        this.skullGroup = this._createSkullMesh();
+        this.headJoint.add(this.skullGroup);
+
+        this._addLandmark("HeadBase", new THREE.Vector3(0, 0, 0), this.headJoint);
+        this._addLandmark("SkullCrown", new THREE.Vector3(0, 4.3, -0.2), this.headJoint);
+        this._addLandmark("Glabella", new THREE.Vector3(0, 2.2, 1.4), this.headJoint);
+        this._addLandmark("ChinPoint", new THREE.Vector3(0, -0.85, 1.4), this.headJoint);
+        this._addLandmark("Zygomatic_L", new THREE.Vector3(1.5, 1.3, 1.05), this.headJoint);
+        this._addLandmark("Zygomatic_R", new THREE.Vector3(-1.5, 1.3, 1.05), this.headJoint);
     }
 
     /**
@@ -1459,6 +1475,129 @@ export class AnatomicalTorso {
         return group;
     }
 
+    /**
+     * 建立完整藝用解剖頭骨系統 (Skull & Mandible)
+     * 含腦顱骨穹隆 (Calvaria)、額骨眉弓 (Brow Ridge)、雙側眼眶 (Orbits)、
+     * 顴骨與顴弓 (Zygomatic Bones & Arches)、鼻骨梨狀孔 (Nasal Bone & Aperture)、
+     * 上頜骨牙列 (Maxilla & Upper Teeth)、以及完整下頜骨與下巴頦結節 (Mandible & Mental Protuberance)
+     */
+    _createSkullMesh() {
+        const group = new THREE.Group();
+        group.name = "Human_Skull";
+
+        // 1. 腦顱骨穹隆 (Cranial Vault / Calvaria) - 頂骨、枕骨、額骨
+        const craniumGeo = new THREE.SphereGeometry(1.9, 16, 16);
+        const craniumMesh = new THREE.Mesh(craniumGeo, this.materials.bone);
+        craniumMesh.scale.set(1.0, 1.15, 1.25);
+        craniumMesh.position.set(0, 2.4, -0.4);
+        craniumMesh.castShadow = true;
+        group.add(craniumMesh);
+
+        // 枕外隆凸 (External Occipital Protuberance - 後腦勺骨點)
+        const occiputGeo = new THREE.SphereGeometry(0.5, 8, 8);
+        const occiputMesh = new THREE.Mesh(occiputGeo, this.materials.boneHighlight);
+        occiputMesh.scale.set(1.1, 0.8, 0.9);
+        occiputMesh.position.set(0, 1.3, -1.8);
+        group.add(occiputMesh);
+
+        // 2. 額骨前壁與眉弓隆起 (Frontal Bone & Superciliary Arches / Glabella)
+        const browGeo = new THREE.BoxGeometry(2.3, 0.45, 0.7);
+        const browMesh = new THREE.Mesh(browGeo, this.materials.boneHighlight);
+        browMesh.position.set(0, 2.2, 1.35);
+        group.add(browMesh);
+
+        // 3. 雙側眼眶骨架 (Orbital Cavities & Rims)
+        [-1, 1].forEach(sign => {
+            const orbitRimGeo = new THREE.TorusGeometry(0.55, 0.16, 8, 14);
+            const orbitRimMesh = new THREE.Mesh(orbitRimGeo, this.materials.boneHighlight);
+            orbitRimMesh.position.set(sign * 0.85, 1.6, 1.45);
+            group.add(orbitRimMesh);
+
+            const darkOrbitGeo = new THREE.CylinderGeometry(0.48, 0.35, 0.4, 10);
+            const darkOrbitMat = new THREE.MeshBasicMaterial({ color: 0x1a1512 });
+            const darkOrbitMesh = new THREE.Mesh(darkOrbitGeo, darkOrbitMat);
+            darkOrbitMesh.rotation.x = Math.PI * 0.5;
+            darkOrbitMesh.position.set(sign * 0.85, 1.6, 1.3);
+            group.add(darkOrbitMesh);
+        });
+
+        // 4. 顴骨與顴弓 (Zygomatic Bones & Zygomatic Arches - 臉部最寬藝用骨點)
+        [-1, 1].forEach(sign => {
+            const zygoGeo = new THREE.BoxGeometry(0.65, 0.75, 0.8);
+            const zygoMesh = new THREE.Mesh(zygoGeo, this.materials.boneHighlight);
+            zygoMesh.position.set(sign * 1.5, 1.3, 1.05);
+            group.add(zygoMesh);
+
+            const archP0 = new THREE.Vector3(sign * 1.5, 1.3, 1.05);
+            const archP1 = new THREE.Vector3(sign * 1.85, 1.25, 0.2);
+            const archP2 = new THREE.Vector3(sign * 1.75, 1.2, -0.6);
+            const archCurve = new THREE.CatmullRomCurve3([archP0, archP1, archP2]);
+            const archGeo = new THREE.TubeGeometry(archCurve, 8, 0.15, 6, false);
+            const archMesh = new THREE.Mesh(archGeo, this.materials.boneHighlight);
+            group.add(archMesh);
+        });
+
+        // 5. 鼻骨與梨狀孔 (Nasal Bone & Piriform Aperture)
+        const nasalBridgeGeo = new THREE.ConeGeometry(0.3, 0.95, 5);
+        const nasalBridgeMesh = new THREE.Mesh(nasalBridgeGeo, this.materials.boneHighlight);
+        nasalBridgeMesh.rotation.x = -0.32;
+        nasalBridgeMesh.position.set(0, 1.65, 1.75);
+        group.add(nasalBridgeMesh);
+
+        const piriformGeo = new THREE.BoxGeometry(0.45, 0.75, 0.4);
+        const piriformMat = new THREE.MeshBasicMaterial({ color: 0x151110 });
+        const piriformMesh = new THREE.Mesh(piriformGeo, piriformMat);
+        piriformMesh.position.set(0, 1.05, 1.45);
+        group.add(piriformMesh);
+
+        // 6. 上頜骨與上牙弓 (Maxilla & Upper Dentition)
+        const maxillaGeo = new THREE.BoxGeometry(1.6, 0.85, 1.1);
+        const maxillaMesh = new THREE.Mesh(maxillaGeo, this.materials.bone);
+        maxillaMesh.position.set(0, 0.45, 1.15);
+        group.add(maxillaMesh);
+
+        const upperTeethGeo = new THREE.CylinderGeometry(0.65, 0.7, 0.35, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
+        const teethMat = new THREE.MeshStandardMaterial({ color: 0xfaf5ec, roughness: 0.25 });
+        const upperTeethMesh = new THREE.Mesh(upperTeethGeo, teethMat);
+        upperTeethMesh.position.set(0, 0.05, 1.15);
+        group.add(upperTeethMesh);
+
+        // 7. 下頜骨系統 (Mandible: 下頜體、下頜角、下頜支與下巴頦結節)
+        const mandibleGroup = new THREE.Group();
+        mandibleGroup.name = "Mandible";
+
+        const chinGeo = new THREE.BoxGeometry(0.85, 0.65, 0.75);
+        const chinMesh = new THREE.Mesh(chinGeo, this.materials.boneHighlight);
+        chinMesh.position.set(0, -0.85, 1.35);
+        mandibleGroup.add(chinMesh);
+
+        const lowerTeethGeo = new THREE.CylinderGeometry(0.6, 0.65, 0.32, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
+        const lowerTeethMesh = new THREE.Mesh(lowerTeethGeo, teethMat);
+        lowerTeethMesh.position.set(0, -0.35, 1.12);
+        mandibleGroup.add(lowerTeethMesh);
+
+        [-1, 1].forEach(sign => {
+            const jawP0 = new THREE.Vector3(0, -0.85, 1.35);
+            const jawP1 = new THREE.Vector3(sign * 1.1, -0.75, 0.8);
+            const jawP2 = new THREE.Vector3(sign * 1.45, -0.4, 0.0);
+            const jawP3 = new THREE.Vector3(sign * 1.4, 0.65, -0.15);
+
+            const jawCurve = new THREE.CatmullRomCurve3([jawP0, jawP1, jawP2, jawP3]);
+            const jawGeo = new THREE.TubeGeometry(jawCurve, 12, 0.24, 6, false);
+            const jawMesh = new THREE.Mesh(jawGeo, this.materials.bone);
+            jawMesh.castShadow = true;
+            mandibleGroup.add(jawMesh);
+
+            const gonionGeo = new THREE.SphereGeometry(0.28, 6, 6);
+            const gonionMesh = new THREE.Mesh(gonionGeo, this.materials.boneHighlight);
+            gonionMesh.position.copy(jawP2);
+            mandibleGroup.add(gonionMesh);
+        });
+
+        group.add(mandibleGroup);
+        return group;
+    }
+
     _addLandmark(name, localPos, parent) {
         const geo = new THREE.SphereGeometry(0.24, 12, 12);
         const mesh = new THREE.Mesh(geo, this.materials.landmark);
@@ -1484,6 +1623,10 @@ export class AnatomicalTorso {
         lumbarRoll = 0,
         cervicalPitch = 0,
         cervicalYaw = 0,
+        // 頭部與顱骨姿態 (Head Pose)
+        headPitch = 0,
+        headYaw = 0,
+        headRoll = 0,
         leftArmPitch = 0,
         leftArmRoll = 0.12,
         leftArmYaw = 0,
@@ -1543,13 +1686,31 @@ export class AnatomicalTorso {
         this.thoracicCageUnit.rotation.y = thoracicYaw - accumYaw;
         this.thoracicCageUnit.rotation.z = thoracicRoll - accumRoll;
 
-        // 4. 頸椎
+        // 4. 頸椎與寰枕關節頭骨旋轉 (Cervical Spine & Skull Rotation)
         const cCount = this.cervicalVertebrae.length;
+        let accumCervicalPitch = thoracicPitch;
+        let accumCervicalYaw = thoracicYaw;
+        let accumCervicalRoll = thoracicRoll;
+
         this.cervicalVertebrae.forEach((vert, idx) => {
             const factor = (idx + 1) / cCount;
-            vert.rotation.x = cervicalPitch * factor * 0.2;
-            vert.rotation.y = cervicalYaw * factor * 0.2;
+            const rotX = (headPitch - thoracicPitch) * factor * 0.10;
+            const rotY = (headYaw - thoracicYaw) * factor * 0.10;
+            const rotZ = (headRoll - thoracicRoll) * factor * 0.10;
+            vert.rotation.x = rotX;
+            vert.rotation.y = rotY;
+            vert.rotation.z = rotZ;
+            accumCervicalPitch += rotX;
+            accumCervicalYaw += rotY;
+            accumCervicalRoll += rotZ;
         });
+
+        if (this.headJoint) {
+            this.headJoint.rotation.order = 'YXZ';
+            this.headJoint.rotation.x = headPitch - accumCervicalPitch;
+            this.headJoint.rotation.y = headYaw - accumCervicalYaw;
+            this.headJoint.rotation.z = headRoll - accumCervicalRoll;
+        }
 
         // 5. 左大臂肱骨
         if (this.shoulderGirdle.left.humerusJoint) {
@@ -1649,6 +1810,10 @@ export class AnatomicalTorso {
         this.ribsLeft.forEach(r => r.visible = visible);
         this.ribsRight.forEach(r => r.visible = visible);
         if (this.sternum) this.sternum.visible = visible;
+    }
+
+    toggleSkull(visible) {
+        if (this.skullGroup) this.skullGroup.visible = visible;
     }
 
     toggleShoulderGirdle(visible) {

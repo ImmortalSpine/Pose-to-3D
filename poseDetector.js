@@ -159,6 +159,14 @@ export class TorsoPoseEstimator {
         const lm = results.poseLandmarks;
 
         const nose = lm[0];
+        const leftEyeInner = lm[1];
+        const leftEye = lm[2];
+        const leftEyeOuter = lm[3];
+        const rightEyeInner = lm[4];
+        const rightEye = lm[5];
+        const rightEyeOuter = lm[6];
+        const leftEar = lm[7];
+        const rightEar = lm[8];
         const leftShoulder = lm[11];  // 人物左肩 (畫面右方)
         const rightShoulder = lm[12]; // 人物右肩 (畫面左方)
         const leftElbow = lm[13];
@@ -209,6 +217,56 @@ export class TorsoPoseEstimator {
         const hipSpan = Math.hypot(hipDx, hipDy);
 
         // -------------------------------------------------------------
+        // 藝用解剖頭部姿態解算 (Head Yaw, Pitch, Roll)
+        // -------------------------------------------------------------
+        let headRoll = 0;
+        if (leftEye && rightEye) {
+            const eyeDx = (leftEye.x - rightEye.x) * ar;
+            const eyeDy = leftEye.y - rightEye.y;
+            headRoll = -Math.atan2(eyeDy, Math.max(0.01, eyeDx));
+        }
+
+        let headYaw = 0;
+        if (leftEye && rightEye && nose) {
+            const eyeDx = (leftEye.x - rightEye.x) * ar;
+            const midEyeX = (leftEye.x + rightEye.x) * 0.5;
+            // 2D 雙眼與鼻樑對稱度偏移量 (鼻尖朝向人物左側時為正)
+            const eyeSpanRaw = Math.max(0.02, Math.abs(leftEye.x - rightEye.x));
+            const noseOffset2D = (nose.x - midEyeX) / eyeSpanRaw;
+            const yawFrom2D = noseOffset2D * 1.5;
+
+            // 3D 雙眼深度差
+            const eyeDz = (leftEye.z || 0) - (rightEye.z || 0);
+            const yawFrom3D = Math.atan2(eyeDz, Math.max(0.02, eyeDx));
+
+            // 耳朵可見性輔助 (雙耳可見時進一步校驗)
+            let earYaw = 0;
+            let hasEarBonus = false;
+            if (leftEar && rightEar) {
+                const earDx = (leftEar.x - rightEar.x) * ar;
+                const earDz = (leftEar.z || 0) - (rightEar.z || 0);
+                earYaw = Math.atan2(earDz, Math.max(0.04, earDx));
+                hasEarBonus = true;
+            }
+
+            if (hasEarBonus) {
+                headYaw = yawFrom2D * 0.45 + yawFrom3D * 0.25 + earYaw * 0.30;
+            } else {
+                headYaw = yawFrom2D * 0.65 + yawFrom3D * 0.35;
+            }
+        }
+        headYaw = this._clamp(headYaw, -1.3, 1.3);
+
+        let headPitch = 0;
+        if (leftEye && rightEye && nose) {
+            const midEyeY = (leftEye.y + rightEye.y) * 0.5;
+            const eyeNoseDy = nose.y - midEyeY;
+            const pitchOffset = (eyeNoseDy / Math.max(0.05, torsoHeight * 0.22)) - 0.45;
+            headPitch = -pitchOffset * 0.8 + ((nose.z || 0) - ((leftEye.z || 0) + (rightEye.z || 0)) * 0.5) * 1.2;
+        }
+        headPitch = this._clamp(headPitch, -0.45, 0.45);
+
+        // -------------------------------------------------------------
         // 5. 核心：3D 解剖肩帶與骨盆水平轉向解算 (Yaw)
         // -------------------------------------------------------------
         // 結合 MediaPipe 雙肩與雙髖在 3D 相機空間中的真實法向投影 (atan2(Δz, Δx))
@@ -226,6 +284,14 @@ export class TorsoPoseEstimator {
             effDz = Math.sign(combinedDz) * (dzMag - deadzoneThreshold);
         }
         let thoracicYaw = Math.atan2(effDz, Math.max(0.02, Math.abs(shoulderDx)));
+
+        // 生理頸椎轉動範圍極限保護 (Cervical Physiological Constraint):
+        // 人體頸椎最大生理主動旋轉約 ±40°~45° (約 0.70 rad)。在自然姿態下，胸腔轉向與頭部朝向差值不可超出此極限！
+        // 當頭部正對鏡頭時 (headYaw ≈ 0°)，即便單手高舉造成 MediaPipe 肩部深度噪聲 (Δz)，
+        // 胸腔轉動角 (thoracicYaw) 亦被安全約束在 [headYaw - 0.48, headYaw + 0.48] 範圍內 (約 ±27.5°)，
+        // 徹底杜絕正面照誤判成 70° 大側身的問題！
+        const maxCervicalTwist = 0.48;
+        thoracicYaw = this._clamp(thoracicYaw, headYaw - maxCervicalTwist, headYaw + maxCervicalTwist);
         thoracicYaw = this._clamp(thoracicYaw, -1.2, 1.2);
 
         const hipDzMag = Math.abs(hipDz);
@@ -254,9 +320,9 @@ export class TorsoPoseEstimator {
         thoracicPitch = this._clamp(thoracicPitch, -0.35, 0.35);
         let pelvisPitch = thoracicPitch * 0.35;
 
-        // 10. 頸椎轉動 (回眸補償：當身體側轉但頭看鏡頭時，頸椎自動反向旋轉對齊臉部)
-        let cervicalPitch = (nose.y - midShoulder.y + 0.15) * 0.3;
-        let cervicalYaw = -thoracicYaw * 0.75 + ((nose.x - midShoulder.x) * ar * 1.1);
+        // 10. 頸椎轉動 (頸椎自胸廓朝向平滑過渡至頭部朝向)
+        let cervicalPitch = headPitch - thoracicPitch;
+        let cervicalYaw = headYaw - thoracicYaw;
 
         // 11. MediaPipe Holistic 雙手 21 骨節特徵提取與預處理
         let matchedLeftHand = null;
@@ -421,6 +487,8 @@ export class TorsoPoseEstimator {
             pelvisYaw = -pelvisYaw;
             lumbarYaw = -lumbarYaw;
             cervicalYaw = -cervicalYaw;
+            headYaw = -headYaw;
+            headRoll = -headRoll;
             
             const tempRoll = leftArmRoll;
             leftArmRoll = -rightArmRoll;
@@ -491,6 +559,9 @@ export class TorsoPoseEstimator {
             lumbarYaw: this._clamp(lumbarYaw, -0.5, 0.5),
             cervicalPitch: this._clamp(cervicalPitch, -0.4, 0.4),
             cervicalYaw: this._clamp(cervicalYaw, -0.9, 0.9),
+            headPitch: this._clamp(headPitch, -0.45, 0.45),
+            headYaw: this._clamp(headYaw, -1.3, 1.3),
+            headRoll: this._clamp(headRoll, -0.6, 0.6),
             leftArmPitch: this._clamp(leftArmPitch, -2.2, 2.2),
             leftArmRoll: this._clamp(leftArmRoll, -0.85, 3.23),
             leftArmYaw: this._clamp(leftArmYaw, -2.2, 2.2),
@@ -528,6 +599,8 @@ export class TorsoPoseEstimator {
                 leftFootIndex, rightFootIndex,
                 midShoulder, midHip,
                 nose,
+                leftEye, rightEye,
+                leftEar, rightEar,
                 leftHand2D: matchedLeftHand,
                 rightHand2D: matchedRightHand
             }
@@ -1043,6 +1116,9 @@ export class TorsoPoseEstimator {
             lumbarYaw: 0.02,
             cervicalPitch: 0.0,
             cervicalYaw: -0.4, // 回眸
+            headPitch: 0.0,
+            headYaw: 0.25,
+            headRoll: 0.05,
             leftArmPitch: 0,
             leftArmRoll: 0.25,
             leftArmYaw: 0,

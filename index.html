@@ -97,6 +97,13 @@
             <div class="panel-section">
                 <div class="panel-title">2. 骨骼結構顯示</div>
                 <div class="toggle-row">
+                    <span>藝用解剖頭骨 (Cranium & Mandible)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleSkull" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="toggle-row">
                     <span>胸廓與肋骨籠 (Ribcage)</span>
                     <label class="toggle-switch">
                         <input type="checkbox" id="toggleRibs" checked>
@@ -226,6 +233,30 @@
                         <span class="control-val" id="valLumbarPitch">0°</span>
                     </div>
                     <input type="range" class="range-slider" id="sliderLumbarPitch" min="-30" max="30" value="0">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>頭部水平轉向 (Head Yaw)</span>
+                        <span class="control-val" id="valHeadYaw">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderHeadYaw" min="-75" max="75" value="0">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>頭部仰俯 (Head Pitch)</span>
+                        <span class="control-val" id="valHeadPitch">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderHeadPitch" min="-35" max="35" value="0">
+                </div>
+
+                <div class="control-row">
+                    <div class="control-label-wrap">
+                        <span>頭部側傾 (Head Roll)</span>
+                        <span class="control-val" id="valHeadRoll">0°</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderHeadRoll" min="-30" max="30" value="0">
                 </div>
 
                 <div class="control-row">
@@ -442,7 +473,7 @@
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=3.1"></script>
+    <script type="module" src="app.js?v=3.2"></script>
 </body>
 </html>
 

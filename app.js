@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=3.1';
-import { TorsoPoseEstimator } from './poseDetector.js?v=3.1';
+import { AnatomicalTorso } from './anatomy.js?v=3.2';
+import { TorsoPoseEstimator } from './poseDetector.js?v=3.2';
 
 class App {
     constructor() {
@@ -35,6 +35,10 @@ class App {
             lumbarYaw: 0,
             cervicalPitch: 0,
             cervicalYaw: 0,
+            // 藝用解剖頭部姿態 (Head Pose)
+            headPitch: 0,
+            headYaw: 0,
+            headRoll: 0,
             leftArmPitch: 0,
             leftArmRoll: 0.12,
             leftArmYaw: 0,
@@ -174,6 +178,9 @@ class App {
         document.getElementById('btnSample2').addEventListener('click', () => this._loadPresetSample('sampleB'));
 
         // 骨骼部位顯示開關
+        document.getElementById('toggleSkull').addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleSkull(e.target.checked);
+        });
         document.getElementById('toggleRibs').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleRibcage(e.target.checked);
         });
@@ -222,6 +229,8 @@ class App {
             this.currentPose.lumbarRoll = -this.currentPose.lumbarRoll;
             this.currentPose.thoracicYaw = -this.currentPose.thoracicYaw;
             this.currentPose.cervicalYaw = -this.currentPose.cervicalYaw;
+            this.currentPose.headYaw = -this.currentPose.headYaw;
+            this.currentPose.headRoll = -this.currentPose.headRoll;
 
             const tempArm = this.currentPose.leftArmRoll;
             this.currentPose.leftArmRoll = -this.currentPose.rightArmRoll;
@@ -248,6 +257,9 @@ class App {
         });
 
         // 姿態微調滑桿
+        this._bindSlider('sliderHeadYaw', 'valHeadYaw', 'headYaw');
+        this._bindSlider('sliderHeadPitch', 'valHeadPitch', 'headPitch');
+        this._bindSlider('sliderHeadRoll', 'valHeadRoll', 'headRoll');
         this._bindSlider('sliderPelvisRoll', 'valPelvisRoll', 'pelvisRoll');
         this._bindSlider('sliderThoracicYaw', 'valThoracicYaw', 'thoracicYaw');
         this._bindSlider('sliderThoracicPitch', 'valThoracicPitch', 'thoracicPitch');
@@ -337,6 +349,9 @@ class App {
             }
         };
 
+        setSlider('sliderHeadYaw', 'valHeadYaw', this.currentPose.headYaw);
+        setSlider('sliderHeadPitch', 'valHeadPitch', this.currentPose.headPitch);
+        setSlider('sliderHeadRoll', 'valHeadRoll', this.currentPose.headRoll);
         setSlider('sliderPelvisRoll', 'valPelvisRoll', this.currentPose.pelvisRoll);
         setSlider('sliderThoracicYaw', 'valThoracicYaw', this.currentPose.thoracicYaw);
         setSlider('sliderThoracicPitch', 'valThoracicPitch', this.currentPose.thoracicPitch);
@@ -469,6 +484,26 @@ class App {
         const pRH = toScreen(lm.rightHip);
         const pMS = toScreen(lm.midShoulder);
         const pMH = toScreen(lm.midHip);
+
+        // 0. 頭部五官特徵線 (Eyes & Nose - 藝用頭部朝向)
+        if (lm.leftEye && lm.rightEye) {
+            const pLE = toScreen(lm.leftEye);
+            const pRE = toScreen(lm.rightEye);
+            ctx.strokeStyle = '#f72585';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            ctx.moveTo(pRE.x, pRE.y);
+            ctx.lineTo(pLE.x, pLE.y);
+            if (lm.nose) {
+                const pN = toScreen(lm.nose);
+                ctx.lineTo(pN.x, pN.y);
+                ctx.lineTo(pRE.x, pRE.y);
+                this._drawPoint(ctx, pN, '#f72585', 4.5);
+            }
+            ctx.stroke();
+            this._drawPoint(ctx, pLE, '#4cc9f0', 3.5);
+            this._drawPoint(ctx, pRE, '#4cc9f0', 3.5);
+        }
 
         // 1. 雙肩軸線 (Shoulder Axis)
         ctx.strokeStyle = '#e07a5f';
@@ -655,6 +690,9 @@ class App {
                 lumbarYaw: 0.12,
                 cervicalPitch: -0.05,
                 cervicalYaw: 0.15,
+                headPitch: 0,
+                headYaw: 0.15,
+                headRoll: -0.05,
                 leftArmPitch: 0.1,
                 leftArmRoll: 0.2,
                 leftArmYaw: 0,
@@ -694,6 +732,9 @@ class App {
                 lumbarYaw: -0.1,
                 cervicalPitch: 0.08,
                 cervicalYaw: -0.15,
+                headPitch: 0.05,
+                headYaw: -0.15,
+                headRoll: 0.08,
                 leftArmPitch: -0.1,
                 leftArmRoll: 0.45,
                 leftArmYaw: 0,
