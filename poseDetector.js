@@ -1350,15 +1350,68 @@ export class TorsoPoseEstimator {
             (midHip && midHip.y > 0.70)
         );
 
-        // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援側身矢狀投影與背身狀態機)
+        // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援雙腿重疊前後步態、側身矢狀投影與背身狀態機)
+        // 雙下肢重疊與前後交錯步態連續耦合解算 (Bilateral Lower-Limb Tandem / Crossover Stance Coupling)：
+        // 當 2D 畫面中雙腳踝或雙膝橫向重疊/交叉時，物理上雙腿絕不可能並排穿透於同一冠狀面 (Z=0)，
+        // 必定為「一前一後」之行進步態或模特兒交叉站姿 (Catwalk / Tandem Stance)！
+        let leftTandemBias = 0.0;
+        let rightTandemBias = 0.0;
+        if (!isLegsTruncated && limbLeftHip && limbRightHip && limbLeftAnkle && limbRightAnkle) {
+            const hipDxSigned = (limbLeftHip.x - limbRightHip.x) * ar;
+            const hipSpanX = Math.max(0.04, Math.abs(hipDxSigned));
+            const hipSign = hipDxSigned >= 0 ? 1.0 : -1.0;
+
+            // 計算雙踝相對於骨盆左右方向的帶號橫向間距比：
+            // 正常併排站立時 rAnkle >= 0.55；雙腳重疊時 rAnkle ≈ 0；雙腿交叉時 rAnkle < 0
+            const ankleDxSigned = (limbLeftAnkle.x - limbRightAnkle.x) * ar * hipSign;
+            const rAnkle = ankleDxSigned / hipSpanX;
+            const rKnee = (limbLeftKnee && limbRightKnee)
+                ? (Math.abs(limbLeftKnee.x - limbRightKnee.x) * ar) / hipSpanX
+                : 1.0;
+
+            const ankleOverlapWeight = this._clamp((0.52 - rAnkle) / 0.42, 0.0, 1.0);
+            const kneeOverlapWeight = this._clamp((0.72 - rKnee) / 0.38, 0.0, 1.0) * 0.55;
+            const tandemWeight = Math.max(ankleOverlapWeight, kneeOverlapWeight);
+
+            if (tandemWeight > 0.05) {
+                // 藉由平地透視投影高低差 (ΔY_foot) 與相對深度 (ΔZ) 判定哪一隻腳在前 (+Z)、哪一隻腳在後 (-Z)：
+                // 在相機視角下，前腳離鏡頭較近，其足底在 2D 畫面的 Y 座標較大（位置較低）；後腳離鏡頭較遠，Y 座標較小（位置較高）
+                const lFootLowY = Math.max(
+                    limbLeftAnkle.y,
+                    limbLeftHeel ? limbLeftHeel.y : 0,
+                    limbLeftFootIndex ? limbLeftFootIndex.y : 0
+                );
+                const rFootLowY = Math.max(
+                    limbRightAnkle.y,
+                    limbRightHeel ? limbRightHeel.y : 0,
+                    limbRightFootIndex ? limbRightFootIndex.y : 0
+                );
+                const normFootDy = (lFootLowY - rFootLowY) / Math.max(0.1, torsoHeight);
+
+                const lLegZ = (limbLeftAnkle.z || 0) + (limbLeftKnee ? (limbLeftKnee.z || 0) : 0);
+                const rLegZ = (limbRightAnkle.z || 0) + (limbRightKnee ? (limbRightKnee.z || 0) : 0);
+                const relDz = -(lLegZ - rLegZ);
+
+                const rawLeadScore = normFootDy * 6.5 + relDz * 1.2;
+                const leadSign = rawLeadScore >= 0 ? 1.0 : -1.0;
+                const leadMag = this._clamp(Math.max(Math.abs(rawLeadScore), 0.68), 0.0, 1.0);
+                const signedLead = leadSign * leadMag;
+
+                leftTandemBias = tandemWeight * signedLead;
+                rightTandemBias = -tandemWeight * signedLead;
+            }
+        }
+
         const leftLegPose = this._solveLegKinematics(
             limbLeftHip, limbLeftKnee, limbLeftAnkle, limbLeftFootIndex, limbLeftHeel, 'left',
-            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign, isBackStance
+            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign, isBackStance,
+            leftTandemBias
         );
 
         const rightLegPose = this._solveLegKinematics(
             limbRightHip, limbRightKnee, limbRightAnkle, limbRightFootIndex, limbRightHeel, 'right',
-            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign, isBackStance
+            pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign, isBackStance,
+            rightTandemBias
         );
 
         let leftHipPitch = isLegsTruncated ? 0.0 : leftLegPose.pitch;
@@ -1548,6 +1601,12 @@ export class TorsoPoseEstimator {
                 // 2) 女性典型下肢 Q-Angle 內聚站姿 (雙膝間距窄、小腿微向外張 ankle > knee * 1.12，如蘿莉塔裙裝站姿)
                 if (kneeToHipRatio < 1.55 && ankleWidth2D > kneeWidth2D * 1.12) {
                     stanceGenderBias -= 0.65;
+                }
+
+                // 3) 雙腳重疊/前後交錯淑女步態或雙膝顯著內聚站姿 (Tandem / Catwalk Crossover Stance)：
+                //    常見於穿著斗篷/大衣搭配長裙之女性街拍（大衣墊肩會撐寬雙肩點、高腰長裙收窄髖點），給予女性步態權重修正
+                if (ankleToHipRatio < 0.52 || kneeToHipRatio < 0.82) {
+                    stanceGenderBias -= 0.95;
                 }
             }
 
@@ -1744,7 +1803,8 @@ export class TorsoPoseEstimator {
         pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight,
         isProfileStance = false,
         profileSign = 0,
-        isBackStance = false
+        isBackStance = false,
+        tandemBias = 0.0
     ) {
         const sign = (side === 'left') ? 1.0 : -1.0;
         const ar = this.aspectRatio || 1.0;
@@ -1790,6 +1850,13 @@ export class TorsoPoseEstimator {
         if (isProfileStance && profileSign !== 0) {
             // 側身模式下，近側腿面向鏡頭微正向偏移，遠側腿背對鏡頭微負向偏移
             dzFemur = isNearLeg ? (0.05 * LFemur) : (-0.05 * LFemur);
+        } else if (Math.abs(tandemBias) > 0.02) {
+            // 雙腳重疊之一前一後步態 (Tandem / Catwalk Stride)：
+            // tandemBias > 0 為前導腿 (向前跨出 +Z)，tandemBias < 0 為後隨腿 (向後延伸 -Z)
+            const frontBackSign = isBackStance ? -1.0 : 1.0;
+            dzFemur = (tandemBias > 0)
+                ? (frontBackSign * tandemBias * 0.34 * LFemur)
+                : (frontBackSign * tandemBias * 0.24 * LFemur);
         } else if (lFemur2D < LFemur * 0.95) {
             dzFemur = this._clamp(rawDzFemur * mpDzFemur * 0.5, -0.35 * LFemur, 0.35 * LFemur);
             if (isBackStance) {
@@ -1810,6 +1877,12 @@ export class TorsoPoseEstimator {
             let dzShin = isBackStance ? (0.05 * LTibia) : (-0.05 * LTibia);
             if (isProfileStance && profileSign !== 0) {
                 dzShin = isNearLeg ? (0.04 * LTibia) : (-0.04 * LTibia);
+            } else if (Math.abs(tandemBias) > 0.02) {
+                // 一前一後步態：前導腿小腿隨大腿向前延伸保持筆直落地；後隨腿小腿向後微屈 (-Z)，呈現自然前後步幅與後膝微彎
+                const frontBackSign = isBackStance ? -1.0 : 1.0;
+                dzShin = (tandemBias > 0)
+                    ? (frontBackSign * tandemBias * 0.30 * LTibia)
+                    : (frontBackSign * tandemBias * 0.46 * LTibia);
             } else if (lShin2D < LTibia * 0.95) {
                 // 若大腿垂直下垂但小腿嚴重短縮 (常為裁切照或裙襬假特徵)，不可推估過深深度避免假性屈膝跪姿
                 const isFemurDown = dyFemur < -0.08 && Math.abs(dxFemur) < 0.65 * Math.abs(dyFemur);
@@ -1944,6 +2017,11 @@ export class TorsoPoseEstimator {
             const isGrounded = (anklePitch < 0.45) && (flex < 0.7);
             const groundWeight = isGrounded ? THREE.MathUtils.clamp(1.0 - (anklePitch - 0.15) / 0.3, 0.0, 1.0) : 0.0;
             ankleRoll = groundRoll * groundWeight;
+        }
+
+        // 一前一後步態之後隨腿 (tandemBias < -0.15) 自然微抬腳跟補償 (Plantarflexion)
+        if (tandemBias < -0.15) {
+            anklePitch += Math.abs(tandemBias) * 0.20;
         }
 
         return {
