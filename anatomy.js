@@ -346,9 +346,6 @@ export class AnatomicalTorso {
                 if (this.shoulderGirdle[side].scapula) {
                     this.shoulderGirdle[side].scapula.position.x = sign * config.shoulderWidth;
                 }
-                if (this.shoulderGirdle[side].humerusJoint) {
-                    this.shoulderGirdle[side].humerusJoint.rotation.z = sign * config.carryingAngle;
-                }
             }
         });
 

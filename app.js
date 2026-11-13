@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=7.3';
-import { TorsoPoseEstimator } from './poseDetector.js?v=7.3';
+import { AnatomicalTorso } from './anatomy.js?v=7.4';
+import { TorsoPoseEstimator } from './poseDetector.js?v=7.4';
 
 class App {
     constructor() {
@@ -566,6 +566,9 @@ class App {
     _setGender(gender, isManual = false) {
         this.currentGender = gender;
         this.anatomicalTorso.setGender(gender);
+        if (this.currentPose) {
+            this.anatomicalTorso.setTorsoPose(this.currentPose);
+        }
         this._updateGenderUI();
     }
 
@@ -578,6 +581,11 @@ class App {
         btnAuto?.classList.toggle('active', this.genderMode === 'auto');
         btnFemale?.classList.toggle('active', this.genderMode === 'female');
         btnMale?.classList.toggle('active', this.genderMode === 'male');
+
+        if (this.statusText && this.statusText.textContent) {
+            const gLabel = this.currentGender === 'male' ? '♂ 男性骨架' : '♀ 女性骨架';
+            this.statusText.textContent = this.statusText.textContent.replace(/性別 \([♀♂] [男女]性骨架\)/, `性別 (${gLabel})`);
+        }
 
         const btnFloatG = document.getElementById('btnFloatGender');
         if (btnFloatG) {
@@ -824,10 +832,10 @@ class App {
 
                 const pose = await this.poseEstimator.estimateFromImage(img);
                 if (pose) {
-                    if (this.genderMode === 'auto' && pose.suggestedGender) {
+                    // 每次上傳新圖片時，自動恢復為 AI 自適應性別偵測，避免前一張圖的手動切換鎖定新圖片
+                    this.genderMode = 'auto';
+                    if (pose.suggestedGender) {
                         this._setGender(pose.suggestedGender, false);
-                    } else if (this.genderMode !== 'auto') {
-                        this.anatomicalTorso.setGender(this.genderMode);
                     }
                     this._applyPose(pose);
                     this.aiPoseBackup = { ...pose };

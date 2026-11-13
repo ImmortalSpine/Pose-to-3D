@@ -351,8 +351,8 @@ export class HierarchicalArmSolver {
             const LArm = scale * 0.58;
             const LFore = scale * 0.52;
 
-            // 動態自適應參考臂長：防止修長或健美體型因 2D 投影長度 >= LArm 而使 rawDzArm 歸零，
-            // 導致整條手臂退化停留在後背肩胛平面 (pShoulderLocal.z = -1.0)
+            // 1. 動態自適應參考臂長：防止修長或健美體型因 2D 投影長度 >= LArm 而使 rawDzArm 歸零，
+            //    導致整條手臂退化停留在後背肩胛平面 (pShoulderLocal.z = -1.0)
             const effLArm = Math.max(LArm, lArm2D * 1.06);
             const rawDzArm = Math.sqrt(Math.max(0, effLArm * effLArm - lArm2D * lArm2D));
             const mpDz = -((elbow.z || 0) - (shoulder.z || 0));
@@ -361,7 +361,6 @@ export class HierarchicalArmSolver {
             let dzArm = rawDzArm * zSignArm;
 
             if (isProfileStance && profileSign !== 0) {
-                // 側身模式：近側手摸頸/抬起時，手肘顯著朝向鏡頭外展 (+Z_cam)，避免大臂往後背深處穿刺
                 const depthSignArm = isNearArm ? (isUpperTorsoHand ? 0.45 : 0.22) : -0.08;
                 dzArm = depthSignArm * effLArm;
             } else if (isBackStance) {
@@ -392,6 +391,19 @@ export class HierarchicalArmSolver {
                     dzFore = depthSignFore * effLFore;
                 } else if (isBackStance) {
                     dzFore = -dzFore;
+                }
+
+                // 2. 連續共線性深度斜率耦合 (Continuous Collinearity Depth-Slope Coupling)：
+                //    當 2D 畫面中大臂與前臂接近伸直共線 (flex2D < 0.45 rad，如指向天空的 Disco 手臂) 時，
+                //    將前臂 Z 深度斜率平滑鎖定至大臂深度斜率並給予微幅前向偏置，
+                //    徹底消除 3D 虛假折角與 uForePerp 反向翻轉至後半球 (-Z) 的問題！
+                const flex2D = (lArm2D > 1e-4 && lFore2D > 1e-4)
+                    ? Math.acos(clamp((dxArm * dxFore + dyArm * dyFore) / (lArm2D * lFore2D), -1.0, 1.0))
+                    : 0.25;
+                const straightBlend = clamp(1.0 - flex2D / 0.45, 0.0, 1.0);
+                if (straightBlend > 0.0) {
+                    const colinearDzFore = dzArm * (lFore2D / Math.max(1e-4, lArm2D)) + 0.05 * effLFore;
+                    dzFore = dzFore * (1.0 - straightBlend) + colinearDzFore * straightBlend;
                 }
 
                 vForeCam = new THREE.Vector3(dxFore, dyFore, dzFore);
@@ -592,6 +604,13 @@ export class HierarchicalArmSolver {
         let zAxis;
         if (lPerp > 0.05 && flex > 0.08) {
             const zFlex = uForePerp.clone().normalize();
+            // 前向屈曲半球不變量保護 (Anterior Flexion Hemisphere Invariant)：
+            // 除背後背手姿態外，解剖學上肘關節屈曲平面法向 zFlex 不應翻轉至深後側，
+            // 特別是高舉過肩手臂 (uArm.y > 0) 時，若 zFlex.z < 0 會導致正交基底繞大臂軸翻轉 180°！
+            if (!isReachingBehind && uArm.y > 0.0 && zFlex.z < 0.08) {
+                zFlex.z = Math.max(0.18, Math.abs(zFlex.z));
+                zFlex.sub(yAxis.clone().multiplyScalar(zFlex.dot(yAxis))).normalize();
+            }
             const t = clamp((flex - 0.08) / 0.15, 0.0, 1.0);
             zAxis = zDef.clone().multiplyScalar(1.0 - t).addScaledVector(zFlex, t).normalize();
         } else {

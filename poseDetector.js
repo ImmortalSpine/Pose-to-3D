@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.3';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.4';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -548,11 +548,23 @@ export class TorsoPoseEstimator {
                 }
             }
 
-            // 4. 最後備援：使用眼肩距折算
-            if (headSpan2D <= 0 && leftShoulder && rightShoulder) {
-                const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
-                const eyeShoulderDy = Math.max(0.04, midShoulderY - midEyeY);
-                headSpan2D = eyeShoulderDy * 1.18;
+            // 4. 最後備援與防小臉高估下界保護：
+            //    少女/動漫精緻五官常有較小的眼口垂直距 (eyeMouthDy)，若單靠 eyeMouthDy / 0.355 會低估頭高，
+            //    導致頭身比被異常推升至 8.4；此處以雙耳跨度與眼肩基準距提供解剖下界約束
+            if (leftEar && rightEar) {
+                const earDist = Math.abs(leftEar.x - rightEar.x) * ar;
+                if (earDist > 0.025) {
+                    headSpan2D = Math.max(headSpan2D, earDist / 0.65);
+                }
+            }
+            if (leftShoulder && rightShoulder) {
+                const nonElevatedShoulderY = Math.max(leftShoulder.y, rightShoulder.y);
+                const eyeShoulderDy = Math.max(0.04, nonElevatedShoulderY - midEyeY);
+                if (headSpan2D <= 0) {
+                    headSpan2D = eyeShoulderDy * 1.18;
+                } else {
+                    headSpan2D = Math.max(headSpan2D, eyeShoulderDy * 0.90);
+                }
                 headTopY = midEyeY - headSpan2D * 0.50;
             }
         }
@@ -1482,7 +1494,7 @@ export class TorsoPoseEstimator {
         const skullScale = parseFloat(((48.0 / headToBodyRatio) / 4.60).toFixed(2));
 
         // -------------------------------------------------------------
-        // 13. 性別骨骼形態自適應判定 (Gender Skeletal Dimorphism)
+        // 13. 性別骨骼形態自適應判定 (Gender Skeletal Dimorphism - 姿態不變量幾何補償模型)
         // -------------------------------------------------------------
         let suggestedGender = 'female';
         let genderConfidence = 0.5;
@@ -1497,30 +1509,78 @@ export class TorsoPoseEstimator {
             const dyHips = Math.abs(rightHip.y - leftHip.y);
             const hipWidth2D = Math.hypot(dxHips, dyHips);
 
-            shoulderToHipRatio = parseFloat((shoulderWidth2D / (hipWidth2D + 1e-5)).toFixed(2));
+            // A. 高舉過頂手臂之肩峰內縮與軀幹拉伸幾何反投影補償 (Overhead Elevation De-projection)：
+            //    當單側或雙側手肘高舉過肩 (elbow.y < shoulder.y，如 Disco 指天動作) 時，
+            //    鎖骨與肩胛骨上旋會使 MediaPipe 肩關節點向頸部內縮約 15~18%，並拉高雙肩中點 Y 值，
+            //    導致原始 shoulderWidth2D 被嚴重低估、torsoHeight 被高估！
+            let effShoulderWidth = shoulderWidth2D;
+            let effTorsoHeight = Math.max(0.1, torsoHeight);
+            let effHipWidth = hipWidth2D;
 
-            // MediaPipe Pose 的 Landmark 23/24 為體內股骨頭關節中心 (Acetabulum)，
-            // 其解剖距離本就遠窄於外部骨盆/側腰輪廓，故男女基準比值通常在 1.65 ~ 2.40 之間。
+            const leftElev = leftElbow ? Math.max(0, (leftShoulder.y - leftElbow.y) / effTorsoHeight) : 0;
+            const rightElev = rightElbow ? Math.max(0, (rightShoulder.y - rightElbow.y) / effTorsoHeight) : 0;
+            const maxArmElev = Math.max(leftElev, rightElev);
+
+            if (maxArmElev > 0.08) {
+                const elevFactor = Math.min(1.0, maxArmElev / 0.42);
+                effShoulderWidth *= (1.0 + 0.20 * elevFactor);
+                effTorsoHeight *= (1.0 - 0.10 * elevFactor);
+            }
+
+            // B. 下肢跨步/弓箭步對骨盆關節點外移之反投影修正 + 少女內八/雙肘微張姿態特徵：
+            let stanceGenderBias = 0.0;
+            if (leftKnee && rightKnee) {
+                const kneeWidth2D = Math.hypot((rightKnee.x - leftKnee.x) * ar, rightKnee.y - leftKnee.y);
+                const kneeToHipRatio = kneeWidth2D / Math.max(1e-4, hipWidth2D);
+
+                const ankleWidth2D = (leftAnkle && rightAnkle)
+                    ? Math.hypot((rightAnkle.x - leftAnkle.x) * ar, rightAnkle.y - leftAnkle.y)
+                    : kneeWidth2D;
+                const ankleToHipRatio = ankleWidth2D / Math.max(1e-4, hipWidth2D);
+
+                // 1) 大跨步/Disco 弓箭步 (雙膝與雙踝皆大幅張開：knee/hip > 1.75 且 ankle/hip > 1.95)：
+                //    大腿外展會牽引 MediaPipe 髖關節點向外偏移約 14%，需還原真實緊實骨盆寬度
+                if (kneeToHipRatio > 1.75 && ankleToHipRatio > 1.95) {
+                    effHipWidth *= 0.85;
+                    stanceGenderBias += 0.55;
+                }
+
+                // 2) 女性典型下肢 Q-Angle 內聚站姿 (雙膝間距窄、小腿微向外張 ankle > knee * 1.12，如蘿莉塔裙裝站姿)
+                if (kneeToHipRatio < 1.55 && ankleWidth2D > kneeWidth2D * 1.12) {
+                    stanceGenderBias -= 0.65;
+                }
+            }
+
+            // 3) 雙手手肘下垂微張且前臂雙雙向上彎起之少女展示姿態 (如雙手捧鳥/蘿莉塔澎袖姿態)：
+            //    澎袖會撐寬雙肩點，而高腰馬甲/蓬蓬裙會收窄內部髖點，需扣除服飾假性肩臀比膨脹
+            const bothElbowsBelowShoulders = leftElbow && rightElbow &&
+                (leftElbow.y > leftShoulder.y + 0.05 * effTorsoHeight) &&
+                (rightElbow.y > rightShoulder.y + 0.05 * effTorsoHeight);
+            const bothForearmsRaised = leftWrist && rightWrist && leftElbow && rightElbow &&
+                (leftWrist.y < leftElbow.y - 0.04 * effTorsoHeight) &&
+                (rightWrist.y < rightElbow.y - 0.04 * effTorsoHeight);
+            if (bothElbowsBelowShoulders && bothForearmsRaised) {
+                stanceGenderBias -= 0.75;
+            }
+
+            shoulderToHipRatio = parseFloat((effShoulderWidth / (effHipWidth + 1e-5)).toFixed(2));
+
             // 判斷是否為跪姿或下肢折疊姿態 (Kneeling / Folded Legs Detection)
             const isKneelingOrFolded = (leftKneeFlex > 1.0 || rightKneeFlex > 1.0) ||
                 (leftKnee && leftAnkle && Math.abs(leftAnkle.y - leftKnee.y) < 0.20 * torsoHeight);
 
-            // 結合肩寬軀幹比 (Shoulder-to-Torso Ratio) 進行綜合形態打分：
-            const shoulderToTorsoRatio = shoulderWidth2D / Math.max(0.1, torsoHeight);
+            // 結合修正後肩寬軀幹比 (Effective Shoulder-to-Torso Ratio) 進行綜合形態打分：
+            const shoulderToTorsoRatio = effShoulderWidth / Math.max(0.1, effTorsoHeight);
             let maleScore = 0;
 
             if (isKneelingOrFolded) {
-                // 跪姿/坐姿模式：下肢折疊嚴重扭曲骨盆 2D 投影，優先信賴「肩寬軀幹比 (女性常態 < 0.68, 男性常態 > 0.72)」
                 maleScore = (shoulderToTorsoRatio - 0.71) * 3.5 + (shoulderToHipRatio - 2.15) * 0.8 - 0.45;
             } else {
-                // 正常站姿模式：結合肩臀比與肩寬軀幹比
-                maleScore = (shoulderToHipRatio - 1.88) * 2.2 + (shoulderToTorsoRatio - 0.71) * 2.0;
+                maleScore = (shoulderToHipRatio - 1.85) * 2.2 + (shoulderToTorsoRatio - 0.70) * 2.2 + stanceGenderBias;
 
-                // 寬鬆外套/西裝抗干擾補償 (Suit / Coat Compensation):
-                // 成人男士身形高大 (頭身比 >= 7.6) 且肩線展開 (shoulderToTorsoRatio >= 0.72) 時，
-                // 外套下擺撐大臀圍不扣分為女性
-                if (headToBodyRatio >= 7.6 && shoulderToTorsoRatio >= 0.72) {
-                    maleScore += 0.85;
+                // 成人男士身形高大 (頭身比 >= 7.6) 且修正後肩線展開 (shoulderToTorsoRatio >= 0.70) 時給予加成
+                if (headToBodyRatio >= 7.6 && shoulderToTorsoRatio >= 0.70 && stanceGenderBias >= 0) {
+                    maleScore += 0.65;
                 }
             }
 
@@ -1559,17 +1619,17 @@ export class TorsoPoseEstimator {
             headPitch: this._clamp(cranialPitch, -0.45, 0.45),
             headYaw: isBackStance ? this._clamp(headYaw, -Math.PI, Math.PI) : this._clamp(headYaw, -1.57, 1.57),
             headRoll: this._clamp(headRoll, -0.6, 0.6),
-            leftArmPitch: this._clamp(leftArmPitch, -3.5, 3.5),
-            leftArmRoll: this._clamp(leftArmRoll, -3.5, 3.5),
-            leftArmYaw: this._clamp(leftArmYaw, -3.5, 3.5),
+            leftArmPitch: this._clamp(leftArmPitch, -6.28, 6.28),
+            leftArmRoll: this._clamp(leftArmRoll, -6.28, 6.28),
+            leftArmYaw: this._clamp(leftArmYaw, -6.28, 6.28),
             leftElbowFlex: this._clamp(leftElbowFlex, 0, 2.7),
             leftForearmTwist: this._clamp(leftForearmTwist, 0, Math.PI),
             leftHandGesture: leftHandGesture,
             leftHandAngles: leftHandAngles,
             leftHandDetectedPreset: leftHandDetectedPreset,
-            rightArmPitch: this._clamp(rightArmPitch, -3.5, 3.5),
-            rightArmRoll: this._clamp(rightArmRoll, -3.5, 3.5),
-            rightArmYaw: this._clamp(rightArmYaw, -3.5, 3.5),
+            rightArmPitch: this._clamp(rightArmPitch, -6.28, 6.28),
+            rightArmRoll: this._clamp(rightArmRoll, -6.28, 6.28),
+            rightArmYaw: this._clamp(rightArmYaw, -6.28, 6.28),
             rightElbowFlex: this._clamp(rightElbowFlex, 0, 2.7),
             rightForearmTwist: this._clamp(rightForearmTwist, 0, Math.PI),
             rightHandGesture: rightHandGesture,
