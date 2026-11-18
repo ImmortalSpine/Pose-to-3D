@@ -160,7 +160,7 @@ export class AnatomicalTorso {
         const totalThoracic = 12;
 
         this.sternum = this._createSternumMesh();
-        this.sternum.position.set(0, 7.8, 5.0);
+        this.sternum.position.set(0, 7.8, 4.15);
         this.sternum.rotation.x = -0.12;
         this.thoracicCageUnit.add(this.sternum);
 
@@ -329,7 +329,7 @@ export class AnatomicalTorso {
         });
         if (this.sternum) {
             this.sternum.scale.set(config.sternumScale[0], config.sternumScale[1], config.sternumScale[2]);
-            this.sternum.position.z = 5.0 * config.ribScale[2];
+            this.sternum.position.z = 4.15 * config.ribScale[2];
         }
 
         // 4. 肩帶雙肩寬度與胸鎖關節位置 (Shoulder Girdle & Clavicle)

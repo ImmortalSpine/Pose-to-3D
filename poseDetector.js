@@ -552,23 +552,12 @@ export class TorsoPoseEstimator {
                 }
             }
 
-            // 4. 最後備援與防小臉高估下界保護：
-            //    少女/動漫精緻五官常有較小的眼口垂直距 (eyeMouthDy)，若單靠 eyeMouthDy / 0.355 會低估頭高，
-            //    導致頭身比被異常推升至 8.4；此處以雙耳跨度與眼肩基準距提供解剖下界約束
-            if (leftEar && rightEar) {
-                const earDist = Math.abs(leftEar.x - rightEar.x) * ar;
-                if (earDist > 0.025) {
-                    headSpan2D = Math.max(headSpan2D, earDist / 0.65);
-                }
-            }
-            if (leftShoulder && rightShoulder) {
-                const nonElevatedShoulderY = Math.max(leftShoulder.y, rightShoulder.y);
-                const eyeShoulderDy = Math.max(0.04, nonElevatedShoulderY - midEyeY);
-                if (headSpan2D <= 0) {
-                    headSpan2D = eyeShoulderDy * 1.18;
-                } else {
-                    headSpan2D = Math.max(headSpan2D, eyeShoulderDy * 0.90);
-                }
+            // 4. 最後備援：僅於五官特徵缺失 (headSpan2D <= 0) 時使用眼肩距推算，
+            //    避免長頸或斜肩動作 (如跳舞高低肩、健美斜方肌) 放大人頭尺寸導致頭身比暴跌至 6.7！
+            if (headSpan2D <= 0 && leftShoulder && rightShoulder) {
+                const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
+                const eyeShoulderDy = Math.max(0.04, midShoulderY - midEyeY);
+                headSpan2D = eyeShoulderDy * 1.15;
                 headTopY = midEyeY - headSpan2D * 0.50;
             }
         }
@@ -1712,8 +1701,17 @@ export class TorsoPoseEstimator {
                 effTorsoHeight *= (1.0 - 0.10 * elevFactor);
             }
 
-            // B. 下肢跨步/弓箭步對骨盆關節點外移之反投影修正 + 少女內八/雙肘微張姿態特徵：
+            // B. 大腿外展/跨步對骨盆髖關節點外移之反投影修正 (Thigh Abduction & Lunge Hip De-projection)：
+            //    當單腿或雙腿大幅向外側張開/抬膝跳舞/弓箭步 (lFemurDx > 0.28 * torsoHeight 或 rFemurDx > 0.28 * torsoHeight，
+            //    或雙膝間距 kneeToHipRatio > 1.65) 時，大腿根部外展會牽引 MediaPipe 的髖關節點 (Landmark 23/24) 向外偏移約 14~16%，
+            //    導致 hipWidth2D 被假性撐大、肩臀比被低估；此處予以幾何反投影還原真實緊實骨盆寬度！
             let stanceGenderBias = 0.0;
+            const maxFemurAbductRatio = Math.max(lFemurDx, rFemurDx) / Math.max(0.1, effTorsoHeight);
+            if (maxFemurAbductRatio > 0.26) {
+                const abductFactor = Math.min(1.0, (maxFemurAbductRatio - 0.26) / 0.22);
+                effHipWidth *= (1.0 - 0.16 * abductFactor);
+            }
+
             if (leftKnee && rightKnee) {
                 const kneeWidth2D = Math.hypot((rightKnee.x - leftKnee.x) * ar, rightKnee.y - leftKnee.y);
                 const kneeToHipRatio = kneeWidth2D / Math.max(1e-4, hipWidth2D);
@@ -1723,42 +1721,28 @@ export class TorsoPoseEstimator {
                     : kneeWidth2D;
                 const ankleToHipRatio = ankleWidth2D / Math.max(1e-4, hipWidth2D);
 
-                // 1) 大跨步/Disco 弓箭步 (雙膝與雙踝皆大幅張開：knee/hip > 1.75 且 ankle/hip > 1.95)：
-                //    大腿外展會牽引 MediaPipe 髖關節點向外偏移約 14%，需還原真實緊實骨盆寬度
-                if (kneeToHipRatio > 1.75 && ankleToHipRatio > 1.95) {
-                    effHipWidth *= 0.85;
-                    stanceGenderBias += 0.55;
+                // 1) 大跨步/Disco 弓箭步 (雙膝與雙踝皆大幅張開：knee/hip > 1.65 且 ankle/hip > 1.85)
+                if (kneeToHipRatio > 1.65 && ankleToHipRatio > 1.85) {
+                    effHipWidth = Math.min(effHipWidth, hipWidth2D * 0.84);
+                    stanceGenderBias += 0.45;
                 }
 
-                // 2) 女性典型下肢 Q-Angle 內聚站姿 (雙膝間距窄、小腿微向外張 ankle > knee * 1.12，如蘿莉塔裙裝站姿)
-                if (kneeToHipRatio < 1.55 && ankleWidth2D > kneeWidth2D * 1.12) {
-                    stanceGenderBias -= 0.65;
+                // 2) 雙腳完全重疊且雙膝內聚之長裙淑女交錯步 (Catwalk Tandem Crossover)：
+                //    僅限於雙踝重疊 (ankleToHipRatio < 0.40) 且雙膝內聚 (kneeToHipRatio < 0.72) 時扣除大衣墊肩膨脹，
+                //    絕不影響正常雙腳開立之男性站姿或舞蹈動作！
+                if (ankleToHipRatio < 0.40 && kneeToHipRatio < 0.72) {
+                    stanceGenderBias -= 0.75;
                 }
-
-                // 3) 雙腳重疊/前後交錯淑女步態或雙膝顯著內聚站姿 (Tandem / Catwalk Crossover Stance)：
-                //    常見於穿著斗篷/大衣搭配長裙之女性街拍（大衣墊肩會撐寬雙肩點、高腰長裙收窄髖點），給予女性步態權重修正
-                if (ankleToHipRatio < 0.52 || kneeToHipRatio < 0.82) {
-                    stanceGenderBias -= 0.95;
-                }
-            }
-
-            // 3) 雙手手肘下垂微張且前臂雙雙向上彎起之少女展示姿態 (如雙手捧鳥/蘿莉塔澎袖姿態)：
-            //    澎袖會撐寬雙肩點，而高腰馬甲/蓬蓬裙會收窄內部髖點，需扣除服飾假性肩臀比膨脹
-            const bothElbowsBelowShoulders = leftElbow && rightElbow &&
-                (leftElbow.y > leftShoulder.y + 0.05 * effTorsoHeight) &&
-                (rightElbow.y > rightShoulder.y + 0.05 * effTorsoHeight);
-            const bothForearmsRaised = leftWrist && rightWrist && leftElbow && rightElbow &&
-                (leftWrist.y < leftElbow.y - 0.04 * effTorsoHeight) &&
-                (rightWrist.y < rightElbow.y - 0.04 * effTorsoHeight);
-            if (bothElbowsBelowShoulders && bothForearmsRaised) {
-                stanceGenderBias -= 0.75;
             }
 
             shoulderToHipRatio = parseFloat((effShoulderWidth / (effHipWidth + 1e-5)).toFixed(2));
 
-            // 判斷是否為跪姿或下肢折疊姿態 (Kneeling / Folded Legs Detection)
-            const isKneelingOrFolded = (leftKneeFlex > 1.0 || rightKneeFlex > 1.0) ||
-                (leftKnee && leftAnkle && Math.abs(leftAnkle.y - leftKnee.y) < 0.20 * torsoHeight);
+            // 判斷是否為雙膝地面跪姿 (True Bilateral Kneeling Detection)：
+            // 必須雙膝同時大幅屈曲 (leftKneeFlex > 0.95 && rightKneeFlex > 0.95)，避免單腳抬膝跳舞動作被誤判為地面跪姿！
+            const isKneelingOrFolded = (leftKneeFlex > 0.95 && rightKneeFlex > 0.95) ||
+                (leftKnee && rightKnee && leftAnkle && rightAnkle &&
+                 Math.abs(leftAnkle.y - leftKnee.y) < 0.18 * torsoHeight &&
+                 Math.abs(rightAnkle.y - rightKnee.y) < 0.18 * torsoHeight);
 
             // 結合修正後肩寬軀幹比 (Effective Shoulder-to-Torso Ratio) 進行綜合形態打分：
             const shoulderToTorsoRatio = effShoulderWidth / Math.max(0.1, effTorsoHeight);
@@ -1767,11 +1751,11 @@ export class TorsoPoseEstimator {
             if (isKneelingOrFolded) {
                 maleScore = (shoulderToTorsoRatio - 0.71) * 3.5 + (shoulderToHipRatio - 2.15) * 0.8 - 0.45;
             } else {
-                maleScore = (shoulderToHipRatio - 1.85) * 2.2 + (shoulderToTorsoRatio - 0.70) * 2.2 + stanceGenderBias;
+                maleScore = (shoulderToHipRatio - 1.78) * 2.2 + (shoulderToTorsoRatio - 0.675) * 2.4 + stanceGenderBias;
 
-                // 成人男士身形高大 (頭身比 >= 7.6) 且修正後肩線展開 (shoulderToTorsoRatio >= 0.70) 時給予加成
-                if (headToBodyRatio >= 7.6 && shoulderToTorsoRatio >= 0.70 && stanceGenderBias >= 0) {
-                    maleScore += 0.65;
+                // 成人男士身形高大 (頭身比 >= 7.5) 且肩臀比或肩軀幹比達標時給予穩定加成
+                if (headToBodyRatio >= 7.5 && (shoulderToHipRatio >= 1.82 || shoulderToTorsoRatio >= 0.68) && stanceGenderBias >= 0) {
+                    maleScore += 0.55;
                 }
             }
 
