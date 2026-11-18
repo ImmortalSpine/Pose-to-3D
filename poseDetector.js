@@ -869,8 +869,18 @@ export class TorsoPoseEstimator {
                 }
             }
 
-            thoracicRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
-            pelvisRoll = -Math.atan2(hipDy, Math.abs(hipDx) + 0.001);
+            // 單側抬手聳肩反偏置與中軸脊椎傾角融合 (Unilateral Shrug De-biasing & Spine Axis Fusion)：
+            // 當單手高舉（如敬禮、摸帽沿、指天）而另一手垂下或插腰時，高舉側肩胛骨會自然上提 (聳肩)，
+            // 若單純以雙肩連線斜率計算，會將「聳肩」誤判為整個胸腔大幅側傾；
+            // 同理，高腰裙/腰封常造成左右髖點高低落差過大，故結合脊椎中軸傾角 spineTiltRoll 進行穩定約束。
+            const rawShoulderRoll = -Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001);
+            const rawHipRoll = -Math.atan2(hipDy, Math.abs(hipDx) + 0.001);
+            const spineTiltRoll = -Math.atan2(spineDx, Math.max(0.1, Math.abs(spineDy)));
+            const isAsymArmElev = (isRightArmElevated && !isLeftArmElevated) || (isLeftArmElevated && !isRightArmElevated);
+            const shoulderRollWeight = isAsymArmElev ? 0.40 : 0.68;
+
+            thoracicRoll = rawShoulderRoll * shoulderRollWeight + spineTiltRoll * (1.0 - shoulderRollWeight);
+            pelvisRoll = this._clamp(rawHipRoll * 0.45 + spineTiltRoll * 0.25, -0.16, 0.16);
 
             lumbarRoll = (thoracicRoll - pelvisRoll) * 0.45 - (spineDx * 0.4);
             lumbarYaw = (thoracicYaw - pelvisYaw) * 0.30;
@@ -1430,16 +1440,25 @@ export class TorsoPoseEstimator {
             rightTandemBias
         );
 
-        let leftHipPitch = isLegsTruncated ? 0.0 : leftLegPose.pitch;
-        let leftHipRoll = isLegsTruncated ? 0.04 : leftLegPose.roll;
+        // 若為下肢裁切半身照 (isLegsTruncated)：
+        // 1) 抑制裁切邊緣裙擺造成的骨盆假性側傾與前後傾；
+        // 2) 由於左右髖關節 (hipJoint) 掛載於 pelvisUnit 子節點下，必須在局部座標系中反向抵消 pelvisRoll 與 pelvisPitch，
+        //    才能確保標準站姿下雙腿在世界座標系中 100% 垂直立於地面，徹底杜絕骨盆微傾導致整雙腿斜插歪倒！
+        if (isLegsTruncated) {
+            pelvisRoll *= 0.45;
+            pelvisPitch *= 0.50;
+        }
+
+        let leftHipPitch = isLegsTruncated ? -pelvisPitch : leftLegPose.pitch;
+        let leftHipRoll = isLegsTruncated ? (-pelvisRoll + 0.03) : leftLegPose.roll;
         let leftHipYaw = isLegsTruncated ? 0.0 : leftLegPose.yaw;
         let leftKneeFlex = isLegsTruncated ? 0.03 : leftLegPose.kneeFlex;
         let leftAnklePitch = isLegsTruncated ? 0.0 : leftLegPose.anklePitch;
         let leftAnkleYaw = isLegsTruncated ? 0.06 : leftLegPose.ankleYaw;
         let leftAnkleRoll = isLegsTruncated ? 0.0 : leftLegPose.ankleRoll;
 
-        let rightHipPitch = isLegsTruncated ? 0.0 : rightLegPose.pitch;
-        let rightHipRoll = isLegsTruncated ? -0.04 : rightLegPose.roll;
+        let rightHipPitch = isLegsTruncated ? -pelvisPitch : rightLegPose.pitch;
+        let rightHipRoll = isLegsTruncated ? (-pelvisRoll - 0.03) : rightLegPose.roll;
         let rightHipYaw = isLegsTruncated ? 0.0 : rightLegPose.yaw;
         let rightKneeFlex = isLegsTruncated ? 0.03 : rightLegPose.kneeFlex;
         let rightAnklePitch = isLegsTruncated ? 0.0 : rightLegPose.anklePitch;
