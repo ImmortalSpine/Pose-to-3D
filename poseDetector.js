@@ -1306,21 +1306,37 @@ export class TorsoPoseEstimator {
 
         const lFemurDy = (leftHip && leftKnee) ? (leftKnee.y - leftHip.y) : 0;
         const lFemurDx = (leftHip && leftKnee) ? Math.abs((leftKnee.x - leftHip.x) * ar) : 0;
+        const lFemurLen2D = Math.hypot(lFemurDx, Math.max(0, lFemurDy));
         const rFemurDy = (rightHip && rightKnee) ? (rightKnee.y - rightHip.y) : 0;
         const rFemurDx = (rightHip && rightKnee) ? Math.abs((rightKnee.x - rightHip.x) * ar) : 0;
+        const rFemurLen2D = Math.hypot(rFemurDx, Math.max(0, rFemurDy));
 
-        // 股骨長度異常坍縮：MediaPipe 在長裙/半身照常因未見雙足，將膝蓋與髖骨擠在同一高度 (ΔY < 0.12 * torsoHeight)
-        const isFemurCollapsed = (lFemurDy < 0.12 * torsoHeight) || (rFemurDy < 0.12 * torsoHeight);
+        // 股骨長度異常坍縮：MediaPipe 在長裙/半身照常因未見雙足，將雙膝與髖骨同時擠在同一高度 (ΔY < 0.12 * torsoHeight)
+        const isBothFemursCollapsed = (lFemurDy < 0.12 * torsoHeight) && (rFemurDy < 0.12 * torsoHeight);
 
         const isLeftFemurVertical = lFemurDy > 0.08 * torsoHeight && lFemurDx < 0.65 * lFemurDy;
         const isRightFemurVertical = rFemurDy > 0.08 * torsoHeight && rFemurDx < 0.65 * rFemurDy;
         const isAnyFemurVertical = isLeftFemurVertical || isRightFemurVertical;
 
         const lShinDy = (leftKnee && leftAnkle) ? (leftAnkle.y - leftKnee.y) : 0;
+        const lShinDx = (leftKnee && leftAnkle) ? Math.abs((leftAnkle.x - leftKnee.x) * ar) : 0;
+        const lShinLen2D = Math.hypot(lShinDx, Math.max(0, lShinDy));
         const rShinDy = (rightKnee && rightAnkle) ? (rightAnkle.y - rightKnee.y) : 0;
-        const isLeftShinTruncated = lFemurDy > 0.08 && lShinDy < 0.60 * lFemurDy;
-        const isRightShinTruncated = rFemurDy > 0.08 && rShinDy < 0.60 * rFemurDy;
-        const isShinTruncated = isLeftShinTruncated || isRightShinTruncated;
+        const rShinDx = (rightKnee && rightAnkle) ? Math.abs((rightAnkle.x - rightKnee.x) * ar) : 0;
+        const rShinLen2D = Math.hypot(rShinDx, Math.max(0, rShinDy));
+
+        // 關鍵修正：照片底邊水平裁切必然「同時截斷雙腿」(&&)，
+        // 若僅單腿小腿投影縮短而另一腿完整落地（如排球/跑步單腳後勾腿動作），絕非半身裁切照！
+        const isLeftShinTruncated = lFemurDy > 0.08 && lShinDy < 0.55 * lFemurDy;
+        const isRightShinTruncated = rFemurDy > 0.08 && rShinDy < 0.55 * rFemurDy;
+        const isBothShinsTruncated = isLeftShinTruncated && isRightShinTruncated;
+
+        // 檢查是否至少有一條腿具備完整的大腿與小腿 2D 骨骼長度（代表畫面完整拍到腳踝/足部，包含斜向跨步與屈膝蹲姿）
+        const maxLegPath2D = Math.max(lFemurLen2D + lShinLen2D, rFemurLen2D + rShinLen2D);
+        const hasAtLeastOneFullLeg = (
+            (lFemurLen2D > 0.42 * torsoHeight && lShinDy > 0.38 * torsoHeight && lShinLen2D > 0.65 * lFemurLen2D && (!leftAnkle || leftAnkle.y < 0.965)) ||
+            (rFemurLen2D > 0.42 * torsoHeight && rShinDy > 0.38 * torsoHeight && rShinLen2D > 0.65 * rFemurLen2D && (!rightAnkle || rightAnkle.y < 0.965))
+        );
 
         // 小腿水平展開判定 (真人地面跪姿特徵，如芭蕾/體操動作)
         const isShinHorizontal = (leftAnkle && leftKnee && Math.abs((leftAnkle.x - leftKnee.x) * ar) > 0.10) ||
@@ -1328,35 +1344,35 @@ export class TorsoPoseEstimator {
 
         const isSpineUpright = Math.abs(spineDy) > 0.65 * torsoHeight && Math.abs(spineDx) < 0.60 * torsoHeight;
 
-        // 下肢總跨度判定：正常人體站姿骨盆至腳底必然 ≥ 1.45 ~ 1.85 倍軀幹高度
-        // 凡是小於 1.25 倍軀幹高度者，生理上絕無可能是完整站姿全身照！
-        const isLowerSpanSeverelyTruncated = totalLowerSpan > 0 && totalLowerSpan < 1.15 * torsoHeight;
-        const isLowerSpanTruncated = totalLowerSpan > 0 && totalLowerSpan < 1.35 * torsoHeight;
+        // 下肢總跨度判定：結合垂直跨度與 2D 骨骼路徑總長 maxLegPath2D，避免屈膝微蹲/斜跨步運動姿態被誤判為半身裁切
+        const isLowerSpanSeverelyTruncated = totalLowerSpan > 0 && totalLowerSpan < 1.05 * torsoHeight && maxLegPath2D < 1.15 * torsoHeight;
+        const isLowerSpanTruncated = totalLowerSpan > 0 && totalLowerSpan < 1.25 * torsoHeight && maxLegPath2D < 1.22 * torsoHeight;
 
-        const isFootNearBottom = lowestFootY > 0.72;
-        const isHipNearBottom = (midHip && midHip.y > 0.62);
+        const isFootNearBottom = lowestFootY > 0.88;
+        const isHipNearBottom = (midHip && midHip.y > 0.65);
 
-        // 綜合判定
-        const isLegsTruncated = !isProfileStance && !isShinHorizontal && (
-            // A. 股骨坍縮 (MediaPipe 把膝蓋標在髖骨高度) 且身軀直立
-            (isSpineUpright && isFemurCollapsed && (isFootNearBottom || isLowerSpanTruncated)) ||
-            // B. 骨盆至最低足點垂直落差 < 1.15 倍軀幹 (物理上必然是裁切照)
+        // 綜合判定：若畫面中已存在至少一條完整展開至足踝的腿部 (!hasAtLeastOneFullLeg 為假)，則絕不鎖定為裁切照
+        const isLegsTruncated = !isProfileStance && !isShinHorizontal && !hasAtLeastOneFullLeg && (
+            // A. 雙側股骨坍縮 (MediaPipe 把雙膝標在髖骨高度) 且身軀直立
+            (isSpineUpright && isBothFemursCollapsed && (isFootNearBottom || isLowerSpanTruncated)) ||
+            // B. 骨盆至最低足點垂直落差與骨骼路徑長皆嚴重不足 (物理上必然是半身裁切照)
             (isSpineUpright && isLowerSpanSeverelyTruncated) ||
-            // C. 骨盆至最低足點落差 < 1.35 倍軀幹 且 足部/骨盆靠近畫面下半部
+            // C. 下肢跨度不足且足部/骨盆緊貼畫面底邊裁切線
             (isSpineUpright && isLowerSpanTruncated && (isFootNearBottom || isHipNearBottom)) ||
-            // D. 直立軀幹 + 大腿垂直但小腿嚴重截斷
-            (isSpineUpright && isAnyFemurVertical && isShinTruncated) ||
-            // E. 骨盆直接被裁切在畫面下半部 (胸像/大頭照/腰部裁切)
-            (midHip && midHip.y > 0.70)
+            // D. 直立軀幹 + 大腿垂直但「雙側小腿皆被截斷」
+            (isSpineUpright && isAnyFemurVertical && isBothShinsTruncated) ||
+            // E. 骨盆直接被裁切在畫面最底部 (胸像/大頭照/腰部裁切)
+            (midHip && midHip.y > 0.72)
         );
 
-        // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援雙腿重疊前後步態、側身矢狀投影與背身狀態機)
+        // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援雙腿重疊前後步態、單腳後勾屈膝、側身矢狀投影與背身狀態機)
         // 雙下肢重疊與前後交錯步態連續耦合解算 (Bilateral Lower-Limb Tandem / Crossover Stance Coupling)：
-        // 當 2D 畫面中雙腳踝或雙膝橫向重疊/交叉時，物理上雙腿絕不可能並排穿透於同一冠狀面 (Z=0)，
-        // 必定為「一前一後」之行進步態或模特兒交叉站姿 (Catwalk / Tandem Stance)！
+        // 僅當「雙側小腿皆向下延伸落地 (bothShinsExtendedDown)」且 2D 雙踝/雙膝橫向重疊時啟用，
+        // 避免單腳騰空後勾腿（如排球救球/跑步後勾）被誤當作雙腳落地前後站姿！
         let leftTandemBias = 0.0;
         let rightTandemBias = 0.0;
-        if (!isLegsTruncated && limbLeftHip && limbRightHip && limbLeftAnkle && limbRightAnkle) {
+        const bothShinsExtendedDown = (lShinDy > 0.55 * lFemurDy) && (rShinDy > 0.55 * rFemurDy);
+        if (!isLegsTruncated && bothShinsExtendedDown && limbLeftHip && limbRightHip && limbLeftAnkle && limbRightAnkle) {
             const hipDxSigned = (limbLeftHip.x - limbRightHip.x) * ar;
             const hipSpanX = Math.max(0.04, Math.abs(hipDxSigned));
             const hipSign = hipDxSigned >= 0 ? 1.0 : -1.0;
@@ -1884,16 +1900,15 @@ export class TorsoPoseEstimator {
                     ? (frontBackSign * tandemBias * 0.30 * LTibia)
                     : (frontBackSign * tandemBias * 0.46 * LTibia);
             } else if (lShin2D < LTibia * 0.95) {
-                // 若大腿垂直下垂但小腿嚴重短縮 (常為裁切照或裙襬假特徵)，不可推估過深深度避免假性屈膝跪姿
-                const isFemurDown = dyFemur < -0.08 && Math.abs(dxFemur) < 0.65 * Math.abs(dyFemur);
-                if (isFemurDown && lShin2D < 0.60 * lFemur2D) {
-                    dzShin = isBackStance ? (0.04 * LTibia) : (-0.04 * LTibia);
-                } else {
-                    // 人體小腿彎曲必然向後 (相對於人體背側)，在背身模式下朝向相機 (+Z)，正面模式下背向相機 (-Z)
-                    const zShinMag = Math.max(0.15, Math.min(0.85, Math.abs(mpDzShin)));
-                    const backShinSign = isBackStance ? 1.0 : -1.0;
-                    dzShin = backShinSign * rawDzShin * zShinMag;
-                }
+                // 畢氏定理透視縮短深度還原 (Pythagorean Foreshortening Recovery for Knee Flexion)：
+                // 既然上方 isLegsTruncated 已嚴格過濾半身裁切照，此處若小腿 2D 投影顯著短於大腿 (lShin2D / lFemur2D < 0.82)，
+                // 代表小腿在 3D 空間中真實向身體後方屈膝勾起（如排球單腳後勾、跑步或跪姿），
+                // 應連續提升畢氏深度權重至 0.94，完整還原 3D 膝關節後屈角度！
+                const shinToFemurRatio = lShin2D / Math.max(1e-4, lFemur2D);
+                const pythagoreanWeight = THREE.MathUtils.clamp((0.82 - shinToFemurRatio) / 0.40, 0.0, 1.0);
+                const zShinMag = Math.max(0.20 + 0.74 * pythagoreanWeight, Math.min(0.95, Math.abs(mpDzShin)));
+                const backShinSign = isBackStance ? 1.0 : -1.0;
+                dzShin = backShinSign * rawDzShin * zShinMag;
             }
 
             vTibiaCam = new THREE.Vector3(dxShin, dyShin, dzShin);
