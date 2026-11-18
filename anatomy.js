@@ -329,6 +329,7 @@ export class AnatomicalTorso {
         });
         if (this.sternum) {
             this.sternum.scale.set(config.sternumScale[0], config.sternumScale[1], config.sternumScale[2]);
+            this.sternum.position.z = 5.0 * config.ribScale[2];
         }
 
         // 4. 肩帶雙肩寬度與胸鎖關節位置 (Shoulder Girdle & Clavicle)

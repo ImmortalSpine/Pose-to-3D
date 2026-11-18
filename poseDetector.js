@@ -480,9 +480,13 @@ export class TorsoPoseEstimator {
                 facePitch = earPitch;
             }
 
-            // 4. 眼-肩垂直距離壓縮比 (Eye-to-Shoulder Compression Ratio) - 極其抗毛髮/手部遮擋
+            // 4. 眼-肩垂直距離壓縮比 (Eye-to-Shoulder Compression Ratio) - 抗毛髮/手部遮擋
+            // 注意：當單側或雙側手肘高舉過肩 (elbow.y < shoulder.y) 時，肩胛上提會拉高雙肩中點，
+            // 使 eyeShoulderDy 假性縮短並誤判為低頭，故高舉手臂時停用此項，保留五官與耳眼真實仰頭角！
             let pitchFromShoulder = null;
-            if (leftShoulder && rightShoulder) {
+            const anyElbowOverhead = (leftElbow && leftShoulder && leftElbow.y < leftShoulder.y - 0.02) ||
+                                     (rightElbow && rightShoulder && rightElbow.y < rightShoulder.y - 0.02);
+            if (leftShoulder && rightShoulder && !anyElbowOverhead) {
                 const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
                 const eyeShoulderDy = midShoulderY - midEyeY;
                 const normEyeShoulder = eyeShoulderDy / Math.max(0.1, torsoHeight || 0.45);
@@ -785,16 +789,36 @@ export class TorsoPoseEstimator {
                 headYaw = profileTargetYaw;
             }
 
-            // 3. 側身矢狀面俯仰解算 (Profile Sagittal Pitch Mapping)
-            // 2D 畫面上的水平脊椎軸位移 (midShoulder.x - midHip.x) 直接對應身體矢狀面的前後傾倒！
+            // 3. 側身矢狀面俯仰解算與 S 型挺胸翹臀曲線還原 (Profile Sagittal Pitch & S-Curve Lordosis)
+            // 2D 畫面上的水平脊椎軸位移 (midShoulder.x - midHip.x) 直接對應身體矢狀面的前後傾倒；
+            // 此外，當人物於側身抬手過頭並將頭頸後仰 (midEyeX 位於雙肩中點後方) 且大腿向前跪地時，
+            // 屬於典型「挺胸後仰 (thoracicPitch < 0) ＋ 骨盆前傾翹臀 (pelvisPitch > 0)」之 S 型生理曲線！
             const profileLean2D = (midShoulder.x - midHip.x) * ar;
-            // 在 YXZ 歐拉旋轉階層下：
-            // profileSign = -1 (面朝左): 往右 (profileLean2D > 0) 代表後仰 (pitch < 0)
-            // profileSign = +1 (面朝右): 往左 (profileLean2D < 0) 代表後仰 (pitch < 0)
             const sagittalLean = profileSign * profileLean2D;
-            thoracicPitch = THREE.MathUtils.clamp(Math.atan2(sagittalLean, Math.max(0.1, Math.abs(spineDy))) * 0.95, -0.65, 0.65);
-            pelvisPitch = thoracicPitch * 0.40;
-            lumbarPitch = thoracicPitch * 0.35;
+            let baseThoracicPitch = THREE.MathUtils.clamp(Math.atan2(sagittalLean, Math.max(0.1, Math.abs(spineDy))) * 0.95, -0.65, 0.65);
+
+            const headRetroOffset = profileSign * (midShoulder.x - midEyeX) * ar / Math.max(0.1, torsoHeight);
+            const isArmRaisedInProfile = (leftElbow && leftElbow.y < leftShoulder.y) || (rightElbow && rightElbow.y < rightShoulder.y);
+            const lKneeFwd = (leftKnee && leftHip) ? profileSign * (leftKnee.x - leftHip.x) * ar / Math.max(0.1, torsoHeight) : 0;
+            const rKneeFwd = (rightKnee && rightHip) ? profileSign * (rightKnee.x - rightHip.x) * ar / Math.max(0.1, torsoHeight) : 0;
+            const maxKneeFwd = Math.max(lKneeFwd, rKneeFwd);
+
+            if (isArmRaisedInProfile && headRetroOffset > 0.01) {
+                const archExt = THREE.MathUtils.clamp(headRetroOffset * 1.35 + 0.08, 0.08, 0.30);
+                thoracicPitch = THREE.MathUtils.clamp(baseThoracicPitch - archExt, -0.65, 0.65);
+                headPitch = THREE.MathUtils.clamp(headPitch - archExt * 0.75, -0.45, 0.45);
+                if (maxKneeFwd > 0.16) {
+                    // 雙膝向前跪姿伴隨挺胸後仰時，骨盆呈現自然前傾 (Anterior Pelvic Tilt)，與後仰胸椎構成優雅 S 曲線
+                    pelvisPitch = THREE.MathUtils.clamp(baseThoracicPitch * 0.25 + 0.14, -0.35, 0.35);
+                } else {
+                    pelvisPitch = thoracicPitch * 0.35;
+                }
+                lumbarPitch = (thoracicPitch - pelvisPitch) * 0.65;
+            } else {
+                thoracicPitch = baseThoracicPitch;
+                pelvisPitch = thoracicPitch * 0.40;
+                lumbarPitch = thoracicPitch * 0.35;
+            }
 
             // 4. 側身模式側傾防護 (避免因一肩略高產生假性高低肩扭曲)
             thoracicRoll = THREE.MathUtils.clamp(-Math.atan2(shoulderDy, Math.abs(shoulderDx) + 0.001) * 0.2, -0.08, 0.08);
@@ -1131,15 +1155,20 @@ export class TorsoPoseEstimator {
         const isRightTouchingHead = checkTouchingHead(rightShoulder, rightElbow, activeRightWrist, matchedRightHand, 'right');
 
         // 判定是否為過頂拱手 / 芭蕾五位手閉環姿態 (Overhead Clasped / Arched Arms IK)
+        // 嚴格限定於正面/斜正面視角 (!isProfileStance) 且雙肘必須向頭頂左右兩側對稱外展，
+        // 避免側身單手摸頭時因 MediaPipe 將雙腕重疊而誤觸雙手朝天芭蕾拱手！
         const checkOverheadClasped = () => {
-            if (!activeLeftWrist || !activeRightWrist || !leftShoulder || !rightShoulder) return false;
+            if (isProfileStance || !activeLeftWrist || !activeRightWrist || !leftShoulder || !rightShoulder || !leftElbow || !rightElbow) return false;
             const refHeadY = headTopY || (leftEye && rightEye ? (leftEye.y + rightEye.y) * 0.5 - 0.08 : leftShoulder.y - 0.15);
-            // 雙手手腕均在頭頂高度或附近
-            const bothWristsHigh = (activeLeftWrist.y < refHeadY + 0.06) && (activeRightWrist.y < refHeadY + 0.06);
+            // 雙手手腕均在頭頂上方
+            const bothWristsHigh = (activeLeftWrist.y < refHeadY + 0.02) && (activeRightWrist.y < refHeadY + 0.02);
             // 雙腕水平間距在頭頂上方接近
             const wristDx = Math.abs(activeLeftWrist.x - activeRightWrist.x) * ar;
-            const isWristClose = wristDx < 0.22;
-            return bothWristsHigh && isWristClose;
+            const isWristClose = wristDx < 0.20;
+            // 雙肘必須向頭部左右兩側對稱外展（排除單側重影）
+            const centerRefX = nose ? nose.x : (leftShoulder.x + rightShoulder.x) * 0.5;
+            const elbowsSymmetricOut = (leftElbow.x > centerRefX + 0.04) && (rightElbow.x < centerRefX - 0.04);
+            return bothWristsHigh && isWristClose && elbowsSymmetricOut;
         };
 
         const isOverheadClasped = checkOverheadClasped();
@@ -1212,6 +1241,70 @@ export class TorsoPoseEstimator {
             limbRightPinky = leftPinky;
             limbLeftHand = matchedRightHand;
             limbRightHand = matchedLeftHand;
+        }
+
+        // 側身雙膝跪地遮擋對齊保護 (Profile Kneeling Far-Knee Occlusion Alignment)：
+        // 在 90° 側身跪姿中，遠側膝蓋常被近側大腿完全遮擋，導致 MediaPipe 將遠側膝蓋誤標在正下方的近側腳踝上，
+        // 造成 3D 模型出現「一腿向前跪、另一腿卻垂直往下插」的分裂假象；此處將被遮擋膝蓋平滑對齊至前伸膝蓋！
+        if (isProfileStance && profileSign !== 0 && limbLeftHip && limbRightHip && limbLeftKnee && limbRightKnee && limbLeftAnkle && limbRightAnkle) {
+            const lKneeFwd = profileSign * (limbLeftKnee.x - limbLeftHip.x) * ar;
+            const rKneeFwd = profileSign * (limbRightKnee.x - limbRightHip.x) * ar;
+            const lShinBack = profileSign * (limbLeftKnee.x - limbLeftAnkle.x) * ar;
+            const rShinBack = profileSign * (limbRightKnee.x - limbRightAnkle.x) * ar;
+
+            if (rKneeFwd > 0.18 * torsoHeight && rShinBack > 0.18 * torsoHeight && (rKneeFwd - lKneeFwd) > 0.14 * torsoHeight && lShinBack > 0.08 * torsoHeight) {
+                limbLeftKnee = {
+                    ...limbLeftKnee,
+                    x: limbRightKnee.x - (profileSign * 0.05 * torsoHeight) / ar,
+                    y: limbRightKnee.y - 0.015 * torsoHeight
+                };
+            } else if (lKneeFwd > 0.18 * torsoHeight && lShinBack > 0.18 * torsoHeight && (lKneeFwd - rKneeFwd) > 0.14 * torsoHeight && rShinBack > 0.08 * torsoHeight) {
+                limbRightKnee = {
+                    ...limbRightKnee,
+                    x: limbLeftKnee.x - (profileSign * 0.05 * torsoHeight) / ar,
+                    y: limbLeftKnee.y - 0.015 * torsoHeight
+                };
+            }
+        }
+
+        // 側身雙臂重影解耦保護 (Profile Occluded Far-Arm De-duplication)：
+        // 當 90° 側身單手舉過頭頂撫髮而另一手被身體遮擋於腰後時，MediaPipe 常將遠側手重疊吸附到近側高舉手上；
+        // 若偵測到側身雙肘與雙腕在頭頂同側高度重疊，將遠側手歸位至自然垂放/微後收姿態，避免雙臂融合成同一支高舉手！
+        if (isProfileStance && profileSign !== 0 && limbLeftElbow && limbRightElbow && limbLeftWrist && limbRightWrist && limbLeftShoulder && limbRightShoulder) {
+            const elbowDist2D = Math.hypot((limbLeftElbow.x - limbRightElbow.x) * ar, limbLeftElbow.y - limbRightElbow.y);
+            const wristDist2D = Math.hypot((limbLeftWrist.x - limbRightWrist.x) * ar, limbLeftWrist.y - limbRightWrist.y);
+            const bothRaised = (limbLeftElbow.y < limbLeftShoulder.y) && (limbRightElbow.y < limbRightShoulder.y);
+            if (bothRaised && elbowDist2D < 0.14 * torsoHeight && wristDist2D < 0.14 * torsoHeight) {
+                if (profileSign === 1) {
+                    // 面朝右：右臂為近側手 (保留高舉摸頭)，左臂為遠側被遮擋手 (歸位至後腰側)
+                    limbLeftElbow = {
+                        x: limbLeftShoulder.x - (0.14 * torsoHeight) / ar,
+                        y: limbLeftShoulder.y + 0.42 * torsoHeight,
+                        z: (limbLeftShoulder.z || 0) + 0.08
+                    };
+                    limbLeftWrist = {
+                        x: limbLeftShoulder.x - (0.04 * torsoHeight) / ar,
+                        y: limbLeftShoulder.y + 0.72 * torsoHeight,
+                        z: (limbLeftShoulder.z || 0) + 0.06
+                    };
+                    matchedLeftHand = null;
+                    limbLeftHand = null;
+                } else {
+                    // 面朝左：左臂為近側手 (保留高舉摸頭)，右臂為遠側被遮擋手 (歸位至後腰側)
+                    limbRightElbow = {
+                        x: limbRightShoulder.x + (0.14 * torsoHeight) / ar,
+                        y: limbRightShoulder.y + 0.42 * torsoHeight,
+                        z: (limbRightShoulder.z || 0) + 0.08
+                    };
+                    limbRightWrist = {
+                        x: limbRightShoulder.x + (0.04 * torsoHeight) / ar,
+                        y: limbRightShoulder.y + 0.72 * torsoHeight,
+                        z: (limbRightShoulder.z || 0) + 0.06
+                    };
+                    matchedRightHand = null;
+                    limbRightHand = null;
+                }
+            }
         }
 
         // 12. 左右大臂與前臂解算 (含摸頭/撫面、過頂芭蕾拱手閉環、側身狀態機支持、背身狀態機支持、肌肉包絡面避障與真實相機投影)
@@ -1571,7 +1664,11 @@ export class TorsoPoseEstimator {
                 if (footYValues.length > 0 && midHip && headSpan2D > 0.02) {
                     const bottomY = Math.max(...footYValues);
                     if (bottomY > midHip.y + 0.15) {
-                        const totalBodySpan2D = bottomY - headTopY;
+                        // 關鍵修正：跪姿或深蹲時小腿平貼地面，垂直高度 (bottomY - headTopY) 少了整截小腿長，
+                        // 會使頭身比被嚴重低估至 6.7！故取「垂直跨度」與「骨骼折線展開總長 (頭至髖 + 大腿長 + 小腿長)」之最大值
+                        const verticalSpan2D = bottomY - headTopY;
+                        const unfoldedSpan2D = (midHip.y - headTopY) + maxLegPath2D * 0.96;
+                        const totalBodySpan2D = Math.max(verticalSpan2D, unfoldedSpan2D);
                         const rawRatio = totalBodySpan2D / headSpan2D;
                         headToBodyRatio = THREE.MathUtils.clamp(rawRatio, 6.7, 8.4);
                     }
