@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=7.9';
-import { TorsoPoseEstimator } from './poseDetector.js?v=7.9';
+import { AnatomicalTorso } from './anatomy.js?v=8.0';
+import { TorsoPoseEstimator } from './poseDetector.js?v=8.0';
 
 class App {
     constructor() {
@@ -199,6 +199,9 @@ class App {
         // 範例按鈕
         document.getElementById('btnSample1').addEventListener('click', () => this._loadPresetSample('sampleA'));
         document.getElementById('btnSample2').addEventListener('click', () => this._loadPresetSample('sampleB'));
+
+        // 第一階段 AI 視覺語意預判設定彈窗
+        this._initAiConfigUI();
 
         // 骨骼部位顯示開關
         document.getElementById('toggleSkull').addEventListener('change', (e) => {
@@ -563,6 +566,89 @@ class App {
         return `${ratio.toFixed(1)} 頭身 (${desc})`;
     }
 
+    _initAiConfigUI() {
+        const modal = document.getElementById('aiConfigModal');
+        const btnOpen = document.getElementById('btnOpenAiConfig');
+        const btnClose = document.getElementById('btnCloseAiConfig');
+        const btnSave = document.getElementById('btnSaveAiConfig');
+        const btnClear = document.getElementById('btnClearAiKey');
+        const inputKey = document.getElementById('inputGeminiApiKey');
+        const selectModel = document.getElementById('selectGeminiModel');
+        const statusDot = document.getElementById('aiStatusDot');
+        const statusLabel = document.getElementById('aiStatusLabel');
+
+        const updateBadge = () => {
+            const vc = this.poseEstimator?.visionClassifier;
+            const hasKey = vc && vc.hasApiKey();
+            if (statusDot) {
+                statusDot.classList.toggle('cloud-active', Boolean(hasKey));
+            }
+            if (statusLabel) {
+                statusLabel.textContent = hasKey ? '🤖 Gemini AI 已啟用' : '🤖 AI 視覺預判';
+            }
+        };
+
+        updateBadge();
+
+        btnOpen?.addEventListener('click', () => {
+            const vc = this.poseEstimator?.visionClassifier;
+            if (vc) {
+                if (inputKey) inputKey.value = vc.getApiKey();
+                if (selectModel) selectModel.value = vc.getModelName();
+            }
+            if (modal) modal.style.display = 'flex';
+        });
+
+        btnClose?.addEventListener('click', () => {
+            if (modal) modal.style.display = 'none';
+        });
+
+        modal?.addEventListener('click', (e) => {
+            if (e.target === modal) modal.style.display = 'none';
+        });
+
+        btnSave?.addEventListener('click', async () => {
+            const vc = this.poseEstimator?.visionClassifier;
+            if (vc) {
+                vc.setApiKey(inputKey?.value || '', selectModel?.value || 'gemini-2.5-flash');
+            }
+            updateBadge();
+            if (modal) modal.style.display = 'none';
+
+            // 若畫面上已有載入圖片，立即以新的 AI 視覺引擎重新辨識
+            if (this.originalImageElement) {
+                this.statusText.textContent = "🤖 正在以 Gemini 視覺 AI 重新分析圖片語意與 3D 骨架...";
+                const pose = await this.poseEstimator.estimateFromImage(this.originalImageElement);
+                if (pose) {
+                    this.genderMode = 'auto';
+                    if (pose.suggestedGender) {
+                        this._setGender(pose.suggestedGender, false);
+                    }
+                    this._applyPose(pose);
+                    this.aiPoseBackup = { ...pose };
+                    this._updateSlidersUI();
+                    this._updateGenderUI();
+                    this.lastLandmarks2D = pose.landmarks2D;
+                    this.currentStance = pose.isBackStance ? (pose.isOverShoulderLook ? 'over_shoulder' : 'back') : 'front';
+                    this._updateStanceUI();
+                    const engineBadge = (pose.semanticSource === 'gemini-vlm') ? `[🤖 Gemini AI 預判] ` : `[🧠 Holistic 視覺預判] `;
+                    const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
+                    const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
+                    const backStr = pose.isBackStance ? (pose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '';
+                    const profileStr = pose.isProfileStance ? `、側身模式 (${pose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
+                    this.statusText.textContent = `✅ ${engineBadge}姿態識別完成！頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}`;
+                }
+            }
+        });
+
+        btnClear?.addEventListener('click', () => {
+            if (inputKey) inputKey.value = '';
+            this.poseEstimator?.visionClassifier?.setApiKey('', 'gemini-2.5-flash');
+            updateBadge();
+            if (modal) modal.style.display = 'none';
+        });
+    }
+
     _setGender(gender, isManual = false) {
         this.currentGender = gender;
         this.anatomicalTorso.setGender(gender);
@@ -859,6 +945,9 @@ class App {
                         this._draw2DLandmarks();
                     }
 
+                    const engineBadge = (pose.semanticSource === 'gemini-vlm')
+                        ? `[🤖 Gemini AI 預判] `
+                        : `[🧠 Holistic 視覺預判] `;
                     const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
                     const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
                     const backStr = pose.isBackStance ? (pose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '';
@@ -866,7 +955,7 @@ class App {
                     const claspedStr = pose.isOverheadClasped ? '、過頂拱手閉環' : '';
                     const handTrackStr = (pose.rightHandAngles || pose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
                     const truncStr = pose.isLegsTruncated ? '、下肢裁切照 (已鎖定標準站姿)' : '';
-                    this.statusText.textContent = `✅ 姿態識別完成！已自適應人物頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}${claspedStr}${handTrackStr}${truncStr}`;
+                    this.statusText.textContent = `✅ ${engineBadge}姿態識別完成！頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}${claspedStr}${handTrackStr}${truncStr}`;
                 } else {
                     this._resetToNeutralPose();
                     this.statusText.textContent = "未識別到完整人體 (可能為純背面或過度遮擋視角)，已重置為標準解剖姿態";

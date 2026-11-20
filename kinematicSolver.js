@@ -190,6 +190,7 @@ export class HierarchicalArmSolver {
         isProfileStance = false,
         profileSign = 0,
         isBackStance = false,
+        armDepthPrior = 'auto',
         collisionConfig,
         confidences = { arm: 0.8, hand: 0.8 }
     }) {
@@ -358,6 +359,11 @@ export class HierarchicalArmSolver {
             const mpDz = -((elbow.z || 0) - (shoulder.z || 0));
             let zSignArm = isFrontOfPelvis ? 0.32 : (mpDz < -0.08 ? -0.10 : 0.25);
             if (isHandOnHip) zSignArm = 0.25;
+            if (armDepthPrior === 'behind_back') {
+                zSignArm = -0.35;
+            } else if (armDepthPrior === 'front') {
+                zSignArm = Math.max(zSignArm, 0.30);
+            }
             let dzArm = rawDzArm * zSignArm;
 
             if (isProfileStance && profileSign !== 0) {
@@ -378,7 +384,9 @@ export class HierarchicalArmSolver {
                 const rawDzFore = Math.sqrt(Math.max(0, effLFore * effLFore - lFore2D * lFore2D));
                 const mpDzFore = -((wrist.z || 0) - (elbow.z || 0));
                 let zSignFore = 0.32;
-                if (isFrontOfPelvis) {
+                if (armDepthPrior === 'behind_back') {
+                    zSignFore = -0.45;
+                } else if (armDepthPrior === 'front' || isFrontOfPelvis) {
                     zSignFore = 0.48;
                 } else if (isHandOnHip) {
                     zSignFore = 0.30;
@@ -526,8 +534,9 @@ export class HierarchicalArmSolver {
             const resWrist = testPenetration(pWristLocal);
             const resTip = testPenetration(pHandTip);
 
-            // 僅當非骨盆前側置手且大臂顯著後伸時，才判定為背後背手
-            isReachingBehind = !isFrontOfPelvis && !isHandOnHip && ((uArm.z < -0.32) || (pWristLocal.z < -1.6 && isProfileStance));
+            // 僅當 AI 明確判定手背在身後 (behind_back)，或非骨盆前側置手且大臂顯著後伸時，才判定為背後背手
+            isReachingBehind = (armDepthPrior === 'behind_back') ||
+                (armDepthPrior !== 'front' && !isFrontOfPelvis && !isHandOnHip && ((uArm.z < -0.32) || (pWristLocal.z < -1.6 && isProfileStance)));
 
             if (isHandOnHip) {
                 pWristLocal.x = sign * Math.max(4.2, Math.abs(pWristLocal.x));

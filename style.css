@@ -488,3 +488,89 @@ input:checked + .slider:before {
     color: var(--text-secondary);
     margin-top: 8px;
 }
+
+/* 第一階段 AI 視覺預判設定按鈕與彈窗 */
+.ai-config-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-right: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.ai-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #4cc9f0;
+    box-shadow: 0 0 6px #4cc9f0;
+    display: inline-block;
+}
+
+.ai-status-dot.cloud-active {
+    background-color: #06d6a0;
+    box-shadow: 0 0 8px #06d6a0;
+}
+
+.ai-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 16, 0.72);
+    backdrop-filter: blur(4px);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ai-modal-card {
+    background: #1b1d26;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    width: 460px;
+    max-width: 92vw;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+}
+
+.ai-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: #232632;
+    font-weight: 600;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.ai-modal-body {
+    padding: 14px 16px;
+}
+
+.ai-modal-desc {
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+    margin: 0 0 12px 0;
+}
+
+.ai-text-input {
+    width: 100%;
+    padding: 8px 10px;
+    background: #12131a;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 12px;
+    box-sizing: border-box;
+}
+
+.ai-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 16px;
+    background: #161820;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}

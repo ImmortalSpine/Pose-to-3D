@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=7.4';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.0';
+import { VisionSemanticClassifier } from './visionClassifier.js?v=8.0';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -47,7 +48,10 @@ export class TorsoPoseEstimator {
         this.poseDetector = null;
         this.isMirrored = false;
         this.lastRawResults = null;
+        this.lastImageElement = null;
+        this.lastSemanticPriors = null;
         this.lastPose = null;
+        this.visionClassifier = new VisionSemanticClassifier();
         this.readyPromise = this._initMediaPipe();
     }
 
@@ -219,20 +223,30 @@ export class TorsoPoseEstimator {
 
     async estimateFromImage(imageElement) {
         if (!imageElement) return null;
+        this.lastImageElement = imageElement;
         const imgW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 1;
         const imgH = imageElement.naturalHeight || imageElement.videoHeight || imageElement.height || 1;
         this.aspectRatio = imgW / imgH;
+
+        // 啟動第一階段：雲端 Gemini Flash 視覺語意預判 (與 MediaPipe 平行非同步執行，零額外阻塞)
+        const vlmPromise = this.visionClassifier.classifyWithGemini(imageElement);
 
         // 確保 MediaPipe 底層 WASM 與模型已完全加載就緒
         if (this.readyPromise) {
             await this.readyPromise;
         }
 
-        // 1. 優先以原生影像方向進行單次推理
-        const rawResults = await this._runInference(imageElement);
+        // 1. 優先以原生影像方向與第一階段 AI 視覺預判平行推理 (Promise.all)
+        const [rawResults, vlmPriors] = await Promise.all([
+            this._runInference(imageElement),
+            vlmPromise
+        ]);
+
         if (rawResults && rawResults.poseLandmarks && rawResults.poseLandmarks.length > 0) {
             try {
-                const pose = this._processLandmarks(rawResults);
+                const priors = this.visionClassifier.resolvePriors(imageElement, rawResults, vlmPriors, this.aspectRatio);
+                this.lastSemanticPriors = priors;
+                const pose = this._processLandmarks(rawResults, null, priors);
                 if (pose) {
                     this.lastRawResults = rawResults;
                     this.lastPose = pose;
@@ -255,7 +269,9 @@ export class TorsoPoseEstimator {
             }
             if (enhResults && enhResults.poseLandmarks && enhResults.poseLandmarks.length > 0) {
                 try {
-                    const pose = this._processLandmarks(enhResults);
+                    const priors = this.visionClassifier.resolvePriors(imageElement, enhResults, vlmPriors, this.aspectRatio);
+                    this.lastSemanticPriors = priors;
+                    const pose = this._processLandmarks(enhResults, null, priors);
                     if (pose) {
                         this.lastRawResults = enhResults;
                         this.lastPose = pose;
@@ -279,10 +295,13 @@ export class TorsoPoseEstimator {
                     const invResults = {
                         ...rotResults,
                         poseLandmarks: this._inverseRotateLandmarks(rotResults.poseLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height),
+                        faceLandmarks: this._inverseRotateLandmarks(rotResults.faceLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height),
                         leftHandLandmarks: this._inverseRotateLandmarks(rotResults.leftHandLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height),
                         rightHandLandmarks: this._inverseRotateLandmarks(rotResults.rightHandLandmarks, angle, imgW, imgH, rotCanvas.width, rotCanvas.height)
                     };
-                    const pose = this._processLandmarks(invResults);
+                    const priors = this.visionClassifier.resolvePriors(imageElement, invResults, vlmPriors, this.aspectRatio);
+                    this.lastSemanticPriors = priors;
+                    const pose = this._processLandmarks(invResults, null, priors);
                     if (pose) {
                         this.lastRawResults = invResults;
                         this.lastPose = pose;
@@ -306,17 +325,18 @@ export class TorsoPoseEstimator {
         if (mode === 'toggle') {
             targetMode = (this.lastPose && this.lastPose.isBackStance) ? 'front' : 'over_shoulder';
         }
-        const pose = this._processLandmarks(this.lastRawResults, targetMode);
+        const pose = this._processLandmarks(this.lastRawResults, targetMode, this.lastSemanticPriors);
         if (pose) {
             this.lastPose = pose;
         }
         return pose;
     }
 
-    _processLandmarks(results, forceStanceMode = null) {
+    _processLandmarks(results, forceStanceMode = null, semanticPriors = null) {
         if (!results || !results.poseLandmarks || results.poseLandmarks.length === 0) {
             return null;
         }
+        const priors = semanticPriors || this.visionClassifier.inferLocalSemantics(this.lastImageElement, results, this.aspectRatio);
 
         const lm = results.poseLandmarks;
         const landmarks = lm;
@@ -624,6 +644,8 @@ export class TorsoPoseEstimator {
 
         let isBackStance = false;
         let isOverShoulderLook = false;
+        let isProfileStance = false;
+        let forcedProfileSign = 0;
 
         if (forceStanceMode === 'back') {
             isBackStance = true;
@@ -634,50 +656,18 @@ export class TorsoPoseEstimator {
         } else if (forceStanceMode === 'front') {
             isBackStance = false;
             isOverShoulderLook = false;
+        } else if (priors && priors.stance) {
+            // 第一階段 AI 視覺語意預判直接驅動正/背/側身狀態機 (Stage-1 Semantic Stance Routing)
+            isBackStance = Boolean(priors.isBackStance);
+            isOverShoulderLook = Boolean(priors.isOverShoulderLook);
+            isProfileStance = Boolean(priors.isProfileStance);
+            forcedProfileSign = priors.profileSign || 0;
         } else {
-            // 6. 腳後跟與腳尖前後深度 (Heel vs Foot Index Depth)
-            let heelInFrontCount = 0;
-            if (leftHeel && leftFootIndex && (leftHeel.visibility ?? 0) > 0.35 && (leftFootIndex.visibility ?? 0) > 0.35) {
-                if ((leftHeel.z || 0) < (leftFootIndex.z || 0) - 0.015) heelInFrontCount++;
-            }
-            if (rightHeel && rightFootIndex && (rightHeel.visibility ?? 0) > 0.35 && (rightFootIndex.visibility ?? 0) > 0.35) {
-                if ((rightHeel.z || 0) < (rightFootIndex.z || 0) - 0.015) heelInFrontCount++;
-            }
-
-            // 7. 手臂觸摸對側後肩/後頸 (如紅裙撫肩背身姿勢)
-            const isRightHandNearLeftNeck = rightWrist && leftShoulder && Math.hypot((rightWrist.x - leftShoulder.x) * ar, rightWrist.y - leftShoulder.y) < 0.22;
-            const isLeftHandNearRightNeck = leftWrist && rightShoulder && Math.hypot((leftWrist.x - rightShoulder.x) * ar, leftWrist.y - rightShoulder.y) < 0.22;
-
-            // 背身綜合特徵評分
-            let backScore = 0;
-            if (isEarInverted) backScore += 4.5;
-            if (isShoulderInverted) backScore += 4.0;
-            if (isHipInverted) backScore += 3.0;
-            if (avgFaceVis < 0.28) backScore += 3.5;
-            else if (avgFaceVis < 0.45) backScore += 1.5;
-
-            if (heelInFrontCount >= 1) backScore += (heelInFrontCount * 2.5);
-
-            // 側顏特徵 (isFaceProfile 或單耳或 noseExtruding 或 |headYaw| > 0.45) 配合寬軀幹 (normShoulderSpan > 0.38)
-            if (!hasClearFrontFace && (isFaceProfile || hasSingleEar || isNoseExtruding || Math.abs(headYaw) > 0.45)) {
-                if (normShoulderSpan > 0.38) {
-                    backScore += 2.0;
-                }
-            }
-
-            if ((isRightHandNearLeftNeck || isLeftHandNearRightNeck) && !hasClearFrontFace) {
-                backScore += 2.5;
-            }
-
-            if (hasClearFrontFace) backScore -= 6.0;
-
-            // 是否為純背身或背身回眸 (Back Stance Active)
-            isBackStance = (backScore >= 3.5) && !hasClearFrontFace;
+            // 備援幾何判定
+            isBackStance = !hasClearFrontFace && (isEarInverted || isShoulderInverted || isHipInverted || avgFaceVis < 0.28);
             isOverShoulderLook = isBackStance && (avgFaceVis > 0.30 || eyeDx > 0.02 || hasSingleEar || Math.abs(headYaw) > 0.40);
+            isProfileStance = !isBackStance && (isTorsoUltraNarrow || (isTorsoNarrow && isFaceProfile));
         }
-
-        // 側身狀態機觸發條件 (Profile Stance Active)
-        const isProfileStance = !isBackStance && (isTorsoUltraNarrow || (isTorsoNarrow && isFaceProfile));
 
         // B. 正面姿態特徵判定 (Frontal Stance Protection)
         const isFaceFrontal = Math.abs(headYaw) < 0.35;
@@ -694,7 +684,7 @@ export class TorsoPoseEstimator {
         let pelvisRoll = 0;
         let lumbarRoll = 0;
         let lumbarYaw = 0;
-        let profileSign = 0;
+        let profileSign = forcedProfileSign;
 
         let rawDz = (leftShoulder.z || 0) - (rightShoulder.z || 0);
         const hipDz = (leftHip.z || 0) - (rightHip.z || 0);
@@ -759,7 +749,9 @@ export class TorsoPoseEstimator {
             if (rawDz > 0.02) leftScore += 1.0;
             if (rawDz < -0.02) rightScore += 1.0;
 
-            profileSign = (leftScore >= rightScore) ? -1 : 1;
+            if (!profileSign) {
+                profileSign = (leftScore >= rightScore) ? -1 : 1;
+            }
 
             // 2. 依雙肩展開度賦予解剖側身/斜側身轉向角 (70° ~ 83°)，兼顧立體透視與穩定度
             const profileYawMag = (normShoulderSpan > 0.22) ? 1.25 : 1.44;
@@ -1296,14 +1288,18 @@ export class TorsoPoseEstimator {
             }
         }
 
-        // 12. 左右大臂與前臂解算 (含摸頭/撫面、過頂芭蕾拱手閉環、側身狀態機支持、背身狀態機支持、肌肉包絡面避障與真實相機投影)
+        // 12. 左右大臂與前臂解算 (結合第一階段 AI 手臂前後深度預判 priors.leftArmDepth / rightArmDepth)
+        const leftArmDepthPrior = priors?.leftArmDepth || 'auto';
+        const rightArmDepthPrior = priors?.rightArmDepth || 'auto';
+
         const leftArmPose = this._solveArmKinematics(
             limbLeftShoulder, limbLeftElbow, limbLeftWrist, 'left',
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             limbLeftThumb, limbLeftPinky,
             limbLeftHip, limbRightHip, isLeftFrontOfPelvis, isLeftHandOnHip,
-            isLeftTouchingHead, headTargetInfo, limbLeftHand,
-            overheadClaspedInfo, isProfileStance, profileSign, isBackStance
+            isLeftTouchingHead || leftArmDepthPrior === 'touching_head', headTargetInfo, limbLeftHand,
+            overheadClaspedInfo, isProfileStance, profileSign, isBackStance,
+            leftArmDepthPrior
         );
 
         const rightArmPose = this._solveArmKinematics(
@@ -1311,8 +1307,9 @@ export class TorsoPoseEstimator {
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             limbRightThumb, limbRightPinky,
             limbLeftHip, limbRightHip, isRightFrontOfPelvis, isRightHandOnHip,
-            isRightTouchingHead, headTargetInfo, limbRightHand,
-            overheadClaspedInfo, isProfileStance, profileSign, isBackStance
+            isRightTouchingHead || rightArmDepthPrior === 'touching_head', headTargetInfo, limbRightHand,
+            overheadClaspedInfo, isProfileStance, profileSign, isBackStance,
+            rightArmDepthPrior
         );
 
         let leftArmPitch = leftArmPose.pitch;
@@ -1443,8 +1440,8 @@ export class TorsoPoseEstimator {
         const isFootNearBottom = lowestFootY > 0.88;
         const isHipNearBottom = (midHip && midHip.y > 0.65);
 
-        // 綜合判定：若畫面中已存在至少一條完整展開至足踝的腿部 (!hasAtLeastOneFullLeg 為假)，則絕不鎖定為裁切照
-        const isLegsTruncated = !isProfileStance && !isShinHorizontal && !hasAtLeastOneFullLeg && (
+        // 綜合判定：優先採信第一階段 AI 視覺預判 (priors.isLegsTruncated)，並結合至少一條完整腿部保護
+        const geomLegsTruncated = !isProfileStance && !isShinHorizontal && !hasAtLeastOneFullLeg && (
             // A. 雙側股骨坍縮 (MediaPipe 把雙膝標在髖骨高度) 且身軀直立
             (isSpineUpright && isBothFemursCollapsed && (isFootNearBottom || isLowerSpanTruncated)) ||
             // B. 骨盆至最低足點垂直落差與骨骼路徑長皆嚴重不足 (物理上必然是半身裁切照)
@@ -1456,6 +1453,9 @@ export class TorsoPoseEstimator {
             // E. 骨盆直接被裁切在畫面最底部 (胸像/大頭照/腰部裁切)
             (midHip && midHip.y > 0.72)
         );
+        const isLegsTruncated = (priors && typeof priors.isLegsTruncated === 'boolean')
+            ? (priors.isLegsTruncated && !hasAtLeastOneFullLeg)
+            : geomLegsTruncated;
 
         // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援雙腿重疊前後步態、單腳後勾屈膝、側身矢狀投影與背身狀態機)
         // 雙下肢重疊與前後交錯步態連續耦合解算 (Bilateral Lower-Limb Tandem / Crossover Stance Coupling)：
@@ -1501,7 +1501,9 @@ export class TorsoPoseEstimator {
                 const relDz = -(lLegZ - rLegZ);
 
                 const rawLeadScore = normFootDy * 6.5 + relDz * 1.2;
-                const leadSign = rawLeadScore >= 0 ? 1.0 : -1.0;
+                let leadSign = rawLeadScore >= 0 ? 1.0 : -1.0;
+                if (priors && priors.leadingLeg === 'left') leadSign = 1.0;
+                else if (priors && priors.leadingLeg === 'right') leadSign = -1.0;
                 const leadMag = this._clamp(Math.max(Math.abs(rawLeadScore), 0.68), 0.0, 1.0);
                 const signedLead = leadSign * leadMag;
 
@@ -1759,18 +1761,29 @@ export class TorsoPoseEstimator {
                 }
             }
 
-            if (maleScore >= 0) {
-                suggestedGender = 'male';
-                genderConfidence = Math.min(0.95, 0.55 + Math.abs(maleScore) * 0.25);
-            } else {
-                suggestedGender = 'female';
-                genderConfidence = Math.min(0.95, 0.55 + Math.abs(maleScore) * 0.25);
+                if (maleScore >= 0) {
+                    suggestedGender = 'male';
+                    genderConfidence = Math.min(0.95, 0.55 + Math.abs(maleScore) * 0.25);
+                } else {
+                    suggestedGender = 'female';
+                    genderConfidence = Math.min(0.95, 0.55 + Math.abs(maleScore) * 0.25);
+                }
             }
-        }
+
+            // 第一階段 AI 視覺語意預判性別覆寫 (Stage-1 Vision AI Gender Override)
+            if (priors && (priors.gender === 'male' || priors.gender === 'female')) {
+                suggestedGender = priors.gender;
+                genderConfidence = priors.genderConfidence || 0.96;
+            }
+            if (priors && priors.source === 'gemini-vlm' && priors.headToBodyRatio) {
+                headToBodyRatio = parseFloat((headToBodyRatio * 0.5 + priors.headToBodyRatio * 0.5).toFixed(1));
+            }
 
         return {
             suggestedGender,
             genderConfidence,
+            semanticSource: priors?.source || 'geometric',
+            semanticModel: priors?.modelName || 'Geometric',
             shoulderToHipRatio,
             headToBodyRatio,
             skullScale,
@@ -1870,7 +1883,8 @@ export class TorsoPoseEstimator {
         overheadTargetInfo = null,
         isProfileStance = false,
         profileSign = 0,
-        isBackStance = false
+        isBackStance = false,
+        armDepthPrior = 'auto'
     ) {
         const conf = this.lastConfidences || {};
         return HierarchicalArmSolver.solve({
@@ -1894,6 +1908,7 @@ export class TorsoPoseEstimator {
             isProfileStance,
             profileSign,
             isBackStance,
+            armDepthPrior,
             collisionConfig: ANATOMICAL_COLLISION_CONFIG,
             confidences: {
                 arm: side === 'left' ? (conf.leftArm ?? 0.8) : (conf.rightArm ?? 0.8),
