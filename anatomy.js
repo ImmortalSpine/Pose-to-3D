@@ -1836,14 +1836,8 @@ export class AnatomicalTorso {
         return group;
     }
 
-    _addLandmark(name, localPos, parent) {
-        const geo = new THREE.SphereGeometry(0.24, 12, 12);
-        const mesh = new THREE.Mesh(geo, this.materials.landmark);
-        mesh.name = `Landmark_${name}`;
-        mesh.position.copy(localPos);
-        mesh.visible = false;
-        parent.add(mesh);
-        this.landmarks[name] = mesh;
+    _addLandmark(_name, _localPos, _parent) {
+        // 關鍵藝用骨點功能已移除，不再建立隱藏球體網格
     }
 
     /**
@@ -2151,10 +2145,6 @@ export class AnatomicalTorso {
         this.rootGroup.updateMatrixWorld(true);
 
         return targetOffsetY;
-    }
-
-    toggleLandmarks(visible) {
-        Object.values(this.landmarks).forEach(m => m.visible = visible);
     }
 
     toggleRibcage(visible) {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.0';
-import { VisionSemanticClassifier } from './visionClassifier.js?v=8.0';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.1';
+import { VisionSemanticClassifier } from './visionClassifier.js?v=8.1';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator

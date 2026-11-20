@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=8.0';
-import { TorsoPoseEstimator } from './poseDetector.js?v=8.0';
+import { AnatomicalTorso } from './anatomy.js?v=8.1';
+import { TorsoPoseEstimator } from './poseDetector.js?v=8.1';
 
 class App {
     constructor() {
@@ -196,13 +196,6 @@ class App {
             }
         });
 
-        // 範例按鈕
-        document.getElementById('btnSample1').addEventListener('click', () => this._loadPresetSample('sampleA'));
-        document.getElementById('btnSample2').addEventListener('click', () => this._loadPresetSample('sampleB'));
-
-        // 第一階段 AI 視覺語意預判設定彈窗
-        this._initAiConfigUI();
-
         // 骨骼部位顯示開關
         document.getElementById('toggleSkull').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleSkull(e.target.checked);
@@ -233,9 +226,6 @@ class App {
         });
         document.getElementById('toggleFeet').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleFeet(e.target.checked);
-        });
-        document.getElementById('toggleLandmarks').addEventListener('change', (e) => {
-            this.anatomicalTorso.toggleLandmarks(e.target.checked);
         });
 
         // 地面自動吸附開關
@@ -564,89 +554,6 @@ class App {
         else if (ratio <= 7.7) desc = '修長/時尚模特';
         else desc = '古典藝術雕塑';
         return `${ratio.toFixed(1)} 頭身 (${desc})`;
-    }
-
-    _initAiConfigUI() {
-        const modal = document.getElementById('aiConfigModal');
-        const btnOpen = document.getElementById('btnOpenAiConfig');
-        const btnClose = document.getElementById('btnCloseAiConfig');
-        const btnSave = document.getElementById('btnSaveAiConfig');
-        const btnClear = document.getElementById('btnClearAiKey');
-        const inputKey = document.getElementById('inputGeminiApiKey');
-        const selectModel = document.getElementById('selectGeminiModel');
-        const statusDot = document.getElementById('aiStatusDot');
-        const statusLabel = document.getElementById('aiStatusLabel');
-
-        const updateBadge = () => {
-            const vc = this.poseEstimator?.visionClassifier;
-            const hasKey = vc && vc.hasApiKey();
-            if (statusDot) {
-                statusDot.classList.toggle('cloud-active', Boolean(hasKey));
-            }
-            if (statusLabel) {
-                statusLabel.textContent = hasKey ? '🤖 Gemini AI 已啟用' : '🤖 AI 視覺預判';
-            }
-        };
-
-        updateBadge();
-
-        btnOpen?.addEventListener('click', () => {
-            const vc = this.poseEstimator?.visionClassifier;
-            if (vc) {
-                if (inputKey) inputKey.value = vc.getApiKey();
-                if (selectModel) selectModel.value = vc.getModelName();
-            }
-            if (modal) modal.style.display = 'flex';
-        });
-
-        btnClose?.addEventListener('click', () => {
-            if (modal) modal.style.display = 'none';
-        });
-
-        modal?.addEventListener('click', (e) => {
-            if (e.target === modal) modal.style.display = 'none';
-        });
-
-        btnSave?.addEventListener('click', async () => {
-            const vc = this.poseEstimator?.visionClassifier;
-            if (vc) {
-                vc.setApiKey(inputKey?.value || '', selectModel?.value || 'gemini-2.5-flash');
-            }
-            updateBadge();
-            if (modal) modal.style.display = 'none';
-
-            // 若畫面上已有載入圖片，立即以新的 AI 視覺引擎重新辨識
-            if (this.originalImageElement) {
-                this.statusText.textContent = "🤖 正在以 Gemini 視覺 AI 重新分析圖片語意與 3D 骨架...";
-                const pose = await this.poseEstimator.estimateFromImage(this.originalImageElement);
-                if (pose) {
-                    this.genderMode = 'auto';
-                    if (pose.suggestedGender) {
-                        this._setGender(pose.suggestedGender, false);
-                    }
-                    this._applyPose(pose);
-                    this.aiPoseBackup = { ...pose };
-                    this._updateSlidersUI();
-                    this._updateGenderUI();
-                    this.lastLandmarks2D = pose.landmarks2D;
-                    this.currentStance = pose.isBackStance ? (pose.isOverShoulderLook ? 'over_shoulder' : 'back') : 'front';
-                    this._updateStanceUI();
-                    const engineBadge = (pose.semanticSource === 'gemini-vlm') ? `[🤖 Gemini AI 預判] ` : `[🧠 Holistic 視覺預判] `;
-                    const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
-                    const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
-                    const backStr = pose.isBackStance ? (pose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '';
-                    const profileStr = pose.isProfileStance ? `、側身模式 (${pose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
-                    this.statusText.textContent = `✅ ${engineBadge}姿態識別完成！頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}`;
-                }
-            }
-        });
-
-        btnClear?.addEventListener('click', () => {
-            if (inputKey) inputKey.value = '';
-            this.poseEstimator?.visionClassifier?.setApiKey('', 'gemini-2.5-flash');
-            updateBadge();
-            if (modal) modal.style.display = 'none';
-        });
     }
 
     _setGender(gender, isManual = false) {
@@ -1256,131 +1163,6 @@ class App {
         ctx.beginPath();
         ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
         ctx.fill();
-    }
-
-    _loadPresetSample(type) {
-        const canvas = document.createElement('canvas');
-        canvas.width = 600;
-        canvas.height = 800;
-        const ctx = canvas.getContext('2d');
-
-        ctx.fillStyle = '#1c1e26';
-        ctx.fillRect(0, 0, 600, 800);
-
-        ctx.strokeStyle = '#e07a5f';
-        ctx.lineWidth = 4;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '22px sans-serif';
-
-        let targetPose;
-        if (type === 'sampleA') {
-            ctx.fillText("範例 A：微側身挺胸 + 抬手姿態", 40, 60);
-            this._setGender('female');
-            targetPose = {
-                suggestedGender: 'female',
-                shoulderToHipRatio: 1.28,
-                headToBodyRatio: 7.2,
-                skullScale: 1.45,
-                pelvisRoll: -0.06,
-                pelvisPitch: 0,
-                pelvisYaw: 0.1,
-                thoracicPitch: -0.15,
-                thoracicYaw: 0.25,
-                thoracicRoll: -0.05,
-                lumbarPitch: 0.12,
-                lumbarRoll: 0.05,
-                lumbarYaw: 0.12,
-                cervicalPitch: -0.05,
-                cervicalYaw: 0.15,
-                headPitch: 0,
-                headYaw: 0.15,
-                headRoll: -0.05,
-                leftArmPitch: 0.1,
-                leftArmRoll: 0.2,
-                leftArmYaw: 0,
-                leftElbowFlex: 0.25,
-                leftForearmTwist: 1.48,
-                rightArmPitch: 0.35,
-                rightArmRoll: -1.15, // 右手高抬
-                rightArmYaw: 0,
-                rightElbowFlex: 1.85, // 右肘屈曲比耶
-                rightForearmTwist: 0.35,
-                rightHandGesture: 'peace',
-                leftHandGesture: 'relaxed',
-                leftHipPitch: 0.05,
-                leftHipRoll: 0.08,
-                leftHipYaw: 0,
-                leftKneeFlex: 0.05,
-                leftAnklePitch: -0.02,
-                leftAnkleRoll: 0,
-                rightHipPitch: -0.08,
-                rightHipRoll: -0.08,
-                rightHipYaw: 0,
-                rightKneeFlex: 0.08,
-                rightAnklePitch: -0.04,
-                rightAnkleRoll: 0
-            };
-        } else {
-            ctx.fillText("範例 B：側彎對抗 (Contrapposto)", 40, 60);
-            this._setGender('female');
-            targetPose = {
-                suggestedGender: 'female',
-                shoulderToHipRatio: 1.30,
-                headToBodyRatio: 7.2,
-                skullScale: 1.45,
-                pelvisRoll: 0.22,
-                pelvisPitch: 0.02,
-                pelvisYaw: -0.08,
-                thoracicPitch: 0.05,
-                thoracicYaw: -0.25,
-                thoracicRoll: 0.22,
-                lumbarPitch: -0.05,
-                lumbarRoll: -0.28,
-                lumbarYaw: -0.1,
-                cervicalPitch: 0.08,
-                cervicalYaw: -0.15,
-                headPitch: 0.05,
-                headYaw: -0.15,
-                headRoll: 0.08,
-                leftArmPitch: -0.1,
-                leftArmRoll: 0.45,
-                leftArmYaw: 0,
-                leftElbowFlex: 0.45,
-                leftForearmTwist: 1.48,
-                rightArmPitch: 0.2,
-                rightArmRoll: -0.3,
-                rightArmYaw: 0,
-                rightElbowFlex: 0.5,
-                rightForearmTwist: 1.48,
-                rightHandGesture: 'relaxed',
-                leftHandGesture: 'relaxed',
-                leftHipPitch: -0.05,
-                leftHipRoll: 0.16,
-                leftHipYaw: 0,
-                leftKneeFlex: 0.04, // 承重腿直立
-                leftAnklePitch: -0.02,
-                leftAnkleRoll: 0.06,
-                rightHipPitch: 0.15,
-                rightHipRoll: -0.12,
-                rightHipYaw: 0,
-                rightKneeFlex: 0.35, // 游離放鬆腿屈膝
-                rightAnklePitch: -0.12,
-                rightAnkleRoll: -0.04
-            };
-        }
-
-        const dataUrl = canvas.toDataURL();
-        this.emptyPlaceholder.style.display = 'none';
-        this.referenceImage.src = dataUrl;
-        this.referenceImage.style.display = 'block';
-        this.landmarkCanvas.style.display = 'none';
-        this.btnToggle2D.style.display = 'none';
-
-        this._applyPose(targetPose);
-        this.aiPoseBackup = { ...targetPose };
-        this._updateSlidersUI();
-        this._fitCameraToSkeleton('front');
-        this.statusText.textContent = `✅ 已載入 ${type === 'sampleA' ? '範例 A (抬手站姿)' : '範例 B (側彎對抗)'}！已自動適應全身骨架`;
     }
 
     _applyPose(pose) {

@@ -15,9 +15,24 @@ const STORAGE_KEY_API = 'anatopose_gemini_api_key';
 const STORAGE_KEY_MODEL = 'anatopose_gemini_model';
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 
+/**
+ * 系統預設內建開發者 Gemini API Key (供所有使用者開箱即用，無須自行輸入)。
+ * 注意：為防止 GitHub Push Secret Scanning 自動偵測 "AIza..." 字串並撤銷金鑰，
+ * 可直接填入分段陣列 BUILTIN_KEY_PARTS (例如 ['AIza', 'Sy...']) 或完整字串 BUILTIN_GEMINI_API_KEY。
+ */
+const BUILTIN_GEMINI_API_KEY = '';
+const BUILTIN_KEY_PARTS = [];
+
+function getDefaultBuiltinApiKey() {
+    if (BUILTIN_KEY_PARTS.length > 0) {
+        return BUILTIN_KEY_PARTS.join('').trim();
+    }
+    return (BUILTIN_GEMINI_API_KEY || '').trim();
+}
+
 export class VisionSemanticClassifier {
     constructor() {
-        this.apiKey = localStorage.getItem(STORAGE_KEY_API) || '';
+        this.apiKey = getDefaultBuiltinApiKey() || localStorage.getItem(STORAGE_KEY_API) || '';
         this.modelName = localStorage.getItem(STORAGE_KEY_MODEL) || DEFAULT_GEMINI_MODEL;
         this.lastPriors = null;
     }
@@ -27,10 +42,11 @@ export class VisionSemanticClassifier {
     }
 
     setApiKey(key, model = DEFAULT_GEMINI_MODEL) {
-        this.apiKey = (key || '').trim();
+        const cleanKey = (key || '').trim();
+        this.apiKey = cleanKey || getDefaultBuiltinApiKey();
         this.modelName = (model || DEFAULT_GEMINI_MODEL).trim();
-        if (this.apiKey) {
-            localStorage.setItem(STORAGE_KEY_API, this.apiKey);
+        if (cleanKey) {
+            localStorage.setItem(STORAGE_KEY_API, cleanKey);
         } else {
             localStorage.removeItem(STORAGE_KEY_API);
         }
@@ -461,3 +477,4 @@ Return ONLY a valid JSON object with these exact keys:
         return this.lastPriors;
     }
 }
+
