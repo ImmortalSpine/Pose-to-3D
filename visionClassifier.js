@@ -72,7 +72,7 @@ export class VisionSemanticClassifier {
      * (Gemini 視覺模型對 <=768px 影像仍以單一基礎 Tile ~258 Tokens 計費，成本與延遲幾乎不變，
      *  但像素面積提升 4 倍，能清晰辨識手部握拳/指向手勢、服裝遮擋與腳踝細節！)
      */
-    _createThumbnailBase64(imageElement, maxDim = 768, quality = 0.86) {
+    _createThumbnailBase64(imageElement, maxDim = 512, quality = 0.86) {
         try {
             const origW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 384;
             const origH = imageElement.naturalHeight || imageElement.videoHeight || imageElement.height || 384;
@@ -100,7 +100,7 @@ export class VisionSemanticClassifier {
     async classifyWithGemini(imageElement) {
         if (!this.hasApiKey() || !imageElement) return null;
 
-        const base64Jpeg = this._createThumbnailBase64(imageElement, 768, 0.86);
+        const base64Jpeg = this._createThumbnailBase64(imageElement, 512, 0.86);
         if (!base64Jpeg) return null;
 
         const prompt = `Analyze the main human subject in this reference image for a 3D anatomical skeleton solver.
@@ -123,12 +123,19 @@ Return ONLY a valid JSON object with these exact keys:
   "headToBodyRatio": estimated total unfolded standing body height divided by head height (float between 7.0 and 7.9)
 }`;
 
-        const modelsToTry = [this.modelName, 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.8-flash'];
-        const uniqueModels = [...new Set(modelsToTry)];
+        // 排入重試佇列：當遇到 Google 伺服器瞬間 503 擁塞時自動重試，大幅降低退回本地 Holistic 的機率
+        const modelsToTry = [
+            this.modelName,
+            'gemini-3.5-flash-lite',
+            'gemini-flash-lite-latest',
+            'gemini-3.5-flash-lite',
+            'gemini-3.8-flash'
+        ];
 
-        for (const model of uniqueModels) {
+        for (let i = 0; i < modelsToTry.length; i++) {
+            const model = modelsToTry[i];
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 6000);
+            const timer = setTimeout(() => controller.abort(), 9500);
             try {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
                 const response = await fetch(url, {
@@ -149,7 +156,7 @@ Return ONLY a valid JSON object with these exact keys:
                         }],
                         generationConfig: {
                             temperature: 0.0,
-                            maxOutputTokens: 800,
+                            maxOutputTokens: 1024,
                             responseMimeType: 'application/json'
                         }
                     })
@@ -158,11 +165,16 @@ Return ONLY a valid JSON object with these exact keys:
 
                 if (!response.ok) {
                     console.warn(`[VisionClassifier] Gemini API (${model}) HTTP ${response.status}`);
+                    if ((response.status === 503 || response.status === 429) && i < modelsToTry.length - 1) {
+                        await new Promise(r => setTimeout(r, 450));
+                    }
                     continue;
                 }
 
                 const data = await response.json();
-                const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                const parts = data?.candidates?.[0]?.content?.parts || [];
+                const textPart = parts.find(p => p.text && p.text.includes('{')) || parts[parts.length - 1];
+                const text = textPart?.text;
                 if (!text) continue;
 
                 const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
