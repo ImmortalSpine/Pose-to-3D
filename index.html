@@ -176,20 +176,6 @@
                         <span class="slider"></span>
                     </label>
                 </div>
-                <div class="toggle-row">
-                    <span>地面自動吸附 (Auto Ground Snap)</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="toggleGroundSnap" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                <div class="toggle-row">
-                    <span>地面空間參考網格 (Floor Grid)</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="toggleFloorGrid" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
                 <div class="info-callout">
                     <b>前臂與下肢自然解剖連動：</b><br>
                     • 橈骨隨前臂<b>旋前/旋後 (Pronation/Supination)</b>跨越尺骨剪刀交叉，手掌同步旋動。<br>
@@ -197,58 +183,11 @@
                 </div>
             </div>
 
-            <!-- 3. 人體體型與性別形態 (Body Proportion & Gender) -->
+            <!-- 3. 動態姿態微調與進階設定 (Sliders & Advanced) -->
             <div class="panel-section">
                 <div class="panel-title">
-                    <span>3. 體型與性別骨骼 (Morph & Gender)</span>
-                </div>
-                
-                <!-- 性別骨骼形態切換 -->
-                <div class="control-row" style="margin-bottom: 6px;">
-                    <div class="control-label-wrap">
-                        <span>性別骨骼形態 (Skeletal Dimorphism)</span>
-                        <span class="control-val" id="valGenderBadge" style="color: #6ee7b7; font-weight: 600;">♀ 女性 (自適應)</span>
-                    </div>
-                    <div class="gender-buttons">
-                        <button class="btn btn-sm active" id="btnGenderAuto" title="AI 自動依照片肩臀比判定">⚖ 自適應</button>
-                        <button class="btn btn-sm" id="btnGenderFemale" title="女性骨骼：纖細長骨、小巧胸廓、寬圓骨盆">♀ 女性</button>
-                        <button class="btn btn-sm" id="btnGenderMale" title="男性骨骼：粗壯長骨、厚實胸腔、高窄骨盆">♂ 男性</button>
-                    </div>
-                </div>
-
-                <!-- 頭身比調節 -->
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>頭身比例 (Head-to-Body Ratio)</span>
-                        <span class="control-val" id="valHeadRatio">7.1 頭身 (亞洲大眾)</span>
-                    </div>
-                    <div class="gender-buttons" style="margin-top: 4px; margin-bottom: 8px;">
-                        <button class="btn btn-sm" id="btnRatioAsian" title="大眾日常寫實體型 (約 7.0 頭身)">亞洲日常 (~7.0)</button>
-                        <button class="btn btn-sm" id="btnRatioModel" title="修長模特體型 (約 7.5 頭身)">時尚模特 (~7.5)</button>
-                        <button class="btn btn-sm" id="btnRatioClassic" title="古典雕塑黃金比例 (約 8.0 頭身)">古典理想 (~8.0)</button>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderHeadRatio" min="6.5" max="8.5" step="0.1" value="7.1">
-                </div>
-            </div>
-
-            <!-- 4. 動態姿態微調 (Sliders) -->
-            <div class="panel-section">
-                <div class="panel-title">
-                    <span>4. 姿態微調 (Pose Tuning)</span>
+                    <span>3. 姿態微調 (Pose Tuning)</span>
                     <button class="btn btn-sm" id="btnResetPose">重置為 AI 姿態</button>
-                </div>
-
-                <!-- 人體面向模式 (Stance Orientation) -->
-                <div class="control-row" style="margin-bottom: 12px;">
-                    <div class="control-label-wrap">
-                        <span>人體面向模式 (Stance Mode)</span>
-                        <span class="control-val" id="valStanceBadge" style="color: #6ee7b7; font-weight: 600;">🧍 正面模式</span>
-                    </div>
-                    <div class="gender-buttons">
-                        <button class="btn btn-sm active" id="btnStanceFront" title="標準正面朝向">🧍 正面</button>
-                        <button class="btn btn-sm" id="btnStanceBack" title="180° 純後背視角（後背脊椎、肩胛骨、薦骨朝向鏡頭）">🔄 純背身 (180°)</button>
-                        <button class="btn btn-sm" id="btnStanceOverShoulder" title="背身回眸（後背朝向，頭部側轉看鏡頭）">👀 背身回眸</button>
-                    </div>
                 </div>
 
                 <!-- 分類 1：軀幹、胸廓與骨盆 -->
@@ -583,6 +522,70 @@
                                 <span class="control-val" id="valLeftAnkleRoll">0°</span>
                             </div>
                             <input type="range" class="range-slider" id="sliderLeftAnkleRoll" min="-40" max="40" value="0">
+                        </div>
+                    </div>
+                </details>
+
+                <!-- 分類 7：進階 -->
+                <details class="pose-accordion">
+                    <summary class="pose-accordion-header">
+                        <span class="pose-accordion-title">進階</span>
+                    </summary>
+                    <div class="pose-accordion-body">
+                        <!-- 性別骨骼形態切換 -->
+                        <div class="control-row" style="margin-bottom: 10px;">
+                            <div class="control-label-wrap">
+                                <span>性別骨骼形態 (Skeletal Dimorphism)</span>
+                                <span class="control-val" id="valGenderBadge" style="color: #6ee7b7; font-weight: 600;">♀ 女性 (自適應)</span>
+                            </div>
+                            <div class="gender-buttons">
+                                <button class="btn btn-sm active" id="btnGenderAuto" title="AI 自動依照片肩臀比判定">⚖ 自適應</button>
+                                <button class="btn btn-sm" id="btnGenderFemale" title="女性骨骼：纖細長骨、小巧胸廓、寬圓骨盆">♀ 女性</button>
+                                <button class="btn btn-sm" id="btnGenderMale" title="男性骨骼：粗壯長骨、厚實胸腔、高窄骨盆">♂ 男性</button>
+                            </div>
+                        </div>
+
+                        <!-- 頭身比調節 -->
+                        <div class="control-row" style="margin-bottom: 12px;">
+                            <div class="control-label-wrap">
+                                <span>頭身比例 (Head-to-Body Ratio)</span>
+                                <span class="control-val" id="valHeadRatio">7.1 頭身 (亞洲大眾)</span>
+                            </div>
+                            <div class="gender-buttons" style="margin-top: 4px; margin-bottom: 8px;">
+                                <button class="btn btn-sm" id="btnRatioAsian" title="大眾日常寫實體型 (約 7.0 頭身)">亞洲日常 (~7.0)</button>
+                                <button class="btn btn-sm" id="btnRatioModel" title="修長模特體型 (約 7.5 頭身)">時尚模特 (~7.5)</button>
+                                <button class="btn btn-sm" id="btnRatioClassic" title="古典雕塑黃金比例 (約 8.0 頭身)">古典理想 (~8.0)</button>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderHeadRatio" min="6.5" max="8.5" step="0.1" value="7.1">
+                        </div>
+
+                        <!-- 人體面向模式 (Stance Orientation) -->
+                        <div class="control-row" style="margin-bottom: 12px;">
+                            <div class="control-label-wrap">
+                                <span>人體面向模式 (Stance Mode)</span>
+                                <span class="control-val" id="valStanceBadge" style="color: #6ee7b7; font-weight: 600;">🧍 正面模式</span>
+                            </div>
+                            <div class="gender-buttons">
+                                <button class="btn btn-sm active" id="btnStanceFront" title="標準正面朝向">🧍 正面</button>
+                                <button class="btn btn-sm" id="btnStanceBack" title="180° 純後背視角（後背脊椎、肩胛骨、薦骨朝向鏡頭）">🔄 純背身 (180°)</button>
+                                <button class="btn btn-sm" id="btnStanceOverShoulder" title="背身回眸（後背朝向，頭部側轉看鏡頭）">👀 背身回眸</button>
+                            </div>
+                        </div>
+
+                        <!-- 地面自動吸附與空間參考網格 -->
+                        <div class="toggle-row">
+                            <span>地面自動吸附 (Auto Ground Snap)</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggleGroundSnap" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        <div class="toggle-row" style="margin-bottom: 6px;">
+                            <span>地面空間參考網格 (Floor Grid)</span>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="toggleFloorGrid" checked>
+                                <span class="slider"></span>
+                            </label>
                         </div>
                     </div>
                 </details>
