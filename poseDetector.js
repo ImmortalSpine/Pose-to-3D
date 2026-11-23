@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.3';
-import { VisionSemanticClassifier } from './visionClassifier.js?v=8.3';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.4';
+import { VisionSemanticClassifier } from './visionClassifier.js?v=8.4';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -657,11 +657,23 @@ export class TorsoPoseEstimator {
             isBackStance = false;
             isOverShoulderLook = false;
         } else if (priors && priors.stance) {
-            // 第一階段 AI 視覺語意預判直接驅動正/背/側身狀態機 (Stage-1 Semantic Stance Routing)
+            // 第一階段 AI 視覺語意預判驅動正/背/側身狀態機，並執行 2D 幾何不變量防呆校驗：
+            // 1) 若雙肩與雙髖在 2D 畫面上橫向重疊收窄 (normShoulderX < 0.28 && normHipX < 0.24)，
+            //    物理上必然是 90° 側身剪影 (isProfileStance = true)，絕不可誤入 180° 寬背之背身模式 (isBackStance)！
+            // 2) 若雙肩橫向明顯展開 (normShoulderX > 0.36) 且五官正面清晰、雙肩未反轉，則屬於正面/斜正面而非 90° 純側身。
             isBackStance = Boolean(priors.isBackStance);
             isOverShoulderLook = Boolean(priors.isOverShoulderLook);
             isProfileStance = Boolean(priors.isProfileStance);
             forcedProfileSign = priors.profileSign || 0;
+
+            if (isBackStance && normShoulderX < 0.28 && normHipX < 0.24) {
+                isBackStance = false;
+                isOverShoulderLook = false;
+                isProfileStance = true;
+            }
+            if (isProfileStance && normShoulderX > 0.38 && !isTorsoNarrow && Math.abs(headYaw) < 0.35) {
+                isProfileStance = false;
+            }
         } else {
             // 備援幾何判定
             isBackStance = !hasClearFrontFace && (isEarInverted || isShoulderInverted || isHipInverted || avgFaceVis < 0.28);
@@ -738,18 +750,32 @@ export class TorsoPoseEstimator {
             // 側身狀態機啟動 (Profile Stance Mode Active: 75° ~ 90°)
             // ---------------------------------------------------------
             // 1. 決定人物面朝方向：面朝左 (profileSign = -1) 或 面朝右 (profileSign = +1)
+            // 注意：英文攝影術語 "left profile" 常指「露出左臉 (實為面向畫面右方)」，故側身之左右朝向必須以 2D 五官/耳鼻與膝蓋幾何向量為準！
             let leftScore = 0;
             let rightScore = 0;
-            if (noseOffset < -0.008) leftScore += 2.0;
-            if (noseOffset > 0.008) rightScore += 2.0;
+            if (noseOffset < -0.006) leftScore += 2.5;
+            if (noseOffset > 0.006) rightScore += 2.5;
             if (rightEarVis > leftEarVis + 0.10) leftScore += 2.5; // 右耳面向鏡頭 -> 人物面朝左
             if (leftEarVis > rightEarVis + 0.10) rightScore += 2.5; // 左耳面向鏡頭 -> 人物面朝右
+            if (nose && leftEar && (leftEar.visibility ?? 0) > 0.3) {
+                if (nose.x > leftEar.x + 0.01) rightScore += 3.0;
+                else if (nose.x < leftEar.x - 0.01) leftScore += 3.0;
+            }
+            if (nose && rightEar && (rightEar.visibility ?? 0) > 0.3) {
+                if (nose.x > rightEar.x + 0.01) rightScore += 3.0;
+                else if (nose.x < rightEar.x - 0.01) leftScore += 3.0;
+            }
+            if (leftKnee && rightKnee && midHip) {
+                const avgKneeDx = (((leftKnee.x + rightKnee.x) * 0.5) - midHip.x) * ar;
+                if (avgKneeDx > 0.08 * torsoHeight) rightScore += 2.0;
+                else if (avgKneeDx < -0.08 * torsoHeight) leftScore += 2.0;
+            }
             if (headYaw < -0.20) leftScore += 1.5;
             if (headYaw > 0.20) rightScore += 1.5;
             if (rawDz > 0.02) leftScore += 1.0;
             if (rawDz < -0.02) rightScore += 1.0;
 
-            if (!profileSign) {
+            if (Math.abs(leftScore - rightScore) >= 1.5 || !profileSign) {
                 profileSign = (leftScore >= rightScore) ? -1 : 1;
             }
 
@@ -1289,15 +1315,22 @@ export class TorsoPoseEstimator {
         }
 
         // 12. 左右大臂與前臂解算 (結合第一階段 AI 手臂前後深度預判 priors.leftArmDepth / rightArmDepth)
+        // 注意：摸頭 IK (isTouchingHead) 必須以 2D 手腕確實高於肩膀為前提，防止下垂手被 VLM 標籤誤拉到頭頂！
         const leftArmDepthPrior = priors?.leftArmDepth || 'auto';
         const rightArmDepthPrior = priors?.rightArmDepth || 'auto';
+        const isLimbLeftTouchingHead = checkTouchingHead(limbLeftShoulder, limbLeftElbow, limbLeftWrist, limbLeftHand, 'left');
+        const isLimbRightTouchingHead = checkTouchingHead(limbRightShoulder, limbRightElbow, limbRightWrist, limbRightHand, 'right');
+        const isLimbLeftHandOnHip = !isLimbLeftTouchingHead && !isOverheadClasped && checkHandOnHip(limbLeftShoulder, limbLeftElbow, limbLeftWrist, 'left');
+        const isLimbRightHandOnHip = !isLimbRightTouchingHead && !isOverheadClasped && checkHandOnHip(limbRightShoulder, limbRightElbow, limbRightWrist, 'right');
+        const isLimbLeftFrontOfPelvis = !isLimbLeftHandOnHip && !isLimbLeftTouchingHead && !isOverheadClasped && checkFrontOfPelvis(limbLeftElbow, limbLeftWrist, 'left');
+        const isLimbRightFrontOfPelvis = !isLimbRightHandOnHip && !isLimbRightTouchingHead && !isOverheadClasped && checkFrontOfPelvis(limbRightElbow, limbRightWrist, 'right');
 
         const leftArmPose = this._solveArmKinematics(
             limbLeftShoulder, limbLeftElbow, limbLeftWrist, 'left',
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             limbLeftThumb, limbLeftPinky,
-            limbLeftHip, limbRightHip, isLeftFrontOfPelvis, isLeftHandOnHip,
-            isLeftTouchingHead || leftArmDepthPrior === 'touching_head', headTargetInfo, limbLeftHand,
+            limbLeftHip, limbRightHip, isLimbLeftFrontOfPelvis, isLimbLeftHandOnHip,
+            isLimbLeftTouchingHead, headTargetInfo, limbLeftHand,
             overheadClaspedInfo, isProfileStance, profileSign, isBackStance,
             leftArmDepthPrior
         );
@@ -1306,8 +1339,8 @@ export class TorsoPoseEstimator {
             limbRightShoulder, limbRightElbow, limbRightWrist, 'right',
             thoracicPitch, thoracicYaw, thoracicRoll, torsoHeight,
             limbRightThumb, limbRightPinky,
-            limbLeftHip, limbRightHip, isRightFrontOfPelvis, isRightHandOnHip,
-            isRightTouchingHead || rightArmDepthPrior === 'touching_head', headTargetInfo, limbRightHand,
+            limbLeftHip, limbRightHip, isLimbRightFrontOfPelvis, isLimbRightHandOnHip,
+            isLimbRightTouchingHead, headTargetInfo, limbRightHand,
             overheadClaspedInfo, isProfileStance, profileSign, isBackStance,
             rightArmDepthPrior
         );
@@ -1330,39 +1363,39 @@ export class TorsoPoseEstimator {
         let leftHandDetectedPreset = 'relaxed';
         let rightHandDetectedPreset = 'relaxed';
 
-        if (matchedLeftHand) {
-            const handSol = this._solveTwistAndGestureFromHand(matchedLeftHand, 'left', isLeftFrontOfPelvis, isLeftHandOnHip, isLeftTouchingHead);
+        if (limbLeftHand) {
+            const handSol = this._solveTwistAndGestureFromHand(limbLeftHand, 'left', isLimbLeftFrontOfPelvis, isLimbLeftHandOnHip, isLimbLeftTouchingHead);
             leftForearmTwist = handSol.twist;
             leftHandDetectedPreset = handSol.gesture;
             leftHandGesture = 'auto';
             leftHandAngles = handSol.fingerAngles;
-        } else if (leftWrist && leftShoulder && leftElbow) {
-            if (isLeftTouchingHead) {
+        } else if (limbLeftWrist && limbLeftShoulder && limbLeftElbow) {
+            if (isLimbLeftTouchingHead) {
                 leftHandGesture = 'open';
                 leftHandDetectedPreset = 'open';
             } else if (isOverheadClasped) {
                 leftHandGesture = 'open';
                 leftHandDetectedPreset = 'open';
-            } else if (leftWrist.y < leftShoulder.y + 0.15 && leftElbow.y > leftWrist.y) {
+            } else if (limbLeftWrist.y < limbLeftShoulder.y + 0.15 && limbLeftElbow.y > limbLeftWrist.y) {
                 leftHandGesture = 'peace';
                 leftHandDetectedPreset = 'peace';
             }
         }
 
-        if (matchedRightHand) {
-            const handSol = this._solveTwistAndGestureFromHand(matchedRightHand, 'right', isRightFrontOfPelvis, isRightHandOnHip, isRightTouchingHead);
+        if (limbRightHand) {
+            const handSol = this._solveTwistAndGestureFromHand(limbRightHand, 'right', isLimbRightFrontOfPelvis, isLimbRightHandOnHip, isLimbRightTouchingHead);
             rightForearmTwist = handSol.twist;
             rightHandDetectedPreset = handSol.gesture;
             rightHandGesture = 'auto';
             rightHandAngles = handSol.fingerAngles;
-        } else if (rightWrist && rightShoulder && rightElbow) {
-            if (isRightTouchingHead) {
+        } else if (limbRightWrist && limbRightShoulder && limbRightElbow) {
+            if (isLimbRightTouchingHead) {
                 rightHandGesture = 'open';
                 rightHandDetectedPreset = 'open';
             } else if (isOverheadClasped) {
                 rightHandGesture = 'open';
                 rightHandDetectedPreset = 'open';
-            } else if (rightWrist.y < rightShoulder.y + 0.15 && rightElbow.y > rightWrist.y) {
+            } else if (limbRightWrist.y < limbRightShoulder.y + 0.15 && limbRightElbow.y > limbRightWrist.y) {
                 rightHandGesture = 'peace';
                 rightHandDetectedPreset = 'peace';
             }
@@ -1427,9 +1460,14 @@ export class TorsoPoseEstimator {
             (rFemurLen2D > 0.42 * torsoHeight && rShinDy > 0.38 * torsoHeight && rShinLen2D > 0.65 * rFemurLen2D && (!rightAnkle || rightAnkle.y < 0.965))
         );
 
-        // 小腿水平展開判定 (真人地面跪姿特徵，如芭蕾/體操動作)
+        // 小腿水平展開與地面雙膝跪姿判定 (真人地面跪姿特徵，如芭蕾/體操/地板跪坐動作)
         const isShinHorizontal = (leftAnkle && leftKnee && Math.abs((leftAnkle.x - leftKnee.x) * ar) > 0.10) ||
                                  (rightAnkle && rightKnee && Math.abs((rightAnkle.x - rightKnee.x) * ar) > 0.10);
+        const isKneelingPose = Boolean(priors?.isKneeling) || isShinHorizontal ||
+            Boolean(leftKnee && rightKnee && leftAnkle && rightAnkle &&
+                    lFemurLen2D > 0.25 * torsoHeight && rFemurLen2D > 0.25 * torsoHeight &&
+                    Math.abs(leftAnkle.y - leftKnee.y) < 0.22 * torsoHeight &&
+                    Math.abs(rightAnkle.y - rightKnee.y) < 0.22 * torsoHeight);
 
         const isSpineUpright = Math.abs(spineDy) > 0.65 * torsoHeight && Math.abs(spineDx) < 0.60 * torsoHeight;
 
@@ -1440,8 +1478,8 @@ export class TorsoPoseEstimator {
         const isFootNearBottom = lowestFootY > 0.88;
         const isHipNearBottom = (midHip && midHip.y > 0.65);
 
-        // 綜合判定：優先採信第一階段 AI 視覺預判 (priors.isLegsTruncated)，並結合至少一條完整腿部保護
-        const geomLegsTruncated = !isProfileStance && !isShinHorizontal && !hasAtLeastOneFullLeg && (
+        // 綜合判定：凡屬於地面跪姿 (isKneelingPose) 或具備至少一條完整腿部 (hasAtLeastOneFullLeg) 者，絕不可鎖定為半身裁切站姿！
+        const geomLegsTruncated = !isProfileStance && !isKneelingPose && !hasAtLeastOneFullLeg && (
             // A. 雙側股骨坍縮 (MediaPipe 把雙膝標在髖骨高度) 且身軀直立
             (isSpineUpright && isBothFemursCollapsed && (isFootNearBottom || isLowerSpanTruncated)) ||
             // B. 骨盆至最低足點垂直落差與骨骼路徑長皆嚴重不足 (物理上必然是半身裁切照)
@@ -1453,9 +1491,11 @@ export class TorsoPoseEstimator {
             // E. 骨盆直接被裁切在畫面最底部 (胸像/大頭照/腰部裁切)
             (midHip && midHip.y > 0.72)
         );
-        const isLegsTruncated = (priors && typeof priors.isLegsTruncated === 'boolean')
-            ? (priors.isLegsTruncated && !hasAtLeastOneFullLeg)
-            : geomLegsTruncated;
+        const isLegsTruncated = !isKneelingPose && !isProfileStance && (
+            (priors && typeof priors.isLegsTruncated === 'boolean')
+                ? (priors.isLegsTruncated && !hasAtLeastOneFullLeg)
+                : geomLegsTruncated
+        );
 
         // 15. 左右下肢解算 (股骨、大轉子、膝關節屈曲、脛骨、腓骨與足踝，支援雙腿重疊前後步態、單腳後勾屈膝、側身矢狀投影與背身狀態機)
         // 雙下肢重疊與前後交錯步態連續耦合解算 (Bilateral Lower-Limb Tandem / Crossover Stance Coupling)：
@@ -1515,36 +1555,41 @@ export class TorsoPoseEstimator {
         const leftLegPose = this._solveLegKinematics(
             limbLeftHip, limbLeftKnee, limbLeftAnkle, limbLeftFootIndex, limbLeftHeel, 'left',
             pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign, isBackStance,
-            leftTandemBias
+            leftTandemBias, isKneelingPose
         );
 
         const rightLegPose = this._solveLegKinematics(
             limbRightHip, limbRightKnee, limbRightAnkle, limbRightFootIndex, limbRightHeel, 'right',
             pelvisPitch, pelvisYaw, pelvisRoll, torsoHeight, isProfileStance, profileSign, isBackStance,
-            rightTandemBias
+            rightTandemBias, isKneelingPose
         );
 
         // 若為下肢裁切半身照 (isLegsTruncated)：
-        // 1) 抑制裁切邊緣裙擺造成的骨盆假性側傾與前後傾；
-        // 2) 由於左右髖關節 (hipJoint) 掛載於 pelvisUnit 子節點下，必須在局部座標系中反向抵消 pelvisRoll 與 pelvisPitch，
-        //    才能確保標準站姿下雙腿在世界座標系中 100% 垂直立於地面，徹底杜絕骨盆微傾導致整雙腿斜插歪倒！
+        // 1) 若裁切位置在小腿中段以下且「雙側大腿與膝蓋皆在畫面內清晰可見 (areThighsClearlyVisible)」（如七分身照），
+        //    保留大腿真實的 2D 外展/內收與重心角度，僅將被裁切的小腿與腳踝保持自然伸直！
+        // 2) 若裁切在大腿中上段或腰部，則在局部座標系中反向抵消 pelvisRoll 與 pelvisPitch，確保雙腿 100% 垂直立於地面。
+        const areThighsClearlyVisible = Boolean(
+            leftKnee && rightKnee &&
+            lFemurDy > 0.30 * torsoHeight && rFemurDy > 0.30 * torsoHeight &&
+            leftKnee.y < 0.93 && rightKnee.y < 0.93
+        );
         if (isLegsTruncated) {
             pelvisRoll *= 0.45;
             pelvisPitch *= 0.50;
         }
 
-        let leftHipPitch = isLegsTruncated ? -pelvisPitch : leftLegPose.pitch;
-        let leftHipRoll = isLegsTruncated ? (-pelvisRoll + 0.03) : leftLegPose.roll;
+        let leftHipPitch = isLegsTruncated ? (areThighsClearlyVisible ? leftLegPose.pitch * 0.65 : -pelvisPitch) : leftLegPose.pitch;
+        let leftHipRoll = isLegsTruncated ? (areThighsClearlyVisible ? leftLegPose.roll * 0.75 : (-pelvisRoll + 0.03)) : leftLegPose.roll;
         let leftHipYaw = isLegsTruncated ? 0.0 : leftLegPose.yaw;
-        let leftKneeFlex = isLegsTruncated ? 0.03 : leftLegPose.kneeFlex;
+        let leftKneeFlex = isLegsTruncated ? 0.04 : leftLegPose.kneeFlex;
         let leftAnklePitch = isLegsTruncated ? 0.0 : leftLegPose.anklePitch;
         let leftAnkleYaw = isLegsTruncated ? 0.06 : leftLegPose.ankleYaw;
         let leftAnkleRoll = isLegsTruncated ? 0.0 : leftLegPose.ankleRoll;
 
-        let rightHipPitch = isLegsTruncated ? -pelvisPitch : rightLegPose.pitch;
-        let rightHipRoll = isLegsTruncated ? (-pelvisRoll - 0.03) : rightLegPose.roll;
+        let rightHipPitch = isLegsTruncated ? (areThighsClearlyVisible ? rightLegPose.pitch * 0.65 : -pelvisPitch) : rightLegPose.pitch;
+        let rightHipRoll = isLegsTruncated ? (areThighsClearlyVisible ? rightLegPose.roll * 0.75 : (-pelvisRoll - 0.03)) : rightLegPose.roll;
         let rightHipYaw = isLegsTruncated ? 0.0 : rightLegPose.yaw;
-        let rightKneeFlex = isLegsTruncated ? 0.03 : rightLegPose.kneeFlex;
+        let rightKneeFlex = isLegsTruncated ? 0.04 : rightLegPose.kneeFlex;
         let rightAnklePitch = isLegsTruncated ? 0.0 : rightLegPose.anklePitch;
         let rightAnkleYaw = isLegsTruncated ? -0.06 : rightLegPose.ankleYaw;
         let rightAnkleRoll = isLegsTruncated ? 0.0 : rightLegPose.ankleRoll;
@@ -1823,17 +1868,17 @@ export class TorsoPoseEstimator {
             rightHandGesture: rightHandGesture,
             rightHandAngles: rightHandAngles,
             rightHandDetectedPreset: rightHandDetectedPreset,
-            leftHipPitch: this._clamp(leftHipPitch, -0.65, 0.95),
-            leftHipRoll: this._clamp(leftHipRoll, -0.30, 0.65),
-            leftHipYaw: this._clamp(leftHipYaw, -0.65, 0.65),
-            leftKneeFlex: this._clamp(leftKneeFlex, 0, 2.4),
+            leftHipPitch: this._clamp(leftHipPitch, -2.10, 0.95),
+            leftHipRoll: this._clamp(leftHipRoll, -0.45, 0.75),
+            leftHipYaw: this._clamp(leftHipYaw, -0.75, 0.75),
+            leftKneeFlex: this._clamp(leftKneeFlex, 0, 2.68),
             leftAnklePitch: this._clamp(leftAnklePitch, -0.50, 0.75),
             leftAnkleYaw: this._clamp(leftAnkleYaw, -0.60, 0.60),
             leftAnkleRoll: this._clamp(leftAnkleRoll, -0.25, 0.25),
-            rightHipPitch: this._clamp(rightHipPitch, -0.65, 0.95),
-            rightHipRoll: this._clamp(rightHipRoll, -0.65, 0.30),
-            rightHipYaw: this._clamp(rightHipYaw, -0.65, 0.65),
-            rightKneeFlex: this._clamp(rightKneeFlex, 0, 2.4),
+            rightHipPitch: this._clamp(rightHipPitch, -2.10, 0.95),
+            rightHipRoll: this._clamp(rightHipRoll, -0.75, 0.45),
+            rightHipYaw: this._clamp(rightHipYaw, -0.75, 0.75),
+            rightKneeFlex: this._clamp(rightKneeFlex, 0, 2.68),
             rightAnklePitch: this._clamp(rightAnklePitch, -0.50, 0.75),
             rightAnkleYaw: this._clamp(rightAnkleYaw, -0.60, 0.60),
             rightAnkleRoll: this._clamp(rightAnkleRoll, -0.25, 0.25),
@@ -1935,7 +1980,8 @@ export class TorsoPoseEstimator {
         isProfileStance = false,
         profileSign = 0,
         isBackStance = false,
-        tandemBias = 0.0
+        tandemBias = 0.0,
+        isKneelingPose = false
     ) {
         const sign = (side === 'left') ? 1.0 : -1.0;
         const ar = this.aspectRatio || 1.0;
@@ -1981,6 +2027,9 @@ export class TorsoPoseEstimator {
         if (isProfileStance && profileSign !== 0) {
             // 側身模式下，近側腿面向鏡頭微正向偏移，遠側腿背對鏡頭微負向偏移
             dzFemur = isNearLeg ? (0.05 * LFemur) : (-0.05 * LFemur);
+        } else if (isKneelingPose && !isBackStance) {
+            // 正面與斜側面地面跪姿 (如芭蕾斜跪、雙膝跪地)：大腿向鏡頭前下方斜伸跪地 (+Z)
+            dzFemur = Math.max(0.28 * LFemur, rawDzFemur * 0.75);
         } else if (Math.abs(tandemBias) > 0.02) {
             // 雙腳重疊之一前一後步態 (Tandem / Catwalk Stride)：
             // tandemBias > 0 為前導腿 (向前跨出 +Z)，tandemBias < 0 為後隨腿 (向後延伸 -Z)
@@ -2008,6 +2057,9 @@ export class TorsoPoseEstimator {
             let dzShin = isBackStance ? (0.05 * LTibia) : (-0.05 * LTibia);
             if (isProfileStance && profileSign !== 0) {
                 dzShin = isNearLeg ? (0.04 * LTibia) : (-0.04 * LTibia);
+            } else if (isKneelingPose && !isBackStance) {
+                // 正面與斜側面地面跪姿：小腿貼地向身體後方摺疊 (-Z)
+                dzShin = -Math.max(0.65 * LTibia, rawDzShin * 0.92);
             } else if (Math.abs(tandemBias) > 0.02) {
                 // 一前一後步態：前導腿小腿隨大腿向前延伸保持筆直落地；後隨腿小腿向後微屈 (-Z)，呈現自然前後步幅與後膝微彎
                 const frontBackSign = isBackStance ? -1.0 : 1.0;
@@ -2047,7 +2099,7 @@ export class TorsoPoseEstimator {
         // 膝關節屈曲角度 (Flexion)
         const dotFlex = THREE.MathUtils.clamp(uFemur.dot(uTibia), -1.0, 1.0);
         let flex = Math.acos(dotFlex);
-        flex = this._clamp(flex, 0.02, 2.4);
+        flex = this._clamp(flex, 0.02, 2.68);
 
         // 基準前方向量 zDef (面朝骨盆前方 +Z，帶微自然外旋 ~6°)
         let zDef = new THREE.Vector3(sign * 0.10, 0.0, 0.99).normalize();
@@ -2067,9 +2119,10 @@ export class TorsoPoseEstimator {
         let zAxis;
         if (lTibiaPerp > 0.04 && flex > 0.06) {
             let zFlex = uTibiaPerp.clone().negate().normalize();
-            // 髖關節旋轉極限約束：髕骨法向不可與人體前方相背，杜絕單視角深度噪聲導致關節逆向折斷
-            if (zFlex.dot(zDef) < 0.15) {
-                zFlex.lerp(zDef, 0.70).normalize();
+            // 髖關節旋轉極限約束：髕骨法向不可與人體前方完全相反；跪姿時允許更大斜向角度以忠實對齊 2D 小腿水平摺疊方向
+            const minDotZ = isKneelingPose ? -0.15 : 0.15;
+            if (zFlex.dot(zDef) < minDotZ) {
+                zFlex.lerp(zDef, isKneelingPose ? 0.35 : 0.70).normalize();
             }
             const t = THREE.MathUtils.clamp((flex - 0.06) / 0.15, 0.0, 1.0);
             zAxis = zDef.clone().multiplyScalar(1.0 - t).addScaledVector(zFlex, t).normalize();
@@ -2155,10 +2208,10 @@ export class TorsoPoseEstimator {
         }
 
         return {
-            pitch: this._clamp(euler.x, -0.55, 0.85),
-            roll: this._clamp(euler.z, side === 'left' ? -0.30 : -0.65, side === 'left' ? 0.65 : 0.30),
-            yaw: this._clamp(euler.y, -0.65, 0.65),
-            kneeFlex: this._clamp(flex, 0.02, 2.4),
+            pitch: this._clamp(euler.x, -2.10, 0.95),
+            roll: this._clamp(euler.z, side === 'left' ? -0.45 : -0.75, side === 'left' ? 0.75 : 0.45),
+            yaw: this._clamp(euler.y, -0.75, 0.75),
+            kneeFlex: this._clamp(flex, 0.02, 2.68),
             anklePitch: this._clamp(anklePitch, -0.50, 0.75),
             ankleYaw: this._clamp(ankleYaw, -0.60, 0.60),
             ankleRoll: this._clamp(ankleRoll, -0.25, 0.25)

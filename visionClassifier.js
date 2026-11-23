@@ -107,16 +107,16 @@ Return ONLY a valid JSON object with these exact keys:
   "gender": "male" or "female" (biological skeletal build of the subject),
   "stance": one of ["front", "profile_left", "profile_right", "back", "over_shoulder"]
     - "front": torso and chest face toward the camera (including 3/4 oblique front view).
-    - "profile_left": torso is in ~90 deg side profile facing toward the LEFT edge of the image.
-    - "profile_right": torso is in ~90 deg side profile facing toward the RIGHT edge of the image.
-    - "back": subject's back/spine faces the camera and face is NOT looking back at camera.
-    - "over_shoulder": subject's back/buttocks/spine face the camera, OR torso is turned away (>110 deg), while head turns back over the shoulder so the face/eye is visible.
-  "isLegsTruncated": true if the photo crops off the lower legs/ankles (half-body or thigh-cropped portrait), false if at least one full leg down to the ankle/foot is visible,
-  "isKneeling": true ONLY if both knees are kneeling on the ground/surface, false otherwise,
-  "leadingLeg": "left", "right", or "none" (anatomical left/right leg stepping closer to camera when legs overlap or walk),
+    - "profile_left": torso is viewed from the side (~75-105 deg profile) with chest/knees/face pointing toward the LEFT edge of the image.
+    - "profile_right": torso is viewed from the side (~75-105 deg profile) with chest/knees/face pointing toward the RIGHT edge of the image.
+    - "back": subject's broad full back (both left and right shoulder blades spread wide) faces the camera and face is NOT visible.
+    - "over_shoulder": subject's broad full back (both left and right shoulder blades spread wide horizontally) faces the camera while head turns back over the shoulder. NEVER use "over_shoulder" if the subject is in a side-profile kneeling or standing pose!
+  "isLegsTruncated": true ONLY if the bottom border of the photo crops off the legs at the waist or thighs (half-body portrait). MUST be false if the subject is KNEELING on the floor or if knees/calves/ankles are visible!
+  "isKneeling": true if one or both knees are kneeling on the floor/ground, false otherwise,
+  "leadingLeg": "left", "right", or "none" (anatomical left/right leg stepping closer to camera when standing/walking with overlapping legs),
   "leftArmDepth": one of ["front", "side", "behind_back", "touching_head"] for the subject's anatomical left arm,
   "rightArmDepth": one of ["front", "side", "behind_back", "touching_head"] for the subject's anatomical right arm,
-  "headToBodyRatio": estimated total standing body height divided by head height (float between 6.8 and 8.0, e.g. 7.3 for average adult, 7.7 for tall/slender model)
+  "headToBodyRatio": estimated total unfolded standing body height divided by head height (float between 7.0 and 7.9)
 }`;
 
         const modelsToTry = [this.modelName, 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.8-flash'];

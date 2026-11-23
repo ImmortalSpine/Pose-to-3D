@@ -1901,7 +1901,8 @@ export class AnatomicalTorso {
             if (this.skullGroup) this.skullGroup.scale.setScalar(this.headScale);
         }
 
-        // 1. 骨盆整體單元旋轉
+        // 1. 骨盆整體單元旋轉 (強制使用 YXZ 順序，確保側身 90° 時 pelvisPitch 沿骨盆自身矢狀面前後俯仰)
+        this.pelvisUnit.rotation.order = 'YXZ';
         this.pelvisUnit.rotation.x = pelvisPitch;
         this.pelvisUnit.rotation.y = pelvisYaw;
         this.pelvisUnit.rotation.z = pelvisRoll;
@@ -1944,6 +1945,7 @@ export class AnatomicalTorso {
         });
 
         // 3. 胸椎與肋骨整體單元 (精確補足剩餘轉角，使胸廓在世界/相機空間之姿態 100% 精確等於約束後的 thoracicPitch/Yaw/Roll)
+        this.thoracicCageUnit.rotation.order = 'YXZ';
         this.thoracicCageUnit.rotation.x = thoracicPitch - accumPitch;
         this.thoracicCageUnit.rotation.y = thoracicYaw - accumYaw;
         this.thoracicCageUnit.rotation.z = thoracicRoll - accumRoll;

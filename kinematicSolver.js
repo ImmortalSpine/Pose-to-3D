@@ -254,8 +254,9 @@ export class HierarchicalArmSolver {
         if (overheadTargetInfo && overheadTargetInfo.isClasped) {
             // -------------------------------------------------------------
             // 模式 1：過頂合攏手 / 芭蕾五位手閉環 IK (Clasped Overhead Arched IK)
+            // 將雙腕目標橫向間距設為 ±2.15，使延伸出的雙手掌與指尖在頭頂中線優雅相接，杜絕雙前臂交叉成剪刀 X 形！
             // -------------------------------------------------------------
-            const pWristTarget = new THREE.Vector3(sign * 0.70, 22.8, 1.05);
+            const pWristTarget = new THREE.Vector3(sign * 2.15, 21.6, 1.25);
 
             const vST = pWristTarget.clone().sub(pShoulderLocal);
             const dST = vST.length();
@@ -269,7 +270,7 @@ export class HierarchicalArmSolver {
             const dProj = L1 * Math.cos(alpha);
             const rCircle = L1 * Math.sin(alpha);
 
-            const poleVec = new THREE.Vector3(sign * 1.85, 0.65, 0.40);
+            const poleVec = new THREE.Vector3(sign * 2.40, 0.55, 0.45);
             const dotP = poleVec.dot(uST);
             const polePerp = poleVec.clone().sub(uST.clone().multiplyScalar(dotP)).normalize();
 
