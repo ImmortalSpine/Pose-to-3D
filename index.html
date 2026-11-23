@@ -239,7 +239,7 @@
                 </div>
 
                 <!-- 人體面向模式 (Stance Orientation) -->
-                <div class="control-row" style="margin-bottom: 8px;">
+                <div class="control-row" style="margin-bottom: 12px;">
                     <div class="control-label-wrap">
                         <span>人體面向模式 (Stance Mode)</span>
                         <span class="control-val" id="valStanceBadge" style="color: #6ee7b7; font-weight: 600;">🧍 正面模式</span>
@@ -251,295 +251,347 @@
                     </div>
                 </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>胸廓朝向 (Thoracic Yaw / 側身)</span>
-                        <span class="control-val" id="valThoracicYaw">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderThoracicYaw" min="-180" max="180" value="0">
-                </div>
+                <!-- 分類 1：軀幹、胸廓與骨盆 -->
+                <details class="pose-accordion">
+                    <summary class="pose-accordion-header">
+                        <span class="pose-accordion-title">🫁 軀幹、胸廓與骨盆 (Torso & Pelvis)</span>
+                        <span class="pose-accordion-count">6 項</span>
+                    </summary>
+                    <div class="pose-accordion-body">
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>胸廓朝向 (Thoracic Yaw / 側身)</span>
+                                <span class="control-val" id="valThoracicYaw">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderThoracicYaw" min="-180" max="180" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>胸廓俯仰 (Thoracic Pitch)</span>
-                        <span class="control-val" id="valThoracicPitch">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderThoracicPitch" min="-35" max="35" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>胸廓俯仰 (Thoracic Pitch)</span>
+                                <span class="control-val" id="valThoracicPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderThoracicPitch" min="-35" max="35" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>胸廓側傾 (Thoracic Roll)</span>
-                        <span class="control-val" id="valThoracicRoll">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderThoracicRoll" min="-30" max="30" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>胸廓側傾 (Thoracic Roll)</span>
+                                <span class="control-val" id="valThoracicRoll">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderThoracicRoll" min="-30" max="30" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>骨盆傾斜 (Pelvis Roll / 髖傾角)</span>
-                        <span class="control-val" id="valPelvisRoll">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderPelvisRoll" min="-30" max="30" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>骨盆傾斜 (Pelvis Roll / 髖傾角)</span>
+                                <span class="control-val" id="valPelvisRoll">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderPelvisRoll" min="-30" max="30" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>腰椎側彎 (Lumbar Bend)</span>
-                        <span class="control-val" id="valLumbarRoll">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLumbarRoll" min="-35" max="35" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>腰椎側彎 (Lumbar Bend)</span>
+                                <span class="control-val" id="valLumbarRoll">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLumbarRoll" min="-35" max="35" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>腰椎前凸/後曲 (Lumbar S-Curve)</span>
-                        <span class="control-val" id="valLumbarPitch">0°</span>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>腰椎前凸/後曲 (Lumbar S-Curve)</span>
+                                <span class="control-val" id="valLumbarPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLumbarPitch" min="-30" max="30" value="0">
+                        </div>
                     </div>
-                    <input type="range" class="range-slider" id="sliderLumbarPitch" min="-30" max="30" value="0">
-                </div>
+                </details>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>頭部水平轉向 (Head Yaw)</span>
-                        <span class="control-val" id="valHeadYaw">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderHeadYaw" min="-180" max="180" value="0">
-                </div>
+                <!-- 分類 2：頭部與頸椎 -->
+                <details class="pose-accordion">
+                    <summary class="pose-accordion-header">
+                        <span class="pose-accordion-title">💀 頭部與頸椎 (Head & Neck)</span>
+                        <span class="pose-accordion-count">4 項</span>
+                    </summary>
+                    <div class="pose-accordion-body">
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>頭部水平轉向 (Head Yaw)</span>
+                                <span class="control-val" id="valHeadYaw">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderHeadYaw" min="-180" max="180" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>頭部仰俯 (Head Pitch)</span>
-                        <span class="control-val" id="valHeadPitch">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderHeadPitch" min="-35" max="35" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>頭部仰俯 (Head Pitch)</span>
+                                <span class="control-val" id="valHeadPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderHeadPitch" min="-35" max="35" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>頭部側傾 (Head Roll)</span>
-                        <span class="control-val" id="valHeadRoll">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderHeadRoll" min="-30" max="30" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>頭部側傾 (Head Roll)</span>
+                                <span class="control-val" id="valHeadRoll">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderHeadRoll" min="-30" max="30" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>頸椎仰俯 (Neck Pitch)</span>
-                        <span class="control-val" id="valNeckPitch">0°</span>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>頸椎仰俯 (Neck Pitch)</span>
+                                <span class="control-val" id="valNeckPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderNeckPitch" min="-30" max="30" value="0">
+                        </div>
                     </div>
-                    <input type="range" class="range-slider" id="sliderNeckPitch" min="-30" max="30" value="0">
-                </div>
+                </details>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右臂外展/內收 (Right Arm Roll)</span>
-                        <span class="control-val" id="valRightArmRoll">-7°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightArmRoll" min="-185" max="50" value="-7">
-                </div>
+                <!-- 分類 3：右上肢與右手掌 -->
+                <details class="pose-accordion">
+                    <summary class="pose-accordion-header">
+                        <span class="pose-accordion-title">💪 右上肢與右手掌 (Right Arm & Hand)</span>
+                        <span class="pose-accordion-count">6 項</span>
+                    </summary>
+                    <div class="pose-accordion-body">
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右臂外展/內收 (Right Arm Roll)</span>
+                                <span class="control-val" id="valRightArmRoll">-7°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightArmRoll" min="-185" max="50" value="-7">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右臂前屈/後伸 (Right Arm Pitch)</span>
-                        <span class="control-val" id="valRightArmPitch">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightArmPitch" min="-125" max="125" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右臂前屈/後伸 (Right Arm Pitch)</span>
+                                <span class="control-val" id="valRightArmPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightArmPitch" min="-125" max="125" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右臂內旋/外旋 (Right Arm Yaw)</span>
-                        <span class="control-val" id="valRightArmYaw">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightArmYaw" min="-125" max="125" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右臂內旋/外旋 (Right Arm Yaw)</span>
+                                <span class="control-val" id="valRightArmYaw">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightArmYaw" min="-125" max="125" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右肘屈曲 (Right Elbow Flex)</span>
-                        <span class="control-val" id="valRightElbowFlex">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightElbowFlex" min="0" max="150" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右肘屈曲 (Right Elbow Flex)</span>
+                                <span class="control-val" id="valRightElbowFlex">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightElbowFlex" min="0" max="150" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右橈骨翻轉 (Right Radius Twist)</span>
-                        <span class="control-val" id="valRightForearmTwist">85°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightForearmTwist" min="0" max="180" value="85">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右橈骨翻轉 (Right Radius Twist)</span>
+                                <span class="control-val" id="valRightForearmTwist">85°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightForearmTwist" min="0" max="180" value="85">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右手手勢 (Right Hand Gesture)</span>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右手手勢 (Right Hand Gesture)</span>
+                            </div>
+                            <select class="form-select" id="selectRightHandGesture" style="width: 100%; background: #1a1a24; color: #eee; border: 1px solid #3d3d52; padding: 6px 10px; border-radius: 6px; margin-top: 4px; font-size: 13px;">
+                                <option value="auto">✨ AI 21骨節連續逐指追蹤 (AI Tracking)</option>
+                                <option value="point">食指指人/手槍 (Point)</option>
+                                <option value="peace">勝利剪刀手 (Peace / YA)</option>
+                                <option value="thumbsUp">大拇指比讚 (Thumbs Up)</option>
+                                <option value="ok">OK 手勢 (OK Sign)</option>
+                                <option value="relaxed">自然放鬆微弧 (Relaxed)</option>
+                                <option value="fist">握拳姿態 (Fist)</option>
+                                <option value="open">張開平展 (Open Palm)</option>
+                            </select>
+                        </div>
                     </div>
-                    <select class="form-select" id="selectRightHandGesture" style="width: 100%; background: #1a1a24; color: #eee; border: 1px solid #3d3d52; padding: 6px 10px; border-radius: 6px; margin-top: 4px; font-size: 13px;">
-                        <option value="auto">✨ AI 21骨節連續逐指追蹤 (AI Tracking)</option>
-                        <option value="point">食指指人/手槍 (Point)</option>
-                        <option value="peace">勝利剪刀手 (Peace / YA)</option>
-                        <option value="thumbsUp">大拇指比讚 (Thumbs Up)</option>
-                        <option value="ok">OK 手勢 (OK Sign)</option>
-                        <option value="relaxed">自然放鬆微弧 (Relaxed)</option>
-                        <option value="fist">握拳姿態 (Fist)</option>
-                        <option value="open">張開平展 (Open Palm)</option>
-                    </select>
-                </div>
+                </details>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左臂外展/內收 (Left Arm Roll)</span>
-                        <span class="control-val" id="valLeftArmRoll">7°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftArmRoll" min="-50" max="185" value="7">
-                </div>
+                <!-- 分類 4：左上肢與左手掌 -->
+                <details class="pose-accordion">
+                    <summary class="pose-accordion-header">
+                        <span class="pose-accordion-title">💪 左上肢與左手掌 (Left Arm & Hand)</span>
+                        <span class="pose-accordion-count">6 項</span>
+                    </summary>
+                    <div class="pose-accordion-body">
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左臂外展/內收 (Left Arm Roll)</span>
+                                <span class="control-val" id="valLeftArmRoll">7°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftArmRoll" min="-50" max="185" value="7">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左臂前屈/後伸 (Left Arm Pitch)</span>
-                        <span class="control-val" id="valLeftArmPitch">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftArmPitch" min="-125" max="125" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左臂前屈/後伸 (Left Arm Pitch)</span>
+                                <span class="control-val" id="valLeftArmPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftArmPitch" min="-125" max="125" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左臂內旋/外旋 (Left Arm Yaw)</span>
-                        <span class="control-val" id="valLeftArmYaw">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftArmYaw" min="-125" max="125" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左臂內旋/外旋 (Left Arm Yaw)</span>
+                                <span class="control-val" id="valLeftArmYaw">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftArmYaw" min="-125" max="125" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左肘屈曲 (Left Elbow Flex)</span>
-                        <span class="control-val" id="valLeftElbowFlex">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftElbowFlex" min="0" max="150" value="0">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左肘屈曲 (Left Elbow Flex)</span>
+                                <span class="control-val" id="valLeftElbowFlex">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftElbowFlex" min="0" max="150" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左橈骨翻轉 (Left Radius Twist)</span>
-                        <span class="control-val" id="valLeftForearmTwist">85°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftForearmTwist" min="0" max="180" value="85">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左橈骨翻轉 (Left Radius Twist)</span>
+                                <span class="control-val" id="valLeftForearmTwist">85°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftForearmTwist" min="0" max="180" value="85">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左手手勢 (Left Hand Gesture)</span>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左手手勢 (Left Hand Gesture)</span>
+                            </div>
+                            <select class="form-select" id="selectLeftHandGesture" style="width: 100%; background: #1a1a24; color: #eee; border: 1px solid #3d3d52; padding: 6px 10px; border-radius: 6px; margin-top: 4px; font-size: 13px;">
+                                <option value="auto">✨ AI 21骨節連續逐指追蹤 (AI Tracking)</option>
+                                <option value="point">食指指人/手槍 (Point)</option>
+                                <option value="peace">勝利剪刀手 (Peace / YA)</option>
+                                <option value="thumbsUp">大拇指比讚 (Thumbs Up)</option>
+                                <option value="ok">OK 手勢 (OK Sign)</option>
+                                <option value="relaxed">自然放鬆微弧 (Relaxed)</option>
+                                <option value="fist">握拳姿態 (Fist)</option>
+                                <option value="open">張開平展 (Open Palm)</option>
+                            </select>
+                        </div>
                     </div>
-                    <select class="form-select" id="selectLeftHandGesture" style="width: 100%; background: #1a1a24; color: #eee; border: 1px solid #3d3d52; padding: 6px 10px; border-radius: 6px; margin-top: 4px; font-size: 13px;">
-                        <option value="auto">✨ AI 21骨節連續逐指追蹤 (AI Tracking)</option>
-                        <option value="point">食指指人/手槍 (Point)</option>
-                        <option value="peace">勝利剪刀手 (Peace / YA)</option>
-                        <option value="thumbsUp">大拇指比讚 (Thumbs Up)</option>
-                        <option value="ok">OK 手勢 (OK Sign)</option>
-                        <option value="relaxed">自然放鬆微弧 (Relaxed)</option>
-                        <option value="fist">握拳姿態 (Fist)</option>
-                        <option value="open">張開平展 (Open Palm)</option>
-                    </select>
-                </div>
+                </details>
 
-                <!-- 右下肢骨骼控制 -->
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右髖前屈/後伸 (Right Hip Pitch)</span>
-                        <span class="control-val" id="valRightHipPitch">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightHipPitch" min="-70" max="90" value="0">
-                </div>
+                <!-- 分類 5：右下肢與右足 -->
+                <details class="pose-accordion">
+                    <summary class="pose-accordion-header">
+                        <span class="pose-accordion-title">🦵 右下肢與右足 (Right Leg & Foot)</span>
+                        <span class="pose-accordion-count">6 項</span>
+                    </summary>
+                    <div class="pose-accordion-body">
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右髖前屈/後伸 (Right Hip Pitch)</span>
+                                <span class="control-val" id="valRightHipPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightHipPitch" min="-70" max="90" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右腿外展/內收 (Right Hip Roll)</span>
-                        <span class="control-val" id="valRightHipRoll">-5°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightHipRoll" min="-65" max="35" value="-5">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右腿外展/內收 (Right Hip Roll)</span>
+                                <span class="control-val" id="valRightHipRoll">-5°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightHipRoll" min="-65" max="35" value="-5">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右膝後屈 (Right Knee Flex)</span>
-                        <span class="control-val" id="valRightKneeFlex">5°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightKneeFlex" min="0" max="135" value="5">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右膝後屈 (Right Knee Flex)</span>
+                                <span class="control-val" id="valRightKneeFlex">5°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightKneeFlex" min="0" max="135" value="5">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右踝曲屈 (Right Ankle Pitch / 踮腳)</span>
-                        <span class="control-val" id="valRightAnklePitch">-2°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightAnklePitch" min="-45" max="75" value="-2">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右踝曲屈 (Right Ankle Pitch / 踮腳)</span>
+                                <span class="control-val" id="valRightAnklePitch">-2°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightAnklePitch" min="-45" max="75" value="-2">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右腳尖朝向 (Right Ankle Yaw / 內外八)</span>
-                        <span class="control-val" id="valRightAnkleYaw">-7°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderRightAnkleYaw" min="-75" max="75" value="-7">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右腳尖朝向 (Right Ankle Yaw / 內外八)</span>
+                                <span class="control-val" id="valRightAnkleYaw">-7°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightAnkleYaw" min="-75" max="75" value="-7">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>右足側傾 (Right Ankle Roll / 內外翻)</span>
-                        <span class="control-val" id="valRightAnkleRoll">0°</span>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>右足側傾 (Right Ankle Roll / 內外翻)</span>
+                                <span class="control-val" id="valRightAnkleRoll">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderRightAnkleRoll" min="-40" max="40" value="0">
+                        </div>
                     </div>
-                    <input type="range" class="range-slider" id="sliderRightAnkleRoll" min="-40" max="40" value="0">
-                </div>
+                </details>
 
-                <!-- 左下肢骨骼控制 -->
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左髖前屈/後伸 (Left Hip Pitch)</span>
-                        <span class="control-val" id="valLeftHipPitch">0°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftHipPitch" min="-70" max="90" value="0">
-                </div>
+                <!-- 分類 6：左下肢與左足 -->
+                <details class="pose-accordion">
+                    <summary class="pose-accordion-header">
+                        <span class="pose-accordion-title">🦵 左下肢與左足 (Left Leg & Foot)</span>
+                        <span class="pose-accordion-count">6 項</span>
+                    </summary>
+                    <div class="pose-accordion-body">
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左髖前屈/後伸 (Left Hip Pitch)</span>
+                                <span class="control-val" id="valLeftHipPitch">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftHipPitch" min="-70" max="90" value="0">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左腿外展/內收 (Left Hip Roll)</span>
-                        <span class="control-val" id="valLeftHipRoll">5°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftHipRoll" min="-35" max="65" value="5">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左腿外展/內收 (Left Hip Roll)</span>
+                                <span class="control-val" id="valLeftHipRoll">5°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftHipRoll" min="-35" max="65" value="5">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左膝後屈 (Left Knee Flex)</span>
-                        <span class="control-val" id="valLeftKneeFlex">5°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftKneeFlex" min="0" max="135" value="5">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左膝後屈 (Left Knee Flex)</span>
+                                <span class="control-val" id="valLeftKneeFlex">5°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftKneeFlex" min="0" max="135" value="5">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左踝曲屈 (Left Ankle Pitch / 踮腳)</span>
-                        <span class="control-val" id="valLeftAnklePitch">-2°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftAnklePitch" min="-45" max="75" value="-2">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左踝曲屈 (Left Ankle Pitch / 踮腳)</span>
+                                <span class="control-val" id="valLeftAnklePitch">-2°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftAnklePitch" min="-45" max="75" value="-2">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左腳尖朝向 (Left Ankle Yaw / 內外八)</span>
-                        <span class="control-val" id="valLeftAnkleYaw">7°</span>
-                    </div>
-                    <input type="range" class="range-slider" id="sliderLeftAnkleYaw" min="-75" max="75" value="7">
-                </div>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左腳尖朝向 (Left Ankle Yaw / 內外八)</span>
+                                <span class="control-val" id="valLeftAnkleYaw">7°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftAnkleYaw" min="-75" max="75" value="7">
+                        </div>
 
-                <div class="control-row">
-                    <div class="control-label-wrap">
-                        <span>左足側傾 (Left Ankle Roll / 內外翻)</span>
-                        <span class="control-val" id="valLeftAnkleRoll">0°</span>
+                        <div class="control-row">
+                            <div class="control-label-wrap">
+                                <span>左足側傾 (Left Ankle Roll / 內外翻)</span>
+                                <span class="control-val" id="valLeftAnkleRoll">0°</span>
+                            </div>
+                            <input type="range" class="range-slider" id="sliderLeftAnkleRoll" min="-40" max="40" value="0">
+                        </div>
                     </div>
-                    <input type="range" class="range-slider" id="sliderLeftAnkleRoll" min="-40" max="40" value="0">
-                </div>
+                </details>
             </div>
         </aside>
     </div>

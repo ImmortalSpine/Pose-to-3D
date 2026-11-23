@@ -574,3 +574,77 @@ input:checked + .slider:before {
     background: #161820;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
+
+/* 部位分類隱藏式折疊清單 (Pose Tuning Accordion) */
+.pose-accordion {
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 7px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.pose-accordion:hover {
+    border-color: rgba(224, 122, 95, 0.35);
+}
+
+.pose-accordion[open] {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(224, 122, 95, 0.55);
+}
+
+.pose-accordion-header {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 11px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.02);
+    transition: background 0.15s ease;
+}
+
+.pose-accordion-header::-webkit-details-marker {
+    display: none;
+}
+
+.pose-accordion-header:hover {
+    background: rgba(224, 122, 95, 0.10);
+}
+
+.pose-accordion-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.pose-accordion-title::before {
+    content: "▸";
+    display: inline-block;
+    font-size: 12px;
+    color: var(--accent);
+    transition: transform 0.2s ease;
+}
+
+.pose-accordion[open] .pose-accordion-title::before {
+    transform: rotate(90deg);
+}
+
+.pose-accordion-count {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.06);
+    padding: 2px 7px;
+    border-radius: 10px;
+}
+
+.pose-accordion-body {
+    padding: 10px 11px 4px 11px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
