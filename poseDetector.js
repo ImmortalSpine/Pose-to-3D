@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.4';
-import { VisionSemanticClassifier } from './visionClassifier.js?v=8.4';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.5';
+import { VisionSemanticClassifier } from './visionClassifier.js?v=8.5';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -1357,18 +1357,46 @@ export class TorsoPoseEstimator {
         let rightElbowFlex = rightArmPose.flex;
         let rightForearmTwist = rightArmPose.twist;
 
-        // 13. 手掌前後旋 (Twist) 與 21 骨節連續指骨姿態解算
+        // 13. 手掌前後旋 (Twist) 與 21 骨節連續指骨姿態解算 + 第一階段 AI 手勢語意融合
         let leftHandAngles = null;
         let rightHandAngles = null;
         let leftHandDetectedPreset = 'relaxed';
         let rightHandDetectedPreset = 'relaxed';
 
+        // 依 2D 畫面手腕之左右位置 (Screen-Left vs Screen-Right) 對應 Gemini 辨識出的手勢，
+        // 100% 避免解剖左右手與畫面左右側在正面/背身下的文字混淆！
+        let aiLeftHandGesture = null;
+        let aiRightHandGesture = null;
+        if (priors && (priors.screenLeftHandGesture || priors.screenRightHandGesture)) {
+            const lWx = limbLeftWrist ? limbLeftWrist.x : (limbLeftShoulder ? limbLeftShoulder.x : 0.6);
+            const rWx = limbRightWrist ? limbRightWrist.x : (limbRightShoulder ? limbRightShoulder.x : 0.4);
+            if (lWx <= rWx) {
+                aiLeftHandGesture = priors.screenLeftHandGesture;
+                aiRightHandGesture = priors.screenRightHandGesture;
+            } else {
+                aiLeftHandGesture = priors.screenRightHandGesture;
+                aiRightHandGesture = priors.screenLeftHandGesture;
+            }
+        }
+
+        const strongAiGestures = ['fist', 'point', 'peace', 'thumbsUp', 'ok'];
+
         if (limbLeftHand) {
             const handSol = this._solveTwistAndGestureFromHand(limbLeftHand, 'left', isLimbLeftFrontOfPelvis, isLimbLeftHandOnHip, isLimbLeftTouchingHead);
             leftForearmTwist = handSol.twist;
-            leftHandDetectedPreset = handSol.gesture;
-            leftHandGesture = 'auto';
-            leftHandAngles = handSol.fingerAngles;
+            if (aiLeftHandGesture && strongAiGestures.includes(aiLeftHandGesture) && handSol.gesture === 'relaxed') {
+                // 當 2D 手部因正面透視縮短（如正面握拳或握持衣領）被 21 節點誤判為一般放鬆時，採信 AI 明確辨識之強手勢
+                leftHandDetectedPreset = aiLeftHandGesture;
+                leftHandGesture = aiLeftHandGesture;
+                leftHandAngles = null;
+            } else {
+                leftHandDetectedPreset = handSol.gesture;
+                leftHandGesture = 'auto';
+                leftHandAngles = handSol.fingerAngles;
+            }
+        } else if (aiLeftHandGesture) {
+            leftHandGesture = aiLeftHandGesture;
+            leftHandDetectedPreset = aiLeftHandGesture;
         } else if (limbLeftWrist && limbLeftShoulder && limbLeftElbow) {
             if (isLimbLeftTouchingHead) {
                 leftHandGesture = 'open';
@@ -1385,9 +1413,18 @@ export class TorsoPoseEstimator {
         if (limbRightHand) {
             const handSol = this._solveTwistAndGestureFromHand(limbRightHand, 'right', isLimbRightFrontOfPelvis, isLimbRightHandOnHip, isLimbRightTouchingHead);
             rightForearmTwist = handSol.twist;
-            rightHandDetectedPreset = handSol.gesture;
-            rightHandGesture = 'auto';
-            rightHandAngles = handSol.fingerAngles;
+            if (aiRightHandGesture && strongAiGestures.includes(aiRightHandGesture) && handSol.gesture === 'relaxed') {
+                rightHandDetectedPreset = aiRightHandGesture;
+                rightHandGesture = aiRightHandGesture;
+                rightHandAngles = null;
+            } else {
+                rightHandDetectedPreset = handSol.gesture;
+                rightHandGesture = 'auto';
+                rightHandAngles = handSol.fingerAngles;
+            }
+        } else if (aiRightHandGesture) {
+            rightHandGesture = aiRightHandGesture;
+            rightHandDetectedPreset = aiRightHandGesture;
         } else if (limbRightWrist && limbRightShoulder && limbRightElbow) {
             if (isLimbRightTouchingHead) {
                 rightHandGesture = 'open';

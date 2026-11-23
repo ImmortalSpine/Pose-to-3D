@@ -68,9 +68,11 @@ export class VisionSemanticClassifier {
     }
 
     /**
-     * 將圖片快速壓縮為 최대邊長 384px 之 JPEG Base64 (僅消耗約 258 Image Tokens，耗時 < 5ms)
+     * 將圖片快速壓縮為最大邊長 768px 之高清晰度 JPEG Base64
+     * (Gemini 視覺模型對 <=768px 影像仍以單一基礎 Tile ~258 Tokens 計費，成本與延遲幾乎不變，
+     *  但像素面積提升 4 倍，能清晰辨識手部握拳/指向手勢、服裝遮擋與腳踝細節！)
      */
-    _createThumbnailBase64(imageElement, maxDim = 384, quality = 0.82) {
+    _createThumbnailBase64(imageElement, maxDim = 768, quality = 0.86) {
         try {
             const origW = imageElement.naturalWidth || imageElement.videoWidth || imageElement.width || 384;
             const origH = imageElement.naturalHeight || imageElement.videoHeight || imageElement.height || 384;
@@ -98,7 +100,7 @@ export class VisionSemanticClassifier {
     async classifyWithGemini(imageElement) {
         if (!this.hasApiKey() || !imageElement) return null;
 
-        const base64Jpeg = this._createThumbnailBase64(imageElement, 384, 0.82);
+        const base64Jpeg = this._createThumbnailBase64(imageElement, 768, 0.86);
         if (!base64Jpeg) return null;
 
         const prompt = `Analyze the main human subject in this reference image for a 3D anatomical skeleton solver.
@@ -116,6 +118,8 @@ Return ONLY a valid JSON object with these exact keys:
   "leadingLeg": "left", "right", or "none" (anatomical left/right leg stepping closer to camera when standing/walking with overlapping legs),
   "leftArmDepth": one of ["front", "side", "behind_back", "touching_head"] for the subject's anatomical left arm,
   "rightArmDepth": one of ["front", "side", "behind_back", "touching_head"] for the subject's anatomical right arm,
+  "screenLeftHandGesture": hand gesture of the hand appearing further to the LEFT side of the image, one of ["relaxed", "fist", "open", "point", "peace", "thumbsUp", "ok"] (use "fist" if clenching a fist, grasping an object/collar/strap, or fingers curled into palm),
+  "screenRightHandGesture": hand gesture of the hand appearing further to the RIGHT side of the image, one of ["relaxed", "fist", "open", "point", "peace", "thumbsUp", "ok"],
   "headToBodyRatio": estimated total unfolded standing body height divided by head height (float between 7.0 and 7.9)
 }`;
 
@@ -187,6 +191,8 @@ Return ONLY a valid JSON object with these exact keys:
         const isProfileStance = (stance === 'profile_left' || stance === 'profile_right');
         const profileSign = (stance === 'profile_left') ? -1 : ((stance === 'profile_right') ? 1 : 0);
 
+        const validGestures = ['relaxed', 'fist', 'open', 'point', 'peace', 'thumbsUp', 'ok'];
+
         return {
             source: 'gemini-vlm',
             modelName,
@@ -202,6 +208,8 @@ Return ONLY a valid JSON object with these exact keys:
             leadingLeg: ['left', 'right', 'none'].includes(raw.leadingLeg) ? raw.leadingLeg : 'none',
             leftArmDepth: ['front', 'side', 'behind_back', 'touching_head'].includes(raw.leftArmDepth) ? raw.leftArmDepth : 'auto',
             rightArmDepth: ['front', 'side', 'behind_back', 'touching_head'].includes(raw.rightArmDepth) ? raw.rightArmDepth : 'auto',
+            screenLeftHandGesture: validGestures.includes(raw.screenLeftHandGesture) ? raw.screenLeftHandGesture : null,
+            screenRightHandGesture: validGestures.includes(raw.screenRightHandGesture) ? raw.screenRightHandGesture : null,
             headToBodyRatio: (typeof raw.headToBodyRatio === 'number' && raw.headToBodyRatio >= 6.5 && raw.headToBodyRatio <= 8.4)
                 ? parseFloat(raw.headToBodyRatio.toFixed(1))
                 : null
