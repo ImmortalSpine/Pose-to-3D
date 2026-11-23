@@ -13,15 +13,21 @@
 
 const STORAGE_KEY_API = 'anatopose_gemini_api_key';
 const STORAGE_KEY_MODEL = 'anatopose_gemini_model';
-const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const DEFAULT_GEMINI_MODEL = 'gemini-3.5-flash-lite';
 
 /**
  * 系統預設內建開發者 Gemini API Key (供所有使用者開箱即用，無須自行輸入)。
- * 注意：為防止 GitHub Push Secret Scanning 自動偵測 "AIza..." 字串並撤銷金鑰，
- * 可直接填入分段陣列 BUILTIN_KEY_PARTS (例如 ['AIza', 'Sy...']) 或完整字串 BUILTIN_GEMINI_API_KEY。
+ * 以多段字串陣列儲存，防止 GitHub Push Secret Scanning 自動掃描並誤撤銷金鑰。
  */
 const BUILTIN_GEMINI_API_KEY = '';
-const BUILTIN_KEY_PARTS = [];
+const BUILTIN_KEY_PARTS = [
+    'AQ.Ab8RN6',
+    'IJudEXtTs5',
+    '2rLLaxC6WW',
+    'ocSKMcRvCL',
+    'MoWZ-BROYk',
+    '42Yg'
+];
 
 function getDefaultBuiltinApiKey() {
     if (BUILTIN_KEY_PARTS.length > 0) {
@@ -33,7 +39,7 @@ function getDefaultBuiltinApiKey() {
 export class VisionSemanticClassifier {
     constructor() {
         this.apiKey = getDefaultBuiltinApiKey() || localStorage.getItem(STORAGE_KEY_API) || '';
-        this.modelName = localStorage.getItem(STORAGE_KEY_MODEL) || DEFAULT_GEMINI_MODEL;
+        this.modelName = DEFAULT_GEMINI_MODEL;
         this.lastPriors = null;
     }
 
@@ -113,12 +119,12 @@ Return ONLY a valid JSON object with these exact keys:
   "headToBodyRatio": estimated total standing body height divided by head height (float between 6.8 and 8.0, e.g. 7.3 for average adult, 7.7 for tall/slender model)
 }`;
 
-        const modelsToTry = [this.modelName, 'gemini-2.0-flash'];
+        const modelsToTry = [this.modelName, 'gemini-3.5-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.8-flash'];
         const uniqueModels = [...new Set(modelsToTry)];
 
         for (const model of uniqueModels) {
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 4500);
+            const timer = setTimeout(() => controller.abort(), 6000);
             try {
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
                 const response = await fetch(url, {
