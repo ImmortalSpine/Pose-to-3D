@@ -145,7 +145,7 @@ Return ONLY a valid JSON object with these exact keys:
                         }],
                         generationConfig: {
                             temperature: 0.0,
-                            maxOutputTokens: 220,
+                            maxOutputTokens: 800,
                             responseMimeType: 'application/json'
                         }
                     })
@@ -386,7 +386,7 @@ Return ONLY a valid JSON object with these exact keys:
                 if (zygWidth > 0.01 && faceHeight > 0.01) {
                     const jawToCheekRatio = jawWidth / zygWidth;
                     // 女性下巴與下顎線明顯內收呈 V 型 (jawToCheekRatio 常態 < 0.79)；男性下顎骨方正寬厚 (>= 0.81)
-                    faceMaleBias = THREE.MathUtils.clamp((jawToCheekRatio - 0.80) * 6.5, -0.55, 0.55);
+                    faceMaleBias = Math.max(-0.55, Math.min(0.55, (jawToCheekRatio - 0.80) * 6.5));
                 }
             }
         }
