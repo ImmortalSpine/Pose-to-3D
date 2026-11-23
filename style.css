@@ -606,11 +606,14 @@ input:checked + .slider:before {
     font-weight: 600;
     color: var(--text-primary);
     background: rgba(255, 255, 255, 0.02);
+    outline: none;
     transition: background 0.15s ease;
 }
 
-.pose-accordion-header::-webkit-details-marker {
+.pose-accordion-header::-webkit-details-marker,
+.pose-accordion-header::marker {
     display: none;
+    content: "";
 }
 
 .pose-accordion-header:hover {
@@ -633,15 +636,6 @@ input:checked + .slider:before {
 
 .pose-accordion[open] .pose-accordion-title::before {
     transform: rotate(90deg);
-}
-
-.pose-accordion-count {
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    background: rgba(255, 255, 255, 0.06);
-    padding: 2px 7px;
-    border-radius: 10px;
 }
 
 .pose-accordion-body {
