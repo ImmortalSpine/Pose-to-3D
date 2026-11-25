@@ -1,132 +1,156 @@
 /**
- * AnatoPose 3D - Anatomical Skeleton Engine with Forearm Dual-Bone System (Ulna & Radius)
- * 
- * 核心前臂解剖自然結構：
- * 1. 尺骨 (Ulna - 內側固定軸)：
- *    - 近端具備特徵性「鷹嘴突 (Olecranon)」與冠突形成滑車切跡，與肱骨滑車形成純屈伸鉸鏈關節 (Humeroulnar Joint)
- *    - 遠端為尺骨頭與尺骨莖突 (小指側腕部重要骨點)
- * 2. 橈骨 (Radius - 外側旋轉骨)：
- *    - 近端為扁圓盤狀「橈骨頭 (Radial Head)」，在尺骨橈切跡與肱骨小頭上原地自轉
- *    - 橈骨幹呈現向外側之自然弧形弓 (Lateral Bow)
- *    - 遠端粗大扁平，具備橈骨莖突 (拇指側腕部重要骨點)
- * 3. 旋前與旋後剪刀交叉運動 (Pronation / Supination)：
- *    - 旋後 (Supination): 橈骨與尺骨平行並列
- *    - 旋前 (Pronation): 橈骨遠端以橈骨頭為軸心向前內側翻轉，斜向跨越 (Cross Over) 尺骨前方
+ * AnatoPose 3D - Open-Source Medical 206-Bone Anatomical Skeleton Engine
+ *
+ * 採用 BodyParts3D / Z-Anatomy 醫學 CT 掃描開源骨骼模型 (skeleton.glb, 278 獨立解剖網格)：
+ * 1. 包含完整成人 206 塊獨立骨骼 + 20 塊肋軟骨 + 23 塊椎間盤 + 恥骨聯合 + 28 顆牙齒。
+ * 2. 每一塊骨頭精確掛載至多層級關節樞紐 (骨盆 -> 5 腰椎 -> 胸廓 -> 7 頸椎 -> 寰枕頭骨 -> 上下肢 -> 21 指節)。
+ * 3. 真實剛體「尺骨 & 橈骨」斜軸旋前/旋後剪刀交叉機構：
+ *    橈骨頭在肱骨小頭/尺骨橈切跡原地自轉，橈骨遠端繞尺骨頭做前向半圓弧跨越，帶動手掌同步旋動。
+ * 4. 支援男女骨骼二態性形態變形、頭身比縮放、最低點地面自動吸附與 3D 滑鼠點擊英文名稱檢測。
  */
 
 import * as THREE from 'three';
+import {
+    GLB_SCALE,
+    GLB_PIVOTS_M,
+    BONE_ENGLISH_NAMES,
+    SKULL_NODE_NAMES,
+    CARPAL_NAMES,
+    FOOT_STATIC_NAMES,
+    loadMedicalSkeletonGLB
+} from './medicalSkeletonLoader.js?v=9.0';
+
+function toVec3(arr) {
+    return new THREE.Vector3(arr[0], arr[1], arr[2]);
+}
+
+function mirrorX(arr) {
+    return [-arr[0], arr[1], arr[2]];
+}
 
 export class AnatomicalTorso {
-    constructor() {
-        this.rootGroup = new THREE.Group();
-        this.rootGroup.name = "AnatomicalTorsoRoot";
+    constructor(onReady = null) {
+        this.onReady = onReady;
+        this.isMedicalLoaded = false;
 
-        // 骨盆單元 (採用 YXZ 歐拉順序：航向偏航 Yaw 先行，保證局部矢狀面俯仰在相機平面無畸變)
+        this.rootGroup = new THREE.Group();
+        this.rootGroup.name = 'AnatomicalTorsoRoot';
+
+        // 骨盆單元 (採用 YXZ 歐拉順序：Yaw 先行，保證側身時矢狀面俯仰無畸變)
         this.pelvisUnit = new THREE.Group();
-        this.pelvisUnit.name = "Pelvis_Unit";
+        this.pelvisUnit.name = 'Pelvis_Unit';
         this.pelvisUnit.rotation.order = 'YXZ';
         this.rootGroup.add(this.pelvisUnit);
+
+        this.bonyPelvisGroup = new THREE.Group();
+        this.bonyPelvisGroup.name = 'Bony_Pelvis';
+        this.pelvisUnit.add(this.bonyPelvisGroup);
 
         // 地面自動吸附與接地高度
         this.autoGroundSnap = true;
         this.groundY = -25.5;
 
-        this.pelvisBones = {
-            sacrum: null, coccyx: null, iliumL: null, iliumR: null,
-            ischiumL: null, ischiumR: null, pubisL: null, pubisR: null,
-            pubicSymphysis: null
-        };
-
-        // 腰椎骨節
+        // 腰椎骨節 (L5 -> L1)
         this.lumbarVertebrae = [];
         this.lumbarGroup = new THREE.Group();
-        this.lumbarGroup.name = "LumbarSpine_Group";
+        this.lumbarGroup.name = 'LumbarSpine_Group';
         this.pelvisUnit.add(this.lumbarGroup);
 
         // 胸椎與肋骨整體單元
         this.thoracicCageUnit = new THREE.Group();
-        this.thoracicCageUnit.name = "ThoracicCage_Unit";
+        this.thoracicCageUnit.name = 'ThoracicCage_Unit';
         this.thoracicCageUnit.rotation.order = 'YXZ';
-        this.lumbarGroup.add(this.thoracicCageUnit);
 
-        this.thoracicVertebrae = [];
+        this.ribcageGroup = new THREE.Group();
+        this.ribcageGroup.name = 'Ribcage_Group';
+        this.thoracicCageUnit.add(this.ribcageGroup);
+
+        this.thoracicSpineGroup = new THREE.Group();
+        this.thoracicSpineGroup.name = 'ThoracicSpine_Group';
+        this.thoracicCageUnit.add(this.thoracicSpineGroup);
+
         this.ribsLeft = [];
         this.ribsRight = [];
         this.sternum = null;
 
-        // 肩帶與上肢 (含大臂肱骨、前臂尺骨與橈骨、手腕與掌指骨)
-        this.shoulderGirdle = {
-            left: {
-                clavicle: null, scapula: null, humerus: null, humerusJoint: null,
-                elbowJoint: null, ulna: null, radiusGroup: null, radiusMesh: null,
-                handGroup: null, handMesh: null, handJoints: null, currentGesture: 'relaxed'
-            },
-            right: {
-                clavicle: null, scapula: null, humerus: null, humerusJoint: null,
-                elbowJoint: null, ulna: null, radiusGroup: null, radiusMesh: null,
-                handGroup: null, handMesh: null, handJoints: null, currentGesture: 'relaxed'
-            }
-        };
-
-        // 下肢骨骼系統 (含股骨、大轉子、髕骨、脛骨、腓骨、足部骨骼)
-        this.lowerLimbs = {
-            left: {
-                hipJoint: null, femur: null, patella: null,
-                kneeJoint: null, tibia: null, fibula: null,
-                ankleJoint: null, footGroup: null, footMesh: null
-            },
-            right: {
-                hipJoint: null, femur: null, patella: null,
-                kneeJoint: null, tibia: null, fibula: null,
-                ankleJoint: null, footGroup: null, footMesh: null
-            }
-        };
-
-        // 頸椎骨節與藝用解剖頭骨系統
+        // 頸椎骨節 (C7 -> C1) 與舌骨、藝用頭骨系統
         this.cervicalVertebrae = [];
         this.cervicalGroup = new THREE.Group();
-        this.cervicalGroup.name = "CervicalSpine_Group";
+        this.cervicalGroup.name = 'CervicalSpine_Group';
         this.thoracicCageUnit.add(this.cervicalGroup);
+
         this.headJoint = null;
         this.skullGroup = null;
+        this.hyoidMesh = null;
 
-        this.landmarks = {};
+        // 肩帶與上肢
+        this.shoulderGirdle = {
+            left: this._createEmptyLimbRecord(),
+            right: this._createEmptyLimbRecord()
+        };
 
-        // 性別骨骼形態系統 (Gender Skeletal Dimorphism)
+        // 下肢骨骼系統
+        this.lowerLimbs = {
+            left: {
+                hipJoint: null, femurAlign: null, femurCaliber: null,
+                femur: null, patella: null,
+                kneeJoint: null, tibiaAlign: null, tibiaCaliber: null,
+                tibia: null, fibula: null,
+                ankleJoint: null, footGroup: null, footMesh: null
+            },
+            right: {
+                hipJoint: null, femurAlign: null, femurCaliber: null,
+                femur: null, patella: null,
+                kneeJoint: null, tibiaAlign: null, tibiaCaliber: null,
+                tibia: null, fibula: null,
+                ankleJoint: null, footGroup: null, footMesh: null
+            }
+        };
+
+        // 儲存各部位顯示狀態與最近一次姿態，供非同步載入完成後無縫套用
+        this.visibilityState = {
+            skull: true,
+            ribcage: true,
+            shoulderGirdle: true,
+            arms: true,
+            forearms: true,
+            hands: true,
+            pelvis: true,
+            femurs: true,
+            lowerLegs: true,
+            feet: true
+        };
+
         this.currentGender = 'female';
-        this.shoulderBaseX = 4.45;
-        this.carryingAngle = 0.20;
+        this.currentHeadRatio = 7.1;
+        this.headScale = (48.0 / this.currentHeadRatio) / 5.90;
+        this.shoulderBaseX = 4.30;
+        this.carryingAngle = 0.22;
+        this.selectedBoneName = null;
+        this._lastPose = null;
 
-        // 材質
+        // 材質庫
         this.materials = {
             bone: new THREE.MeshStandardMaterial({
                 color: 0xede4d5,
-                roughness: 0.38,
-                metalness: 0.05
-            }),
-            boneHighlight: new THREE.MeshStandardMaterial({
-                color: 0xf5eedb,
-                roughness: 0.32,
-                metalness: 0.08
-            }),
-            pelvisWing: new THREE.MeshStandardMaterial({
-                color: 0xe8ddcb,
-                roughness: 0.35,
-                metalness: 0.06
+                roughness: 0.40,
+                metalness: 0.04
             }),
             cartilage: new THREE.MeshStandardMaterial({
                 color: 0x82b2bd,
                 roughness: 0.25,
-                metalness: 0.1,
+                metalness: 0.08,
                 transparent: true,
-                opacity: 0.88
+                opacity: 0.86
             }),
             disc: new THREE.MeshStandardMaterial({
                 color: 0x5a554c,
-                roughness: 0.8
+                roughness: 0.78
             }),
-            landmark: new THREE.MeshBasicMaterial({
-                color: 0xff3366
+            enamel: new THREE.MeshStandardMaterial({
+                color: 0xfaf5ec,
+                roughness: 0.22,
+                metalness: 0.04
             }),
             selectedBone: new THREE.MeshStandardMaterial({
                 color: 0xff925c,
@@ -137,28 +161,79 @@ export class AnatomicalTorso {
             })
         };
 
-        this.selectedBoneName = null;
-        this.hyoidMesh = null;
-
-        this._buildAnatomy();
+        // 建立關節拓撲骨架結構（立即可用，不阻塞同步初始化）
+        this._buildJointRig();
         this.setGender('female');
+
+        // 非同步載入開源醫學 CT 掃描 206 塊骨骼模型
+        this.readyPromise = this._loadAndMountMedicalMeshes('./skeleton.glb');
+    }
+
+    _createEmptyLimbRecord() {
+        return {
+            clavicle: null, clavicleScaleGroup: null,
+            scapula: null, scapulaMesh: null,
+            humerusJoint: null, humerusAlign: null, humerusCaliber: null, humerus: null,
+            elbowJoint: null, forearmAlign: null, ulnaCaliber: null, ulna: null,
+            radiusGroup: null, radiusAlign: null, radiusCaliber: null, radiusMesh: null,
+            radProxLocal: null, radDistRestLocal: null, ulnaDistLocal: null, wristRestLocal: null,
+            handGroup: null, handAlign: null, handMesh: null, handJoints: null,
+            currentGesture: 'relaxed', currentTwist: 1.48
+        };
     }
 
     /**
-     * 為骨骼網格標記標準英文解剖名稱 (English Anatomical Bone Name)
+     * 為網格與子網格賦予標準英文解剖學名稱 (English Bone Name) 與指定材質
      */
-    _tagBone(obj, boneName) {
-        if (!obj || !boneName) return obj;
-        obj.userData.boneName = boneName;
-        obj.traverse(child => {
-            if (child.isMesh && !child.userData.isCavityHole && !child.userData.boneName) {
+    _tagAndStyleMesh(mesh, boneName, mat = this.materials.bone) {
+        if (!mesh) return mesh;
+        mesh.material = mat;
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData.boneName = boneName;
+        mesh.userData.origMaterial = mat;
+        mesh.traverse(child => {
+            if (child.isMesh) {
+                child.material = mat;
+                child.castShadow = true;
+                child.receiveShadow = true;
                 child.userData.boneName = boneName;
-                if (!child.userData.origMaterial) {
-                    child.userData.origMaterial = child.material;
-                }
+                child.userData.origMaterial = mat;
             }
         });
-        return obj;
+        return mesh;
+    }
+
+    /**
+     * 將 GLB 網格依公尺樞紐平移並等比例縮放後，掛載至目標父群組
+     */
+    _mountMesh(mesh, parentGroup, pivotM, nodeName, materialOverride = null) {
+        if (!mesh || !parentGroup) return null;
+        const S = GLB_SCALE;
+        mesh.position.set(
+            (mesh.position.x - pivotM[0]) * S,
+            (mesh.position.y - pivotM[1]) * S,
+            (mesh.position.z - pivotM[2]) * S
+        );
+        mesh.scale.multiplyScalar(S);
+
+        let mat = materialOverride;
+        if (!mat) {
+            if (nodeName.startsWith('cc') || nodeName === 'interpubic_disc') {
+                mat = this.materials.cartilage;
+            } else if (nodeName.startsWith('disc_')) {
+                mat = this.materials.disc;
+            } else if (nodeName.startsWith('tooth_')) {
+                mat = this.materials.enamel;
+            } else {
+                mat = this.materials.bone;
+            }
+        }
+
+        const engName = BONE_ENGLISH_NAMES[nodeName] || nodeName;
+        this._tagAndStyleMesh(mesh, engName, mat);
+        parentGroup.add(mesh);
+        return mesh;
     }
 
     /**
@@ -182,7 +257,7 @@ export class AnatomicalTorso {
     }
 
     /**
-     * 取得目前模型中所有已建立的獨立骨骼英文名稱清單 (共 206 塊標準成人骨骼)
+     * 取得目前模型中所有已建立的獨立骨骼英文名稱清單
      */
     getBoneNamesList() {
         const names = new Set();
@@ -196,119 +271,546 @@ export class AnatomicalTorso {
         return Array.from(names);
     }
 
-    _buildAnatomy() {
-        this._buildPelvis();
+    /**
+     * 建構精準對應 skeleton.glb 樞紐點的 3D 關節層級鏈
+     */
+    _buildJointRig() {
+        const S = GLB_SCALE;
+        const P = GLB_PIVOTS_M;
 
-        // 腰椎 (L5 -> L1)
-        const lumbarHeight = 1.35;
+        // 1. 腰椎鏈 (L5 -> L1)
+        let prevPivot = P.pelvisOrigin;
         let parentNode = this.lumbarGroup;
-        this.lumbarGroup.position.set(0, 0.4, -0.6);
+        this.lumbarGroup.position.set(0, 0, 0);
 
-        for (let i = 0; i < 5; i++) {
-            const lIndex = 5 - i;
-            const vert = this._createVertebraMesh(`L${lIndex}`, 2.3 - i * 0.08, lumbarHeight, 'lumbar');
+        for (const seg of P.lumbar) {
+            const vert = new THREE.Group();
+            vert.name = `Vertebra_${seg.name.toUpperCase()}`;
             vert.rotation.order = 'YXZ';
-            vert.position.set(0, (i === 0) ? 0 : lumbarHeight, Math.sin((i / 4) * Math.PI) * 0.25);
+            vert.position.set(
+                (seg.pivot[0] - prevPivot[0]) * S,
+                (seg.pivot[1] - prevPivot[1]) * S,
+                (seg.pivot[2] - prevPivot[2]) * S
+            );
             parentNode.add(vert);
             this.lumbarVertebrae.push(vert);
             parentNode = vert;
+            prevPivot = seg.pivot;
         }
 
+        // 2. 胸廓單元 (T12-L1 交界處)
         parentNode.add(this.thoracicCageUnit);
-        this.thoracicCageUnit.position.set(0, lumbarHeight, 0);
+        this.thoracicCageUnit.position.set(
+            (P.thoraxOrigin[0] - prevPivot[0]) * S,
+            (P.thoraxOrigin[1] - prevPivot[1]) * S,
+            (P.thoraxOrigin[2] - prevPivot[2]) * S
+        );
 
-        // 胸廓 (T1-T12, 12對肋骨, 胸骨)
-        const thoracicHeight = 1.05;
-        const totalThoracic = 12;
+        // 3. 頸椎鏈 (C7 -> C1)
+        this.thoracicCageUnit.add(this.cervicalGroup);
+        this.cervicalGroup.position.set(
+            (P.cervicalOrigin[0] - P.thoraxOrigin[0]) * S,
+            (P.cervicalOrigin[1] - P.thoraxOrigin[1]) * S,
+            (P.cervicalOrigin[2] - P.thoraxOrigin[2]) * S
+        );
 
-        this.sternum = this._createSternumMesh();
-        this.sternum.position.set(0, 7.8, 4.15);
-        this.sternum.rotation.x = -0.12;
-        this.thoracicCageUnit.add(this.sternum);
-
-        this._addLandmark("SuprasternalNotch", new THREE.Vector3(0, 11.2, 4.3), this.thoracicCageUnit);
-        this._addLandmark("XiphoidProcess", new THREE.Vector3(0, 4.4, 5.5), this.thoracicCageUnit);
-
-        const ribWidths = [
-            1.8, 2.3, 2.8, 3.3, 3.7, 3.9, 4.05, 3.95, 3.7, 3.2, 2.6, 1.9
-        ];
-
-        let tParent = this.thoracicCageUnit;
-        for (let i = 0; i < totalThoracic; i++) {
-            const tIndex = 12 - i;
-            const vert = this._createVertebraMesh(`T${tIndex}`, 1.9 - i * 0.05, thoracicHeight, 'thoracic');
-            
-            const kyphosisZ = -Math.sin((i / 11) * Math.PI) * 0.9;
-            vert.position.set(0, (i === 0) ? 0 : thoracicHeight, kyphosisZ * 0.15);
-            tParent.add(vert);
-            this.thoracicVertebrae.push(vert);
-
-            const ribNum = tIndex;
-            const w = ribWidths[ribNum - 1];
-
-            const ribL = this._createRibWithSternumAttachment(ribNum, w, 'left');
-            vert.add(ribL);
-            this.ribsLeft.push(ribL);
-
-            const ribR = this._createRibWithSternumAttachment(ribNum, w, 'right');
-            vert.add(ribR);
-            this.ribsRight.push(ribR);
-
-            tParent = vert;
-        }
-
-        // 上肢系統 (鎖骨、肩胛骨、肩胛岡、肱骨、尺骨、橈骨)
-        this._buildUpperLimb('left');
-        this._buildUpperLimb('right');
-
-        // 下肢系統 (髖關節、股骨、大轉子、髕骨、脛骨、腓骨、足骨)
-        this._buildLowerLimb('left');
-        this._buildLowerLimb('right');
-
-        // 頸椎 (C7 -> C1) - 標準人體解剖學黃金比例 (長度約 4.6~4.8 單位，佔胸椎之 40%)
-        const cervicalHeight = 0.58;
-        tParent.add(this.cervicalGroup);
-        this.cervicalGroup.position.set(0, 0.80, 0);
-
+        let cPrev = P.cervicalOrigin;
         let cParent = this.cervicalGroup;
-        for (let i = 0; i < 7; i++) {
-            const cIndex = 7 - i;
-            const vert = this._createVertebraMesh(`C${cIndex}`, 1.30 - i * 0.02, cervicalHeight, 'cervical');
+        for (const seg of P.cervical) {
+            const vert = new THREE.Group();
+            vert.name = `Vertebra_${seg.name.toUpperCase()}`;
             vert.rotation.order = 'YXZ';
-            vert.position.set(0, (i === 0) ? 0 : cervicalHeight, Math.sin((i / 6) * Math.PI) * 0.12);
+            vert.position.set(
+                (seg.pivot[0] - cPrev[0]) * S,
+                (seg.pivot[1] - cPrev[1]) * S,
+                (seg.pivot[2] - cPrev[2]) * S
+            );
             cParent.add(vert);
             this.cervicalVertebrae.push(vert);
-
-            // 舌骨 (Hyoid Bone) - 位於第 3 頸椎 (C3) 前方、下頜骨下方之馬蹄形獨立骨骼
-            if (cIndex === 3) {
-                this.hyoidMesh = this._createHyoidMesh();
-                this.hyoidMesh.position.set(0, 0.05, 1.35);
-                vert.add(this.hyoidMesh);
-            }
-
             cParent = vert;
+            cPrev = seg.pivot;
         }
 
-        // 寰枕關節與藝用解剖頭骨系統 (Atlanto-Occipital Joint & Skull)
+        // 4. 寰枕關節與頭骨系統
         this.headJoint = new THREE.Group();
-        this.headJoint.name = "AtlantoOccipital_Joint";
-        this.headJoint.position.set(0, 0.55, 0.08);
+        this.headJoint.name = 'AtlantoOccipital_Joint';
+        this.headJoint.rotation.order = 'YXZ';
+        this.headJoint.position.set(
+            (P.headPivot[0] - cPrev[0]) * S,
+            (P.headPivot[1] - cPrev[1]) * S,
+            (P.headPivot[2] - cPrev[2]) * S
+        );
         cParent.add(this.headJoint);
 
-        this.skullGroup = this._createSkullMesh();
+        this.skullGroup = new THREE.Group();
+        this.skullGroup.name = 'Human_Skull';
+        this.skullGroup.scale.setScalar(this.headScale);
         this.headJoint.add(this.skullGroup);
 
-        // 預設亞洲大眾寫實體型 (約 7.1 頭身，頭高約 6.76 單位，縮放約 1.47 倍)
-        this.currentHeadRatio = 7.1;
-        this.headScale = (48.0 / this.currentHeadRatio) / 4.60;
-        this.skullGroup.scale.setScalar(this.headScale);
+        // 5. 左右上肢關節鏈
+        this._buildUpperLimbRig('left');
+        this._buildUpperLimbRig('right');
 
-        this._addLandmark("HeadBase", new THREE.Vector3(0, 0, 0), this.headJoint);
-        this._addLandmark("SkullCrown", new THREE.Vector3(0, 3.8, -0.2), this.headJoint);
-        this._addLandmark("Glabella", new THREE.Vector3(0, 1.65, 1.30), this.headJoint);
-        this._addLandmark("ChinPoint", new THREE.Vector3(0, -0.68, 1.25), this.headJoint);
-        this._addLandmark("Zygomatic_L", new THREE.Vector3(1.45, 0.90, 0.95), this.headJoint);
-        this._addLandmark("Zygomatic_R", new THREE.Vector3(-1.45, 0.90, 0.95), this.headJoint);
+        // 6. 左右下肢關節鏈
+        this._buildLowerLimbRig('left');
+        this._buildLowerLimbRig('right');
+    }
+
+    _buildUpperLimbRig(side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const S = GLB_SCALE;
+        const P = GLB_PIVOTS_M;
+        const rec = this.shoulderGirdle[side];
+
+        // 1. 胸鎖關節與鎖骨
+        const scJoint = new THREE.Group();
+        scJoint.name = `SC_Joint_${side}`;
+        scJoint.position.set(
+            (sign * P.claviclePivotX - P.thoraxOrigin[0]) * S,
+            (P.claviclePivotY - P.thoraxOrigin[1]) * S,
+            (P.claviclePivotZ - P.thoraxOrigin[2]) * S
+        );
+        this.thoracicCageUnit.add(scJoint);
+        rec.clavicle = scJoint;
+
+        const clavScaleGroup = new THREE.Group();
+        clavScaleGroup.name = `Clavicle_${side}`;
+        scJoint.add(clavScaleGroup);
+        rec.clavicleScaleGroup = clavScaleGroup;
+
+        // 2. 肩胛骨單元（原點設於肩關節中心 P_sh，便於男女寬肩同步定位）
+        const restScapulaPos = {
+            x: (sign * P.scapulaPivotX - P.thoraxOrigin[0]) * S,
+            y: (P.scapulaPivotY - P.thoraxOrigin[1]) * S,
+            z: (P.scapulaPivotZ - P.thoraxOrigin[2]) * S
+        };
+        rec.restScapulaPos = restScapulaPos;
+
+        const scapulaUnit = new THREE.Group();
+        scapulaUnit.name = `Scapula_Unit_${side}`;
+        scapulaUnit.position.set(restScapulaPos.x, restScapulaPos.y, restScapulaPos.z);
+        this.thoracicCageUnit.add(scapulaUnit);
+        rec.scapula = scapulaUnit;
+
+        const scapulaMeshGroup = new THREE.Group();
+        scapulaMeshGroup.name = `Scapula_Mesh_${side}`;
+        scapulaUnit.add(scapulaMeshGroup);
+        rec.scapulaMesh = scapulaMeshGroup;
+
+        // 3. 盂肱關節 (GH Joint)
+        const ghJoint = new THREE.Group();
+        ghJoint.name = `GH_Joint_${side}`;
+        ghJoint.rotation.order = 'YXZ';
+        ghJoint.rotation.z = sign * 0.12;
+        scapulaUnit.add(ghJoint);
+        rec.humerusJoint = ghJoint;
+
+        // 計算大臂 rest 向量對齊至 -Y 軸
+        const pSh = new THREE.Vector3(sign * P.shoulderPivotX, P.shoulderPivotY, P.shoulderPivotZ);
+        const pEl = new THREE.Vector3(sign * P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ);
+        const vArm = pEl.clone().sub(pSh);
+        const armLength = vArm.length() * S;
+        const qAlignArm = new THREE.Quaternion().setFromUnitVectors(vArm.clone().normalize(), new THREE.Vector3(0, -1, 0));
+
+        const humerusAlign = new THREE.Group();
+        humerusAlign.name = `Humerus_Align_${side}`;
+        humerusAlign.quaternion.copy(qAlignArm);
+        ghJoint.add(humerusAlign);
+        rec.humerusAlign = humerusAlign;
+
+        const humerusCaliber = new THREE.Group();
+        humerusCaliber.name = `Humerus_${side}`;
+        humerusAlign.add(humerusCaliber);
+        rec.humerusCaliber = humerusCaliber;
+        rec.humerus = humerusCaliber;
+
+        // 4. 肘關節 (位於大臂末端 (0, -armLength, 0))
+        const elbowJoint = new THREE.Group();
+        elbowJoint.name = `Elbow_Joint_${side}`;
+        elbowJoint.position.set(0, -armLength, 0);
+        ghJoint.add(elbowJoint);
+        rec.elbowJoint = elbowJoint;
+
+        // 計算前臂 rest 向量對齊至 -Y 軸
+        const pWr = new THREE.Vector3(sign * P.wristPivotX, P.wristPivotY, P.wristPivotZ);
+        const vFore = pWr.clone().sub(pEl);
+        const qAlignFore = new THREE.Quaternion().setFromUnitVectors(vFore.clone().normalize(), new THREE.Vector3(0, -1, 0));
+        rec.qAlignFore = qAlignFore;
+        rec.pElM = pEl;
+        rec.pWrM = pWr;
+
+        const forearmAlign = new THREE.Group();
+        forearmAlign.name = `Forearm_Align_${side}`;
+        forearmAlign.quaternion.copy(qAlignFore);
+        elbowJoint.add(forearmAlign);
+        rec.forearmAlign = forearmAlign;
+
+        const ulnaCaliber = new THREE.Group();
+        ulnaCaliber.name = `Ulna_${side}`;
+        forearmAlign.add(ulnaCaliber);
+        rec.ulnaCaliber = ulnaCaliber;
+        rec.ulna = ulnaCaliber;
+
+        // 5. 橈骨剛體旋轉機構 (近端橈骨頭為球心，遠端繞尺骨頭做前向半圓弧跨越)
+        const pRadProx = new THREE.Vector3(sign * P.radProxX, P.radProxY, P.radProxZ);
+        const pRadDist = new THREE.Vector3(sign * P.radDistX, P.radDistY, P.radDistZ);
+        const pUlnaDist = new THREE.Vector3(sign * P.ulnaDistX, P.ulnaDistY, P.ulnaDistZ);
+
+        const toElbowAligned = (pt) => pt.clone().sub(pEl).multiplyScalar(S).applyQuaternion(qAlignFore);
+        rec.radProxLocal = toElbowAligned(pRadProx);
+        rec.radDistRestLocal = toElbowAligned(pRadDist);
+        rec.ulnaDistLocal = toElbowAligned(pUlnaDist);
+        rec.wristRestLocal = toElbowAligned(pWr);
+
+        const radiusGroup = new THREE.Group();
+        radiusGroup.name = `Radius_Group_${side}`;
+        radiusGroup.position.copy(rec.radProxLocal);
+        elbowJoint.add(radiusGroup);
+        rec.radiusGroup = radiusGroup;
+
+        const radiusAlign = new THREE.Group();
+        radiusAlign.name = `Radius_Align_${side}`;
+        radiusAlign.quaternion.copy(qAlignFore);
+        radiusGroup.add(radiusAlign);
+        rec.radiusAlign = radiusAlign;
+
+        const radiusCaliber = new THREE.Group();
+        radiusCaliber.name = `Radius_Caliber_${side}`;
+        radiusAlign.add(radiusCaliber);
+        rec.radiusCaliber = radiusCaliber;
+
+        // 6. 手部關節鏈 (Carpals -> Metacarpals -> 5 指 MCP / PIP / DIP)
+        const handGroup = new THREE.Group();
+        handGroup.name = `Hand_Group_${side}`;
+        handGroup.position.copy(rec.wristRestLocal);
+        elbowJoint.add(handGroup);
+        rec.handGroup = handGroup;
+
+        const handAlign = new THREE.Group();
+        handAlign.name = `Hand_Align_${side}`;
+        handAlign.quaternion.copy(qAlignFore);
+        handGroup.add(handAlign);
+        rec.handAlign = handAlign;
+
+        // 建立 5 根手指的關節樞紐鏈
+        const joints = {};
+        for (const [fName, cfg] of Object.entries(P.fingers)) {
+            const pMcp = toVec3(side === 'left' ? cfg.mcp : mirrorX(cfg.mcp));
+            const pPip = toVec3(side === 'left' ? cfg.pip : mirrorX(cfg.pip));
+
+            const mcpJoint = new THREE.Group();
+            mcpJoint.name = `MCP_Joint_${fName}_${side}`;
+            mcpJoint.position.copy(pMcp.clone().sub(pWr).multiplyScalar(S));
+            handAlign.add(mcpJoint);
+
+            const pipJoint = new THREE.Group();
+            pipJoint.name = `PIP_Joint_${fName}_${side}`;
+            pipJoint.position.copy(pPip.clone().sub(pMcp).multiplyScalar(S));
+            mcpJoint.add(pipJoint);
+
+            let dipJoint = null;
+            if (cfg.dip) {
+                const pDip = toVec3(side === 'left' ? cfg.dip : mirrorX(cfg.dip));
+                dipJoint = new THREE.Group();
+                dipJoint.name = `DIP_Joint_${fName}_${side}`;
+                dipJoint.position.copy(pDip.clone().sub(pPip).multiplyScalar(S));
+                pipJoint.add(dipJoint);
+            }
+
+            joints[fName] = { mcpJoint, pipJoint, dipJoint, name: fName, pMcp, pPip, pDip: cfg.dip ? toVec3(side === 'left' ? cfg.dip : mirrorX(cfg.dip)) : null };
+        }
+        rec.handJoints = joints;
+    }
+
+    _buildLowerLimbRig(side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const S = GLB_SCALE;
+        const P = GLB_PIVOTS_M;
+        const rec = this.lowerLimbs[side];
+
+        // 1. 髖關節 (位於骨盆髖臼中心)
+        const pHip = new THREE.Vector3(sign * P.hipPivotX, P.hipPivotY, P.hipPivotZ);
+        const pPelvis = toVec3(P.pelvisOrigin);
+        rec.restHipPos = {
+            x: (pHip.x - pPelvis.x) * S,
+            y: (pHip.y - pPelvis.y) * S,
+            z: (pHip.z - pPelvis.z) * S
+        };
+
+        const hipJoint = new THREE.Group();
+        hipJoint.name = `Hip_Joint_${side}`;
+        hipJoint.rotation.order = 'YXZ';
+        hipJoint.position.set(rec.restHipPos.x, rec.restHipPos.y, rec.restHipPos.z);
+        this.pelvisUnit.add(hipJoint);
+        rec.hipJoint = hipJoint;
+
+        // 2. 股骨對齊至 -Y 軸
+        const pKnee = new THREE.Vector3(sign * P.kneePivotX, P.kneePivotY, P.kneePivotZ);
+        const vFemur = pKnee.clone().sub(pHip);
+        const femurLen = vFemur.length() * S;
+        const qAlignFemur = new THREE.Quaternion().setFromUnitVectors(vFemur.clone().normalize(), new THREE.Vector3(0, -1, 0));
+
+        const femurAlign = new THREE.Group();
+        femurAlign.name = `Femur_Align_${side}`;
+        femurAlign.quaternion.copy(qAlignFemur);
+        hipJoint.add(femurAlign);
+        rec.femurAlign = femurAlign;
+
+        const femurCaliber = new THREE.Group();
+        femurCaliber.name = `Femur_${side}`;
+        femurAlign.add(femurCaliber);
+        rec.femurCaliber = femurCaliber;
+        rec.femur = femurCaliber;
+
+        const patellaGroup = new THREE.Group();
+        patellaGroup.name = `Patella_${side}`;
+        femurAlign.add(patellaGroup);
+        rec.patella = patellaGroup;
+
+        // 3. 膝關節
+        const kneeJoint = new THREE.Group();
+        kneeJoint.name = `Knee_Joint_${side}`;
+        kneeJoint.position.set(0, -femurLen, 0);
+        hipJoint.add(kneeJoint);
+        rec.kneeJoint = kneeJoint;
+
+        // 4. 小腿雙骨對齊至 -Y 軸
+        const pAnkle = new THREE.Vector3(sign * P.anklePivotX, P.anklePivotY, P.anklePivotZ);
+        const vTibia = pAnkle.clone().sub(pKnee);
+        const tibiaLen = vTibia.length() * S;
+        const qAlignTibia = new THREE.Quaternion().setFromUnitVectors(vTibia.clone().normalize(), new THREE.Vector3(0, -1, 0));
+
+        const tibiaAlign = new THREE.Group();
+        tibiaAlign.name = `Tibia_Align_${side}`;
+        tibiaAlign.quaternion.copy(qAlignTibia);
+        kneeJoint.add(tibiaAlign);
+        rec.tibiaAlign = tibiaAlign;
+
+        const tibiaCaliber = new THREE.Group();
+        tibiaCaliber.name = `Tibia_${side}`;
+        tibiaAlign.add(tibiaCaliber);
+        rec.tibiaCaliber = tibiaCaliber;
+        rec.tibia = tibiaCaliber;
+
+        const fibulaCaliber = new THREE.Group();
+        fibulaCaliber.name = `Fibula_${side}`;
+        tibiaAlign.add(fibulaCaliber);
+        rec.fibula = fibulaCaliber;
+
+        // 5. 踝關節與足部群組
+        const ankleJoint = new THREE.Group();
+        ankleJoint.name = `Ankle_Joint_${side}`;
+        ankleJoint.rotation.order = 'YXZ';
+        ankleJoint.position.set(0, -tibiaLen, 0);
+        kneeJoint.add(ankleJoint);
+        rec.ankleJoint = ankleJoint;
+
+        const footGroup = new THREE.Group();
+        footGroup.name = `Foot_${side}`;
+        ankleJoint.add(footGroup);
+        rec.footGroup = footGroup;
+        rec.footMesh = footGroup;
+    }
+
+    /**
+     * 非同步載入開源醫學 skeleton.glb 並將全部 278 塊網格掛載至關節層級
+     */
+    async _loadAndMountMedicalMeshes(url) {
+        try {
+            const meshMap = await loadMedicalSkeletonGLB(url);
+            const P = GLB_PIVOTS_M;
+
+            // 1. 骨盆 (Sacrum, Coccyx, Hip_L/R, Interpubic Disc)
+            for (const name of ['sacrum', 'coccyx', 'hip_l', 'hip_r', 'interpubic_disc']) {
+                this._mountMesh(meshMap[name], this.bonyPelvisGroup, P.pelvisOrigin, name);
+            }
+
+            // 2. 腰椎 (L5 -> L1) 與對應椎間盤
+            P.lumbar.forEach((seg, idx) => {
+                const vertGroup = this.lumbarVertebrae[idx];
+                this._mountMesh(meshMap[seg.name], vertGroup, seg.pivot, seg.name);
+                if (seg.disc && meshMap[seg.disc]) {
+                    this._mountMesh(meshMap[seg.disc], vertGroup, seg.pivot, seg.disc);
+                }
+            });
+
+            // 3. 胸椎 (T1-T12 + 椎間盤) 與 胸廓籠 (Sternum + 24 Ribs + 20 Costal Cartilages)
+            for (let i = 1; i <= 12; i++) {
+                this._mountMesh(meshMap[`t${i}`], this.thoracicSpineGroup, P.thoraxOrigin, `t${i}`);
+                if (i < 12) {
+                    const discName = `disc_t${i}_t${i + 1}`;
+                    this._mountMesh(meshMap[discName], this.thoracicSpineGroup, P.thoraxOrigin, discName);
+                }
+                const ribL = this._mountMesh(meshMap[`rib${i}_l`], this.ribcageGroup, P.thoraxOrigin, `rib${i}_l`);
+                const ribR = this._mountMesh(meshMap[`rib${i}_r`], this.ribcageGroup, P.thoraxOrigin, `rib${i}_r`);
+                if (ribL) this.ribsLeft.push(ribL);
+                if (ribR) this.ribsRight.push(ribR);
+
+                if (i <= 10) {
+                    this._mountMesh(meshMap[`cc${i}_l`], this.ribcageGroup, P.thoraxOrigin, `cc${i}_l`);
+                    this._mountMesh(meshMap[`cc${i}_r`], this.ribcageGroup, P.thoraxOrigin, `cc${i}_r`);
+                }
+            }
+            this._mountMesh(meshMap.disc_t12_l1, this.thoracicSpineGroup, P.thoraxOrigin, 'disc_t12_l1');
+            this.sternum = this._mountMesh(meshMap.sternum, this.ribcageGroup, P.thoraxOrigin, 'sternum');
+
+            // 4. 頸椎 (C7 -> C1 + 椎間盤) 與 舌骨 (C3 前方)
+            P.cervical.forEach((seg, idx) => {
+                const vertGroup = this.cervicalVertebrae[idx];
+                this._mountMesh(meshMap[seg.name], vertGroup, seg.pivot, seg.name);
+                if (seg.disc && meshMap[seg.disc]) {
+                    this._mountMesh(meshMap[seg.disc], vertGroup, seg.pivot, seg.disc);
+                }
+                if (seg.name === 'c3' && meshMap.hyoid) {
+                    this.hyoidMesh = this._mountMesh(meshMap.hyoid, vertGroup, seg.pivot, 'hyoid');
+                }
+            });
+
+            // 5. 頭顱 (22 塊頭骨 + 6 塊中耳聽小骨 + 28 顆牙齒)
+            for (const name of SKULL_NODE_NAMES) {
+                if (meshMap[name]) {
+                    this._mountMesh(meshMap[name], this.skullGroup, P.headPivot, name);
+                }
+            }
+
+            // 6. 上肢 (鎖骨、肩胛骨、肱骨、尺骨、橈骨、手腕掌指骨 27 塊/側)
+            for (const side of ['left', 'right']) {
+                const s = (side === 'left') ? 'l' : 'r';
+                const sign = (side === 'left') ? 1 : -1;
+                const rec = this.shoulderGirdle[side];
+
+                this._mountMesh(
+                    meshMap[`clavicle_${s}`],
+                    rec.clavicleScaleGroup,
+                    [sign * P.claviclePivotX, P.claviclePivotY, P.claviclePivotZ],
+                    `clavicle_${s}`
+                );
+                this._mountMesh(
+                    meshMap[`scapula_${s}`],
+                    rec.scapulaMesh,
+                    [sign * P.scapulaPivotX, P.scapulaPivotY, P.scapulaPivotZ],
+                    `scapula_${s}`
+                );
+                this._mountMesh(
+                    meshMap[`humerus_${s}`],
+                    rec.humerusCaliber,
+                    [sign * P.shoulderPivotX, P.shoulderPivotY, P.shoulderPivotZ],
+                    `humerus_${s}`
+                );
+                this._mountMesh(
+                    meshMap[`ulna_${s}`],
+                    rec.ulnaCaliber,
+                    [sign * P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ],
+                    `ulna_${s}`
+                );
+                rec.radiusMesh = this._mountMesh(
+                    meshMap[`radius_${s}`],
+                    rec.radiusCaliber,
+                    [sign * P.radProxX, P.radProxY, P.radProxZ],
+                    `radius_${s}`
+                );
+
+                // 手部腕骨與掌骨
+                const wrPivot = [sign * P.wristPivotX, P.wristPivotY, P.wristPivotZ];
+                for (const cName of CARPAL_NAMES) {
+                    this._mountMesh(meshMap[`${cName}_${s}`], rec.handAlign, wrPivot, `${cName}_${s}`);
+                }
+                for (let i = 1; i <= 5; i++) {
+                    this._mountMesh(meshMap[`mc${i}_${s}`], rec.handAlign, wrPivot, `mc${i}_${s}`);
+                }
+
+                // 5 指 14 節可動指骨
+                for (const [fName, fJoint] of Object.entries(rec.handJoints)) {
+                    const idx = P.fingers[fName].idx;
+                    const pMcpArr = [fJoint.pMcp.x, fJoint.pMcp.y, fJoint.pMcp.z];
+                    const pPipArr = [fJoint.pPip.x, fJoint.pPip.y, fJoint.pPip.z];
+
+                    this._mountMesh(meshMap[`pph${idx}_hand_${s}`], fJoint.mcpJoint, pMcpArr, `pph${idx}_hand_${s}`);
+                    if (idx >= 2 && fJoint.dipJoint) {
+                        const pDipArr = [fJoint.pDip.x, fJoint.pDip.y, fJoint.pDip.z];
+                        this._mountMesh(meshMap[`mph${idx}_hand_${s}`], fJoint.pipJoint, pPipArr, `mph${idx}_hand_${s}`);
+                        this._mountMesh(meshMap[`dph${idx}_hand_${s}`], fJoint.dipJoint, pDipArr, `dph${idx}_hand_${s}`);
+                    } else {
+                        this._mountMesh(meshMap[`dph${idx}_hand_${s}`], fJoint.pipJoint, pPipArr, `dph${idx}_hand_${s}`);
+                    }
+                }
+                rec.handMesh = rec.handAlign;
+                this._applyHandGestureDirect(rec.handJoints, side, rec.currentGesture);
+                this._updateRadiusMesh(side, rec.currentTwist);
+            }
+
+            // 7. 下肢 (股骨、髕骨、脛骨、腓骨與 26 塊足骨/側)
+            for (const side of ['left', 'right']) {
+                const s = (side === 'left') ? 'l' : 'r';
+                const sign = (side === 'left') ? 1 : -1;
+                const rec = this.lowerLimbs[side];
+
+                this._mountMesh(
+                    meshMap[`femur_${s}`],
+                    rec.femurCaliber,
+                    [sign * P.hipPivotX, P.hipPivotY, P.hipPivotZ],
+                    `femur_${s}`
+                );
+                this._mountMesh(
+                    meshMap[`patella_${s}`],
+                    rec.patella,
+                    [sign * P.hipPivotX, P.hipPivotY, P.hipPivotZ],
+                    `patella_${s}`
+                );
+                this._mountMesh(
+                    meshMap[`tibia_${s}`],
+                    rec.tibiaCaliber,
+                    [sign * P.kneePivotX, P.kneePivotY, P.kneePivotZ],
+                    `tibia_${s}`
+                );
+                this._mountMesh(
+                    meshMap[`fibula_${s}`],
+                    rec.fibula,
+                    [sign * P.kneePivotX, P.kneePivotY, P.kneePivotZ],
+                    `fibula_${s}`
+                );
+
+                const ankPivot = [sign * P.anklePivotX, P.anklePivotY, P.anklePivotZ];
+                for (const fName of FOOT_STATIC_NAMES) {
+                    const node = `${fName}_${s}`;
+                    if (meshMap[node]) {
+                        this._mountMesh(meshMap[node], rec.footGroup, ankPivot, node);
+                    }
+                }
+            }
+
+            this.isMedicalLoaded = true;
+
+            // 重新套用目前性別、頭身比、顯示開關與姿態
+            this.setGender(this.currentGender);
+            this.setHeadRatio(this.currentHeadRatio);
+            this._applyAllVisibilityStates();
+            if (this._lastPose) {
+                this.setTorsoPose(this._lastPose);
+            } else if (this.autoGroundSnap) {
+                this.snapToGround(this.groundY);
+            }
+
+            console.log(`[AnatoPose] Open-source medical skeleton loaded (${Object.keys(meshMap).length} anatomical meshes, 206 bones).`);
+            if (typeof this.onReady === 'function') {
+                this.onReady(this);
+            }
+        } catch (err) {
+            console.error('[AnatoPose] Failed to load skeleton.glb:', err);
+        }
+    }
+
+    _applyAllVisibilityStates() {
+        this.toggleSkull(this.visibilityState.skull);
+        this.toggleRibcage(this.visibilityState.ribcage);
+        this.toggleShoulderGirdle(this.visibilityState.shoulderGirdle);
+        this.toggleArms(this.visibilityState.arms);
+        this.toggleForearms(this.visibilityState.forearms);
+        this.toggleHands(this.visibilityState.hands);
+        this.togglePelvis(this.visibilityState.pelvis);
+        this.toggleFemurs(this.visibilityState.femurs);
+        this.toggleLowerLegs(this.visibilityState.lowerLegs);
+        this.toggleFeet(this.visibilityState.feet);
     }
 
     /**
@@ -318,40 +820,31 @@ export class AnatomicalTorso {
         if (gender === 'female') {
             return {
                 name: 'female',
-                pelvisScale: [1.08, 0.94, 0.96],  // 寬而較淺之女性真假骨盆 (Gynaecoid)
-                hipJointX: 3.88,                   // 較開之雙側髖臼距離
-                ribScale: [0.86, 1.0, 0.88],       // 小巧纖細之圓潤胸廓 (Thoracic egg)
-                sternumScale: [0.88, 0.94, 0.88],  // 胸骨體型縮減
-                shoulderWidth: 4.45,               // 雙肩自然內縮 (形成修長窄肩)
-                scJointX: 1.05,                    // 鎖骨起點微內收
-                boneRadiusScale: 0.84,             // 長骨纖細度 (84% 骨徑，秀氣修長)
-                carryingAngle: 0.22,               // 生理手肘提攜角增大至 ~13°
-                qAngle: 0.08,                      // 股骨內傾 Q 角偏角
-                headAspect: [0.94, 0.98, 0.96]     // 小巧尖下巴、柔和下顎輪廓
+                pelvisScale: [1.06, 0.94, 0.96],
+                ribScale: [0.88, 1.0, 0.90],
+                shoulderScaleX: 0.94,
+                boneRadiusScale: 0.88,
+                carryingAngle: 0.22,
+                qAngle: 0.08,
+                headAspect: [0.95, 0.98, 0.96]
             };
         } else if (gender === 'male') {
             return {
                 name: 'male',
-                pelvisScale: [0.96, 1.02, 1.02],  // 狹窄厚實心型男性骨盆 (Android)
-                hipJointX: 3.52,                   // 緊湊之髖臼間距
-                ribScale: [1.04, 1.0, 1.04],       // 寬厚桶狀胸廓 (寬闊倒三角)
-                sternumScale: [1.04, 1.0, 1.04],   // 胸骨厚重
-                shoulderWidth: 5.25,               // 雙肩開闊展現倒三角肩寬
-                scJointX: 1.20,                    // 鎖骨起點向外舒展
-                boneRadiusScale: 1.05,             // 粗壯骨幹 (105% 骨徑，肌突隆起)
-                carryingAngle: 0.12,               // 提攜角約 7°
-                qAngle: 0.03,                      // 股骨直立少內傾
-                headAspect: [1.02, 1.0, 1.02]      // 方正寬下顎、眉弓厚重
+                pelvisScale: [0.96, 1.02, 1.02],
+                ribScale: [1.04, 1.0, 1.04],
+                shoulderScaleX: 1.06,
+                boneRadiusScale: 1.04,
+                carryingAngle: 0.12,
+                qAngle: 0.03,
+                headAspect: [1.02, 1.0, 1.02]
             };
         } else {
             return {
                 name: 'neutral',
                 pelvisScale: [1.0, 1.0, 1.0],
-                hipJointX: 3.60,
                 ribScale: [1.0, 1.0, 1.0],
-                sternumScale: [1.0, 1.0, 1.0],
-                shoulderWidth: 5.00,
-                scJointX: 1.15,
+                shoulderScaleX: 1.0,
                 boneRadiusScale: 1.0,
                 carryingAngle: 0.14,
                 qAngle: 0.05,
@@ -362,84 +855,77 @@ export class AnatomicalTorso {
 
     /**
      * 設定性別骨骼形態 (Gender Skeletal Dimorphism)
-     * 支援 'female' (女性: 寬骨盆、窄肩、纖細長骨、小胸廓) 與 'male' (男性: 寬肩倒三角、厚實粗骨、心型窄骨盆)
-     * @param {string} gender 'female' | 'male' | 'neutral'
      */
     setGender(gender = 'female') {
         const config = this.getGenderMorphConfig(gender);
         this.currentGender = config.name;
-        this.shoulderBaseX = config.shoulderWidth;
         this.carryingAngle = config.carryingAngle;
 
-        // 1. 骨盆形態動態重塑 (Pelvic Basin Morph)
-        if (this.pelvisUnit) {
-            const bonyPelvis = this.pelvisUnit.getObjectByName("Bony_Pelvis");
-            if (bonyPelvis) {
-                bonyPelvis.scale.set(config.pelvisScale[0], config.pelvisScale[1], config.pelvisScale[2]);
-            }
+        // 1. 骨盆寬度與形態動態調整
+        if (this.bonyPelvisGroup) {
+            this.bonyPelvisGroup.scale.set(config.pelvisScale[0], config.pelvisScale[1], config.pelvisScale[2]);
         }
 
-        // 2. 髖關節間距與位置動態同步 (Acetabulofemoral Alignment)
+        // 2. 髖關節跟隨髖臼窩寬度同步對齊
         ['left', 'right'].forEach(side => {
-            const sign = (side === 'left') ? 1 : -1;
-            if (this.lowerLimbs && this.lowerLimbs[side] && this.lowerLimbs[side].hipJoint) {
-                const hip = this.lowerLimbs[side].hipJoint;
-                hip.position.x = sign * config.hipJointX;
-                hip.position.y = -3.4 * config.pelvisScale[1];
-                hip.position.z = 0.6 * config.pelvisScale[2];
+            const rec = this.lowerLimbs[side];
+            if (rec && rec.hipJoint && rec.restHipPos) {
+                rec.hipJoint.position.set(
+                    rec.restHipPos.x * config.pelvisScale[0],
+                    rec.restHipPos.y * config.pelvisScale[1],
+                    rec.restHipPos.z * config.pelvisScale[2]
+                );
             }
         });
 
-        // 3. 胸廓容積與肋骨寬度重塑 (Thoracic Cage Morph)
-        this.ribsLeft.forEach(rib => {
-            rib.scale.set(config.ribScale[0], config.ribScale[1], config.ribScale[2]);
-        });
-        this.ribsRight.forEach(rib => {
-            rib.scale.set(config.ribScale[0], config.ribScale[1], config.ribScale[2]);
-        });
-        if (this.sternum) {
-            this.sternum.scale.set(config.sternumScale[0], config.sternumScale[1], config.sternumScale[2]);
-            this.sternum.position.z = 4.15 * config.ribScale[2];
+        // 3. 胸廓籠寬厚比例
+        if (this.ribcageGroup) {
+            this.ribcageGroup.scale.set(config.ribScale[0], config.ribScale[1], config.ribScale[2]);
         }
 
-        // 4. 肩帶雙肩寬度與胸鎖關節位置 (Shoulder Girdle & Clavicle)
+        // 4. 肩帶寬度與鎖骨縮放同步
+        const baseShoulderX = (GLB_PIVOTS_M.scapulaPivotX - GLB_PIVOTS_M.thoraxOrigin[0]) * GLB_SCALE;
+        this.shoulderBaseX = baseShoulderX * config.shoulderScaleX;
+
         ['left', 'right'].forEach(side => {
             const sign = (side === 'left') ? 1 : -1;
-            if (this.shoulderGirdle && this.shoulderGirdle[side]) {
-                if (this.shoulderGirdle[side].clavicle) {
-                    this.shoulderGirdle[side].clavicle.position.x = sign * config.scJointX;
-                    const clavMesh = this.shoulderGirdle[side].clavicle.getObjectByName(`Clavicle_${side}`);
-                    if (clavMesh) {
-                        const spanRatio = config.shoulderWidth / 5.0;
-                        clavMesh.scale.set(spanRatio, 1.0, spanRatio);
-                    }
+            const rec = this.shoulderGirdle[side];
+            if (rec) {
+                if (rec.clavicleScaleGroup) {
+                    rec.clavicleScaleGroup.scale.set(config.shoulderScaleX, 1.0, config.ribScale[2]);
                 }
-                if (this.shoulderGirdle[side].scapula) {
-                    this.shoulderGirdle[side].scapula.position.x = sign * config.shoulderWidth;
+                if (rec.scapula && rec.restScapulaPos) {
+                    rec.scapula.position.set(
+                        sign * this.shoulderBaseX,
+                        rec.restScapulaPos.y,
+                        rec.restScapulaPos.z * config.ribScale[2]
+                    );
                 }
             }
         });
 
-        // 5. 四肢長骨粗細度 (Bone Caliber & Gracility: 女性纖細秀氣 vs 男性粗壯結實)
+        // 5. 四肢長骨粗細度 (女性纖細 vs 男性粗壯)
         const r = config.boneRadiusScale;
         ['left', 'right'].forEach(side => {
-            if (this.shoulderGirdle && this.shoulderGirdle[side]) {
-                if (this.shoulderGirdle[side].humerus) this.shoulderGirdle[side].humerus.scale.set(r, 1.0, r);
-                if (this.shoulderGirdle[side].ulna) this.shoulderGirdle[side].ulna.scale.set(r, 1.0, r);
-                if (this.shoulderGirdle[side].radiusGroup) this.shoulderGirdle[side].radiusGroup.scale.set(r, 1.0, r);
-                if (this.shoulderGirdle[side].handGroup) this.shoulderGirdle[side].handGroup.scale.set(r, r, r);
+            const sg = this.shoulderGirdle[side];
+            if (sg) {
+                if (sg.humerusCaliber) sg.humerusCaliber.scale.set(r, 1.0, r);
+                if (sg.ulnaCaliber) sg.ulnaCaliber.scale.set(r, 1.0, r);
+                if (sg.radiusCaliber) sg.radiusCaliber.scale.set(r, 1.0, r);
+                if (sg.handGroup) sg.handGroup.scale.set(r, r, r);
             }
-            if (this.lowerLimbs && this.lowerLimbs[side]) {
-                if (this.lowerLimbs[side].femur) this.lowerLimbs[side].femur.scale.set(r, 1.0, r);
-                if (this.lowerLimbs[side].tibia) this.lowerLimbs[side].tibia.scale.set(r, 1.0, r);
-                if (this.lowerLimbs[side].fibula) this.lowerLimbs[side].fibula.scale.set(r, 1.0, r);
-                if (this.lowerLimbs[side].footGroup) this.lowerLimbs[side].footGroup.scale.set(r, 1.0, r);
+            const ll = this.lowerLimbs[side];
+            if (ll) {
+                if (ll.femurCaliber) ll.femurCaliber.scale.set(r, 1.0, r);
+                if (ll.tibiaCaliber) ll.tibiaCaliber.scale.set(r, 1.0, r);
+                if (ll.fibula) ll.fibula.scale.set(r, 1.0, r);
+                if (ll.footGroup) ll.footGroup.scale.set(r, 1.0, r);
             }
         });
 
-        // 6. 頭骨下巴與面部比例微調
+        // 6. 頭骨比例微調
         if (this.skullGroup) {
-            const s = this.headScale || 1.47;
+            const s = this.headScale || 1.15;
             this.skullGroup.scale.set(
                 s * config.headAspect[0],
                 s * config.headAspect[1],
@@ -451,15 +937,14 @@ export class AnatomicalTorso {
     }
 
     /**
-     * 設定頭身比縮放率 (可依照片推算或使用者手動調整，支援 6.5 ~ 8.5 頭身)
-     * @param {number} ratio 目標頭身比 (如 7.0、7.5、8.0)
+     * 設定頭身比縮放率 (支援 6.5 ~ 8.5 頭身)
      */
     setHeadRatio(ratio = 7.1) {
         const safeRatio = THREE.MathUtils.clamp(ratio, 6.2, 8.8);
         this.currentHeadRatio = safeRatio;
-        // 人體總高約 48 單位，基礎頭骨幾何高 4.6 單位
+        // 醫學模型身高約 48 單位，基礎頭骨高 ~5.90 單位
         const targetHeadHeight = 48.0 / safeRatio;
-        this.headScale = targetHeadHeight / 4.60;
+        this.headScale = targetHeadHeight / 5.90;
         if (this.skullGroup) {
             const config = this.getGenderMorphConfig(this.currentGender);
             this.skullGroup.scale.set(
@@ -472,953 +957,94 @@ export class AnatomicalTorso {
     }
 
     /**
-     * 建立一側的上肢骨骼鏈 (胸鎖 -> 鎖骨 -> 肩胛/肩胛岡 -> 盂肱 -> 肱骨 -> 肘關節 -> 尺骨 & 橈骨)
-     */
-    _buildUpperLimb(side) {
-        const sign = (side === 'left') ? 1 : -1;
-
-        // 1. 胸鎖關節 (SC Joint)
-        const scJoint = new THREE.Group();
-        scJoint.name = `SC_Joint_${side}`;
-        scJoint.position.set(sign * 1.15, 10.2, 4.2);
-        this.thoracicCageUnit.add(scJoint);
-
-        const clavicleMesh = this._createClavicleMesh(side);
-        scJoint.add(clavicleMesh);
-        this.shoulderGirdle[side].clavicle = scJoint;
-
-        // 2. 肩胛骨 (Scapula Unit) - 嚴格解剖學：直接依附於胸廓背壁 (Ribs 2-7, 後背平貼 Z ~ -1.2)
-        // 建立肩胛胸壁生理滑動結構 (Scapulothoracic sliding joint)，徹底消除脫臼懸空與異常起翹
-        const scapulaUnit = new THREE.Group();
-        scapulaUnit.name = `Scapula_Unit_${side}`;
-        scapulaUnit.position.set(sign * 5.0, 9.8, -1.2);
-        this.thoracicCageUnit.add(scapulaUnit);
-
-        const scapulaMesh = this._createScapulaMesh(side);
-        scapulaUnit.add(scapulaMesh);
-        this.shoulderGirdle[side].scapula = scapulaUnit;
-        this.shoulderGirdle[side].scapulaMesh = scapulaMesh;
-
-        // 3. 盂肱關節 (GH Joint / Glenohumeral Joint) - 緊扣肩胛骨外側角肩臼窩
-        const ghJoint = new THREE.Group();
-        ghJoint.name = `GH_Joint_${side}`;
-        ghJoint.position.set(sign * 0.35, -1.2, 0.2);
-        scapulaUnit.add(ghJoint);
-
-        // 4. 肱骨 (Humerus)
-        const humerusMesh = this._createHumerusMesh(side);
-        ghJoint.add(humerusMesh);
-        this.shoulderGirdle[side].humerus = humerusMesh;
-        this.shoulderGirdle[side].humerusJoint = ghJoint;
-        ghJoint.rotation.order = 'YXZ';
-        ghJoint.rotation.z = sign * 0.12; // 預設自然微提攜角
-
-        // 5. 肘關節 (Elbow / Humeroulnar Hinge Joint)
-        // 位於肱骨下端 (armLength = 8.5)
-        const armLength = 8.5;
-        const elbowJoint = new THREE.Group();
-        elbowJoint.name = `Elbow_Joint_${side}`;
-        elbowJoint.position.set(0, -armLength, 0);
-        ghJoint.add(elbowJoint);
-        this.shoulderGirdle[side].elbowJoint = elbowJoint;
-
-        // 6. 尺骨 (Ulna) - 內側固定軸，後方帶鷹嘴突
-        const ulnaMesh = this._createUlnaMesh(side);
-        elbowJoint.add(ulnaMesh);
-        this.shoulderGirdle[side].ulna = ulnaMesh;
-
-        // 7. 橈骨組件 (Radius Unit) - 外側旋轉骨，支援剪刀交叉
-        const radiusGroup = new THREE.Group();
-        radiusGroup.name = `Radius_Group_${side}`;
-        elbowJoint.add(radiusGroup);
-        this.shoulderGirdle[side].radiusGroup = radiusGroup;
-
-        // 8. 手掌骨骼系統 (Carpals, Metacarpals, Phalanges)
-        // 依附於肘關節坐標系，並於 _updateRadiusMesh 中與橈骨遠端 pEnd 動態旋轉翻轉緊密鎖定
-        const handGroup = new THREE.Group();
-        handGroup.name = `Hand_Group_${side}`;
-        elbowJoint.add(handGroup);
-        this.shoulderGirdle[side].handGroup = handGroup;
-
-        // 建立完整手部骨骼結構與指節關節鏈
-        const handData = this._buildHandMesh(side, 'relaxed');
-        handGroup.add(handData.mesh);
-        this.shoulderGirdle[side].handMesh = handData.mesh;
-        this.shoulderGirdle[side].handJoints = handData.joints;
-
-        // 初始化平行旋後姿態的橈骨與手掌
-        this._updateRadiusMesh(side, 0.2); // 預設微旋前
-
-        // 標記關鍵解剖骨點
-        this._addLandmark(`Olecranon_${side}`, new THREE.Vector3(sign * 5.8, 1.5, -1.2), this.thoracicCageUnit);
-        this._addLandmark(`AcromionPoint_${side}`, new THREE.Vector3(sign * 5.0, 9.8, -0.9), this.thoracicCageUnit);
-    }
-
-    /**
-     * 建立一側下肢骨骼鏈 (髖關節 -> 股骨/大轉子 -> 膝關節/髕骨 -> 脛骨/腓骨 -> 踝關節 -> 完整足骨)
-     */
-    _buildLowerLimb(side) {
-        const sign = (side === 'left') ? 1 : -1;
-
-        // 1. 髖關節 (Hip Joint / Acetabulofemoral Joint) - 坐標緊扣骨盆髖臼窩 (sign * 3.6, -3.4, 0.6)
-        const hipJoint = new THREE.Group();
-        hipJoint.name = `Hip_Joint_${side}`;
-        hipJoint.position.set(sign * 3.6, -3.4, 0.6);
-        this.pelvisUnit.add(hipJoint);
-        this.lowerLimbs[side].hipJoint = hipJoint;
-        hipJoint.rotation.order = 'YXZ';
-
-        // 2. 股骨總成 (Femur: 股骨頭、股骨頸、大轉子、小轉子、股骨幹、股骨內外側髁)
-        const femurMesh = this._createFemurMesh(side);
-        hipJoint.add(femurMesh);
-        this.lowerLimbs[side].femur = femurMesh;
-
-        // 3. 髕骨 (Patella - 膝蓋骨，位於股骨下端滑車面)
-        const femurLen = 10.5;
-        const patellaMesh = this._createPatellaMesh(side);
-        patellaMesh.position.set(0, -femurLen + 0.35, 0.72);
-        hipJoint.add(patellaMesh);
-        this.lowerLimbs[side].patella = patellaMesh;
-
-        // 4. 膝關節 (Knee Joint) - 單向橫軸鉸鏈 (屈曲向後折疊)
-        const kneeJoint = new THREE.Group();
-        kneeJoint.name = `Knee_Joint_${side}`;
-        kneeJoint.position.set(0, -femurLen, 0);
-        hipJoint.add(kneeJoint);
-        this.lowerLimbs[side].kneeJoint = kneeJoint;
-
-        // 5. 脛骨 (Tibia: 內側承重粗骨、脛骨粗隆、迎面骨前脊、內踝)
-        const tibiaMesh = this._createTibiaMesh(side);
-        kneeJoint.add(tibiaMesh);
-        this.lowerLimbs[side].tibia = tibiaMesh;
-
-        // 6. 腓骨 (Fibula: 外側細骨、腓骨頭、外踝)
-        const fibulaMesh = this._createFibulaMesh(side);
-        kneeJoint.add(fibulaMesh);
-        this.lowerLimbs[side].fibula = fibulaMesh;
-
-        // 7. 踝關節 (Ankle Joint / Mortise)
-        const tibiaLen = 9.6;
-        const ankleJoint = new THREE.Group();
-        ankleJoint.name = `Ankle_Joint_${side}`;
-        ankleJoint.position.set(-sign * 0.15, -tibiaLen, 0);
-        kneeJoint.add(ankleJoint);
-        this.lowerLimbs[side].ankleJoint = ankleJoint;
-        ankleJoint.rotation.order = 'YXZ';
-
-        // 8. 足部骨骼系統 (Foot: 距骨、跟骨結節、跗骨、5根蹠骨、14節趾骨)
-        const footData = this._buildFootMesh(side);
-        ankleJoint.add(footData.mesh);
-        this.lowerLimbs[side].footGroup = footData.mesh;
-        this.lowerLimbs[side].footMesh = footData.mesh;
-
-        // 關鍵解剖骨點標記 (Landmarks)
-        this._addLandmark(`GreaterTrochanter_${side}`, new THREE.Vector3(sign * 5.2, -4.2, 0.4), this.pelvisUnit);
-        this._addLandmark(`PatellaPoint_${side}`, new THREE.Vector3(sign * 3.6, -13.5, 1.3), this.pelvisUnit);
-        this._addLandmark(`FibulaHead_${side}`, new THREE.Vector3(sign * 4.6, -14.2, 0.1), this.pelvisUnit);
-        this._addLandmark(`MedialMalleolus_${side}`, new THREE.Vector3(sign * 3.1, -23.5, 0.3), this.pelvisUnit);
-        this._addLandmark(`LateralMalleolus_${side}`, new THREE.Vector3(sign * 4.5, -23.9, -0.1), this.pelvisUnit);
-    }
-
-    /**
-     * 建立股骨 (Femur: 大腿骨)
-     * 含股骨頭、股骨頸、大轉子 (Greater Trochanter)、小轉子、微前凸骨幹與雙髁
-     */
-    _createFemurMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Femur_${side}`;
-
-        const femurLen = 10.5;
-
-        // 1. 股骨頭 (Femoral Head: 球體嵌合於髖臼)
-        const headGeo = new THREE.SphereGeometry(0.78, 16, 16);
-        const headMesh = new THREE.Mesh(headGeo, this.materials.bone);
-        headMesh.position.set(0, 0, 0);
-        group.add(headMesh);
-
-        // 2. 股骨頸 (Femoral Neck: 解剖頸幹角 ~126°，由股骨頭向外下方延伸)
-        const neckCurve = new THREE.CatmullRomCurve3([
-            new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(sign * 0.7, -0.45, 0),
-            new THREE.Vector3(sign * 1.35, -0.9, 0)
-        ]);
-        const neckGeo = new THREE.TubeGeometry(neckCurve, 10, 0.46, 8, false);
-        const neckMesh = new THREE.Mesh(neckGeo, this.materials.bone);
-        neckMesh.castShadow = true;
-        group.add(neckMesh);
-
-        // 3. 大轉子 (Greater Trochanter - 關鍵藝用骨標誌)
-        // 位於股骨頸末端外側頂部，形成髖部最寬體表骨點
-        const trochanterGeo = new THREE.BoxGeometry(0.95, 1.35, 1.1);
-        const trochanterMesh = new THREE.Mesh(trochanterGeo, this.materials.boneHighlight);
-        trochanterMesh.position.set(sign * 1.7, -0.8, 0.05);
-        trochanterMesh.rotation.z = -sign * 0.15;
-        group.add(trochanterMesh);
-
-        // 轉子窩 (Trochanteric Fossa - 內側面凹窩)
-        const fossaGeo = new THREE.BoxGeometry(0.4, 0.6, 0.5);
-        const fossaMesh = new THREE.Mesh(fossaGeo, this.materials.bone);
-        fossaMesh.position.set(sign * 1.25, -1.0, -0.2);
-        group.add(fossaMesh);
-
-        // 4. 小轉子 (Lesser Trochanter - 內後側圓錐突起)
-        const lesserGeo = new THREE.ConeGeometry(0.35, 0.55, 8);
-        const lesserMesh = new THREE.Mesh(lesserGeo, this.materials.boneHighlight);
-        lesserMesh.rotation.z = sign * Math.PI * 0.45;
-        lesserMesh.rotation.x = -Math.PI * 0.35;
-        lesserMesh.position.set(sign * 0.7, -1.75, -0.45);
-        group.add(lesserMesh);
-
-        // 5. 股骨幹 (Femoral Shaft)
-        // 帶有生理前凸 (Anterior Bow) 與向內收斜向膝蓋的提攜角 (Q-angle)
-        const p0 = new THREE.Vector3(sign * 1.4, -1.2, 0);
-        const p1 = new THREE.Vector3(sign * 0.9, -femurLen * 0.35, 0.35);
-        const p2 = new THREE.Vector3(sign * 0.45, -femurLen * 0.68, 0.38);
-        const p3 = new THREE.Vector3(0, -femurLen + 0.85, 0);
-
-        const shaftCurve = new THREE.CatmullRomCurve3([p0, p1, p2, p3]);
-        const shaftGeo = new THREE.TubeGeometry(shaftCurve, 20, 0.42, 10, false);
-        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
-        shaftMesh.castShadow = true;
-        group.add(shaftMesh);
-
-        // 6. 股骨遠端膨大部與雙髁 (Femoral Distal Condyles)
-        // 內側髁 (Medial Condyle)
-        const medialCondyleGeo = new THREE.SphereGeometry(0.68, 12, 12);
-        const medialCondyleMesh = new THREE.Mesh(medialCondyleGeo, this.materials.bone);
-        medialCondyleMesh.scale.set(0.75, 1.0, 1.25);
-        medialCondyleMesh.position.set(-sign * 0.55, -femurLen, -0.15);
-        group.add(medialCondyleMesh);
-
-        // 外側髁 (Lateral Condyle)
-        const lateralCondyleGeo = new THREE.SphereGeometry(0.65, 12, 12);
-        const lateralCondyleMesh = new THREE.Mesh(lateralCondyleGeo, this.materials.bone);
-        lateralCondyleMesh.scale.set(0.72, 1.0, 1.2);
-        lateralCondyleMesh.position.set(sign * 0.55, -femurLen, -0.15);
-        group.add(lateralCondyleMesh);
-
-        // 髕骨滑車槽 (Patellar Surface - 前側凹槽)
-        const trochleaGeo = new THREE.CylinderGeometry(0.55, 0.65, 0.95, 10);
-        const trochleaMesh = new THREE.Mesh(trochleaGeo, this.materials.bone);
-        trochleaMesh.rotation.z = Math.PI * 0.5;
-        trochleaMesh.position.set(0, -femurLen + 0.35, 0.25);
-        group.add(trochleaMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Femur`);
-    }
-
-    /**
-     * 建立髕骨 (Patella - 倒心形膝蓋骨籽骨)
-     */
-    _createPatellaMesh(side) {
-        const group = new THREE.Group();
-        group.name = `Patella_${side}`;
-
-        const patellaShape = new THREE.Shape();
-        patellaShape.moveTo(-0.45, 0.55);
-        patellaShape.lineTo(0.45, 0.55);
-        patellaShape.lineTo(0.40, 0.0);
-        patellaShape.lineTo(0.0, -0.6); // 髕骨尖 (Apex) 朝下
-        patellaShape.lineTo(-0.40, 0.0);
-        patellaShape.closePath();
-
-        const extrudeSettings = { depth: 0.32, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.1, bevelThickness: 0.1 };
-        const patellaGeo = new THREE.ExtrudeGeometry(patellaShape, extrudeSettings);
-        const patellaMesh = new THREE.Mesh(patellaGeo, this.materials.boneHighlight);
-        patellaMesh.position.set(0, 0, -0.15);
-        patellaMesh.castShadow = true;
-        group.add(patellaMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Patella`);
-    }
-
-    /**
-     * 建立脛骨 (Tibia - 內側粗大承重骨)
-     * 含脛骨平台、脛骨粗隆、前脊迎面骨與內踝 (Medial Malleolus)
-     */
-    _createTibiaMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Tibia_${side}`;
-
-        const tibiaLen = 9.6;
-
-        // 1. 脛骨平台 (Tibial Plateau: 承接股骨雙髁)
-        const plateauGeo = new THREE.CylinderGeometry(0.85, 0.78, 0.65, 14);
-        const plateauMesh = new THREE.Mesh(plateauGeo, this.materials.bone);
-        plateauMesh.scale.set(1.25, 1.0, 1.0);
-        plateauMesh.position.set(-sign * 0.1, -0.32, 0);
-        group.add(plateauMesh);
-
-        // 髁間隆起 (Intercondylar Eminence - 中央棘)
-        const spineGeo = new THREE.ConeGeometry(0.2, 0.45, 6);
-        const spineMesh = new THREE.Mesh(spineGeo, this.materials.boneHighlight);
-        spineMesh.position.set(-sign * 0.1, 0.15, 0);
-        group.add(spineMesh);
-
-        // 2. 脛骨粗隆 (Tibial Tuberosity - 髕韌帶附著點，前側凸起)
-        const tuberosityGeo = new THREE.BoxGeometry(0.55, 0.75, 0.65);
-        const tuberosityMesh = new THREE.Mesh(tuberosityGeo, this.materials.boneHighlight);
-        tuberosityMesh.position.set(-sign * 0.1, -0.85, 0.55);
-        group.add(tuberosityMesh);
-
-        // 3. 脛骨幹 (Shaft) 與前脊迎面骨 (Anterior Crest)
-        const p0 = new THREE.Vector3(-sign * 0.1, -0.65, 0.1);
-        const p1 = new THREE.Vector3(-sign * 0.08, -tibiaLen * 0.45, 0.22);
-        const p2 = new THREE.Vector3(-sign * 0.15, -tibiaLen, 0.05);
-
-        const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
-        const shaftGeo = new THREE.TubeGeometry(curve, 18, 0.40, 8, false);
-        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
-        shaftMesh.castShadow = true;
-        group.add(shaftMesh);
-
-        // 脛骨前脊骨線 (迎面骨銳利前緣)
-        const crestP0 = new THREE.Vector3(-sign * 0.1, -1.0, 0.55);
-        const crestP1 = new THREE.Vector3(-sign * 0.08, -tibiaLen * 0.5, 0.42);
-        const crestP2 = new THREE.Vector3(-sign * 0.22, -tibiaLen * 0.88, 0.25);
-        const crestCurve = new THREE.CatmullRomCurve3([crestP0, crestP1, crestP2]);
-        const crestGeo = new THREE.TubeGeometry(crestCurve, 12, 0.12, 6, false);
-        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
-        group.add(crestMesh);
-
-        // 4. 內踝 (Medial Malleolus - 內側腳踝凸起)
-        const malleolusGeo = new THREE.BoxGeometry(0.52, 0.85, 0.75);
-        const malleolusMesh = new THREE.Mesh(malleolusGeo, this.materials.boneHighlight);
-        malleolusMesh.position.set(-sign * 0.6, -tibiaLen - 0.25, 0.05);
-        group.add(malleolusMesh);
-
-        // 下關節面 (Inferior Articular Surface)
-        const articularGeo = new THREE.BoxGeometry(0.85, 0.35, 0.85);
-        const articularMesh = new THREE.Mesh(articularGeo, this.materials.bone);
-        articularMesh.position.set(-sign * 0.15, -tibiaLen - 0.15, 0.05);
-        group.add(articularMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Tibia`);
-    }
-
-    /**
-     * 建立腓骨 (Fibula - 外側細長輔助骨)
-     * 含腓骨頭 (Fibular Head) 與外踝 (Lateral Malleolus)
-     */
-    _createFibulaMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Fibula_${side}`;
-
-        const tibiaLen = 9.6;
-
-        // 1. 腓骨頭 (Fibular Head - 膝蓋外下方圓球狀骨點)
-        const headGeo = new THREE.SphereGeometry(0.38, 10, 10);
-        const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
-        headMesh.position.set(sign * 0.95, -0.65, -0.2);
-        group.add(headMesh);
-
-        // 2. 腓骨幹 (Shaft - 細長管狀骨)
-        const p0 = new THREE.Vector3(sign * 0.95, -0.85, -0.2);
-        const p1 = new THREE.Vector3(sign * 0.92, -tibiaLen * 0.5, -0.15);
-        const p2 = new THREE.Vector3(sign * 0.85, -tibiaLen * 0.92, -0.18);
-
-        const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
-        const shaftGeo = new THREE.TubeGeometry(curve, 16, 0.18, 6, false);
-        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
-        shaftMesh.castShadow = true;
-        group.add(shaftMesh);
-
-        // 3. 外踝 (Lateral Malleolus - 外側腳踝凸起，比內踝更低、更靠後)
-        const malleolusGeo = new THREE.BoxGeometry(0.48, 0.95, 0.72);
-        const malleolusMesh = new THREE.Mesh(malleolusGeo, this.materials.boneHighlight);
-        malleolusMesh.position.set(sign * 0.85, -tibiaLen - 0.55, -0.15);
-        group.add(malleolusMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Fibula`);
-    }
-
-    /**
-     * 建立完整足部骨骼系統 (Foot Skeleton: 26 Bones per Foot)
-     * 含全部 7 塊獨立跗骨 (Talus, Calcaneus, Navicular, Cuboid, Medial/Intermediate/Lateral Cuneiform)、
-     * 5 根蹠骨 (Metatarsals 1-5) 與 14 節趾骨 (Phalanges)
-     */
-    _buildFootMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        const group = new THREE.Group();
-        group.name = `Foot_${side}`;
-
-        // 1. 距骨 (Talus - 鞍狀滑車，嵌合於內外踝之間)
-        const talusGeo = new THREE.BoxGeometry(0.86, 0.68, 1.05);
-        const talusMesh = new THREE.Mesh(talusGeo, this.materials.bone);
-        talusMesh.position.set(-sign * 0.08, -0.35, 0.08);
-        this._tagBone(talusMesh, `${sideLabel} Talus`);
-        group.add(talusMesh);
-
-        // 2. 跟骨 (Calcaneus - 足跟結節，向後突出承受體重)
-        const heelGeo = new THREE.BoxGeometry(0.95, 0.90, 1.90);
-        const heelMesh = new THREE.Mesh(heelGeo, this.materials.boneHighlight);
-        heelMesh.position.set(sign * 0.05, -0.95, -0.85);
-        heelMesh.castShadow = true;
-        this._tagBone(heelMesh, `${sideLabel} Calcaneus`);
-        group.add(heelMesh);
-
-        // 3. 足舟骨 (Navicular - 位於距骨前方、內側足縱弓頂點之船形骨)
-        const navicularGeo = new THREE.BoxGeometry(0.68, 0.54, 0.42);
-        const navicularMesh = new THREE.Mesh(navicularGeo, this.materials.bone);
-        navicularMesh.position.set(-sign * 0.22, -0.54, 0.85);
-        this._tagBone(navicularMesh, `${sideLabel} Navicular`);
-        group.add(navicularMesh);
-
-        // 4. 骰骨 (Cuboid - 位於跟骨前方、足外側柱支撐第 4、5 蹠骨)
-        const cuboidGeo = new THREE.BoxGeometry(0.52, 0.58, 0.72);
-        const cuboidMesh = new THREE.Mesh(cuboidGeo, this.materials.bone);
-        cuboidMesh.position.set(sign * 0.40, -0.70, 1.12);
-        this._tagBone(cuboidMesh, `${sideLabel} Cuboid`);
-        group.add(cuboidMesh);
-
-        // 5. 內側楔狀骨 (Medial Cuneiform - 第一楔狀骨，對接第一蹠骨)
-        const medCunGeo = new THREE.BoxGeometry(0.32, 0.58, 0.46);
-        const medCunMesh = new THREE.Mesh(medCunGeo, this.materials.boneHighlight);
-        medCunMesh.position.set(-sign * 0.42, -0.62, 1.32);
-        this._tagBone(medCunMesh, `${sideLabel} Medial Cuneiform`);
-        group.add(medCunMesh);
-
-        // 6. 中間楔狀骨 (Intermediate Cuneiform - 第二楔狀骨，對接第二蹠骨)
-        const intCunGeo = new THREE.BoxGeometry(0.26, 0.52, 0.42);
-        const intCunMesh = new THREE.Mesh(intCunGeo, this.materials.bone);
-        intCunMesh.position.set(-sign * 0.16, -0.58, 1.30);
-        this._tagBone(intCunMesh, `${sideLabel} Intermediate Cuneiform`);
-        group.add(intCunMesh);
-
-        // 7. 外側楔狀骨 (Lateral Cuneiform - 第三楔狀骨，位於中間楔狀骨與骰骨之間，對接第三蹠骨)
-        const latCunGeo = new THREE.BoxGeometry(0.28, 0.54, 0.44);
-        const latCunMesh = new THREE.Mesh(latCunGeo, this.materials.bone);
-        latCunMesh.position.set(sign * 0.10, -0.63, 1.30);
-        this._tagBone(latCunMesh, `${sideLabel} Lateral Cuneiform`);
-        group.add(latCunMesh);
-
-        // 8. 蹠骨 (5 Metatarsal Bones - 呈弧形放射狀分佈)
-        const metatarsalWidths = [0.22, 0.18, 0.17, 0.16, 0.18];
-        const metatarsalLengths = [1.8, 2.05, 1.95, 1.85, 1.75];
-        const ordinals = ['First', 'Second', 'Third', 'Fourth', 'Fifth'];
-        const toeNames = ['Hallux', 'Second Toe', 'Third Toe', 'Fourth Toe', 'Fifth Toe'];
-
-        for (let i = 0; i < 5; i++) {
-            const rayX = -sign * 0.45 + (sign * i * 0.22);
-            const w = metatarsalWidths[i];
-            const len = metatarsalLengths[i];
-            const mtBoneName = `${sideLabel} ${ordinals[i]} Metatarsal`;
-
-            const p0 = new THREE.Vector3(rayX * 0.85, -0.65, 1.6);
-            const p1 = new THREE.Vector3(rayX, -0.85, 1.6 + len);
-
-            const mCurve = new THREE.CatmullRomCurve3([p0, p1]);
-            const mGeo = new THREE.TubeGeometry(mCurve, 6, w, 6, false);
-            const mMesh = new THREE.Mesh(mGeo, this.materials.bone);
-            this._tagBone(mMesh, mtBoneName);
-            group.add(mMesh);
-
-            // 蹠骨頭 (Metatarsal Head - 蹠趾關節)
-            const headGeo = new THREE.SphereGeometry(w * 1.25, 8, 8);
-            const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
-            headMesh.position.copy(p1);
-            this._tagBone(headMesh, mtBoneName);
-            group.add(headMesh);
-
-            // 9. 趾骨群 (Phalanges - 大拇趾 2 節，其餘各 3 節，共 14 節)
-            const phalanCount = (i === 0) ? 2 : 3;
-            const phalanxLabels = (i === 0) ? ['Proximal', 'Distal'] : ['Proximal', 'Middle', 'Distal'];
-            let pPrev = p1.clone();
-            const segLen = (i === 0) ? 0.48 : 0.32;
-
-            for (let ph = 0; ph < phalanCount; ph++) {
-                const pNext = pPrev.clone().add(new THREE.Vector3(0, -0.05, segLen));
-                const pCurv = new THREE.CatmullRomCurve3([pPrev, pNext]);
-                const pGeo = new THREE.TubeGeometry(pCurv, 4, w * 0.85, 6, false);
-                const pMesh = new THREE.Mesh(pGeo, this.materials.bone);
-                this._tagBone(pMesh, `${sideLabel} ${phalanxLabels[ph]} Phalanx of ${toeNames[i]}`);
-                group.add(pMesh);
-                pPrev = pNext;
-            }
-        }
-
-        // 第五蹠骨粗隆 (Tuberosity of 5th Metatarsal - 屬於第五蹠骨的腳外側體表骨點)
-        const tub5Geo = new THREE.SphereGeometry(0.25, 6, 6);
-        const tub5Mesh = new THREE.Mesh(tub5Geo, this.materials.boneHighlight);
-        tub5Mesh.position.set(sign * 0.65, -0.8, 1.7);
-        this._tagBone(tub5Mesh, `${sideLabel} Fifth Metatarsal`);
-        group.add(tub5Mesh);
-
-        return { mesh: group };
-    }
-
-    /**
-     * 建立尺骨 (Ulna: 內側軸心骨，近端帶鷹嘴突，遠端帶尺骨頭與莖突)
-     */
-    _createUlnaMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Ulna_${side}`;
-
-        const ulnaLen = 7.6; // 前臂標準解剖長度
-        const medialOffsetX = -sign * 0.38; // 尺骨位於前臂內側 (小指側)
-
-        // 1. 鷹嘴突 (Olecranon Process - 肘後尖銳骨點，屈肘時最突出)
-        const olecranonGeo = new THREE.BoxGeometry(0.55, 0.75, 0.75);
-        const olecranonMesh = new THREE.Mesh(olecranonGeo, this.materials.boneHighlight);
-        olecranonMesh.position.set(medialOffsetX, 0.15, -0.32);
-        group.add(olecranonMesh);
-
-        // 滑車切跡 (Trochlear Notch)
-        const notchGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.5, 8);
-        const notchMesh = new THREE.Mesh(notchGeo, this.materials.bone);
-        notchMesh.rotation.z = Math.PI * 0.5;
-        notchMesh.position.set(medialOffsetX, 0.0, 0.0);
-        group.add(notchMesh);
-
-        // 2. 尺骨幹 (Ulna Shaft - 近端粗、遠端細，微帶 S 弧)
-        const p0 = new THREE.Vector3(medialOffsetX, 0, 0);
-        const p1 = new THREE.Vector3(medialOffsetX - sign * 0.08, -ulnaLen * 0.45, -0.05);
-        const p2 = new THREE.Vector3(medialOffsetX, -ulnaLen, 0);
-
-        const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
-        const shaftGeo = new THREE.TubeGeometry(curve, 16, 0.26, 8, false);
-        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
-        shaftMesh.castShadow = true;
-        group.add(shaftMesh);
-
-        // 3. 遠端尺骨頭與尺骨莖突 (Ulna Head & Styloid Process - 小指側手腕突起骨點)
-        const headGeo = new THREE.SphereGeometry(0.32, 10, 10);
-        const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
-        headMesh.position.set(medialOffsetX, -ulnaLen, 0);
-        group.add(headMesh);
-
-        const styloidGeo = new THREE.ConeGeometry(0.12, 0.45, 6);
-        const styloidMesh = new THREE.Mesh(styloidGeo, this.materials.boneHighlight);
-        styloidMesh.rotation.x = Math.PI;
-        styloidMesh.position.set(medialOffsetX - sign * 0.1, -ulnaLen - 0.25, -0.05);
-        group.add(styloidMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Ulna`);
-    }
-
-    /**
-     * 動態生成橈骨 (Radius) 並還原旋前/旋後剪刀交叉形變 (Pronation/Supination)
-     * @param {string} side - 'left' 或 'right'
-     * @param {number} twistAngle - 0 為完全旋後平行；PI 為完全旋前交叉
+     * 剛體橈骨斜軸旋前/旋後交叉解算 (Rigid-Body Anatomical Pronation/Supination)
+     * 0 為完全旋後 (掌心朝前 +Z，橈尺骨平行)；PI 為完全旋前 (掌心朝後 -Z，橈骨斜跨尺骨前方)
      */
     _updateRadiusMesh(side, twistAngle = 0) {
         const sign = (side === 'left') ? 1 : -1;
-        const radiusGroup = this.shoulderGirdle[side].radiusGroup;
-        if (!radiusGroup) return;
+        const rec = this.shoulderGirdle[side];
+        if (!rec) return;
+        rec.currentTwist = twistAngle;
 
-        // 清除先前的橈骨網格
-        while (radiusGroup.children.length > 0) {
-            const obj = radiusGroup.children[0];
-            radiusGroup.remove(obj);
-            if (obj.geometry) obj.geometry.dispose();
+        if (!rec.radiusGroup || !rec.radProxLocal || !rec.radDistRestLocal || !rec.ulnaDistLocal || !rec.wristRestLocal) {
+            return;
         }
 
-        const group = new THREE.Group();
-        group.name = `Radius_Dynamic_${side}`;
+        const A = rec.radProxLocal;
+        const U_dist = rec.ulnaDistLocal;
+        const R_dist_0 = rec.radDistRestLocal;
+        const W_0 = rec.wristRestLocal;
 
-        const radiusLen = 7.4;
-        const lateralOffsetX = sign * 0.45; // 近端橈骨頭位於外側 (拇指側)
+        const yAxis = new THREE.Vector3(0, 1, 0);
+        const rotAngle = -sign * twistAngle;
 
-        // 1. 橈骨頭 (Radial Head - 圓盤狀扁圓柱，在肱骨小頭與尺骨切跡處原地自轉)
-        const headGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.35, 12);
-        const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
-        headMesh.position.set(lateralOffsetX, 0.05, 0);
-        group.add(headMesh);
+        // 1. 繞遠端尺骨頭旋轉橈骨遠端，模擬真實「橈骨跨過尺骨前方」半圓弧運動
+        const R_dist_new = R_dist_0.clone().sub(U_dist).applyAxisAngle(yAxis, rotAngle).add(U_dist);
+        const vRest = R_dist_0.clone().sub(A);
+        const vNew = R_dist_new.clone().sub(A);
 
-        // 橈骨頸與橈骨粗隆 (Biceps Tuberosity)
-        const tuberosityGeo = new THREE.BoxGeometry(0.25, 0.45, 0.35);
-        const tuberosityMesh = new THREE.Mesh(tuberosityGeo, this.materials.bone);
-        tuberosityMesh.position.set(lateralOffsetX - sign * 0.12, -0.55, 0.08);
-        group.add(tuberosityMesh);
+        const qSwing = new THREE.Quaternion().setFromUnitVectors(vRest.normalize(), vNew.clone().normalize());
+        const qSpin = new THREE.Quaternion().setFromAxisAngle(vNew.normalize(), rotAngle);
+        rec.radiusGroup.quaternion.copy(qSpin).multiply(qSwing);
 
-        // 2. 橈骨遠端 (Distal Radius) 空間位置解算：
-        // 旋後 (twistAngle = 0)：橈骨遠端在平行外側 (X = lateral, Z = 0)
-        // 旋前 (twistAngle = PI)：橈骨遠端以手肘為軸向前內側翻轉，交叉跨過尺骨前方！
-        // 尺骨遠端位於 (-sign * 0.38, -radiusLen, 0)
-        const radiusArc = 0.88; // 翻轉半徑
-        const ulnarDistalX = -sign * 0.38;
-
-        // 遠端目標座標：繞尺骨做半圓弧翻轉
-        const distalX = ulnarDistalX + sign * (radiusArc * Math.cos(twistAngle));
-        const distalZ = radiusArc * Math.sin(twistAngle);
-
-        // 3. 橈骨幹三維空間弧形 (Lateral Bow)
-        // 即使交叉時，橈骨外弧也能避開尺骨骨幹，形成優美的剪刀弧度
-        const p0 = new THREE.Vector3(lateralOffsetX, -0.4, 0);
-        const midBowX = (lateralOffsetX + distalX) * 0.5 + sign * 0.35 * Math.cos(twistAngle * 0.5);
-        const midBowZ = (distalZ * 0.5) + 0.35 * Math.sin(twistAngle * 0.5);
-        const pMid = new THREE.Vector3(midBowX, -radiusLen * 0.48, midBowZ);
-        const pEnd = new THREE.Vector3(distalX, -radiusLen, distalZ);
-
-        const curve = new THREE.CatmullRomCurve3([p0, pMid, pEnd]);
-        const shaftGeo = new THREE.TubeGeometry(curve, 18, 0.28, 8, false);
-        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
-        shaftMesh.castShadow = true;
-        group.add(shaftMesh);
-
-        // 4. 橈骨遠端骨板與橈骨莖突 (Distal Radius Head & Radial Styloid)
-        const distalHeadGeo = new THREE.BoxGeometry(0.75, 0.65, 0.5);
-        const distalHeadMesh = new THREE.Mesh(distalHeadGeo, this.materials.boneHighlight);
-        distalHeadMesh.position.copy(pEnd);
-        distalHeadMesh.rotation.y = -sign * twistAngle;
-        group.add(distalHeadMesh);
-
-        const styloidGeo = new THREE.ConeGeometry(0.14, 0.5, 6);
-        const styloidMesh = new THREE.Mesh(styloidGeo, this.materials.boneHighlight);
-        styloidMesh.rotation.x = Math.PI;
-        styloidMesh.position.set(distalX + sign * 0.35 * Math.cos(twistAngle), -radiusLen - 0.3, distalZ + 0.35 * Math.sin(twistAngle));
-        group.add(styloidMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        const radiusBoneName = `${sideLabel} Radius`;
-        this._tagBone(group, radiusBoneName);
-        if (this.selectedBoneName === radiusBoneName) {
-            group.traverse(child => {
-                if (child.isMesh) child.material = this.materials.selectedBone;
-            });
-        }
-
-        radiusGroup.add(group);
-        this.shoulderGirdle[side].radiusMesh = group;
-
-        // 5. 手掌系統動態定位與前旋/後旋同步 (Hand Dynamic Coupling)
-        // 手腕關節面直接緊扣橈骨遠端 (Radiocarpal Joint)，掌心與五指隨橈骨旋前/後旋動態翻轉！
-        const handGroup = this.shoulderGirdle[side].handGroup;
-        if (handGroup) {
-            // 手腕關節線位於橈骨遠端下緣，留 0.35 單位生理關節間隙
-            handGroup.position.set(distalX, -radiusLen - 0.35, distalZ);
-            // 左手 (sign=+1) 與右手 (sign=-1) 繞 Y 軸鏡像對稱旋轉：
-            // 旋後 twist=0: 掌心朝前 (+Z)；半旋前 twist≈1.48: 拇指朝前 (+Z)、掌心朝向大腿內側；全旋前 twist=PI: 掌心朝後 (-Z)
-            handGroup.rotation.y = -sign * twistAngle;
+        // 2. 同步旋轉與定位手腕與手掌
+        if (rec.handGroup) {
+            const W_new = W_0.clone().sub(U_dist).applyAxisAngle(yAxis, rotAngle).add(U_dist);
+            rec.handGroup.position.copy(W_new);
+            rec.handGroup.rotation.y = rotAngle;
         }
     }
 
     /**
-     * 建立完整手部骨骼系統 (8塊腕骨 Carpals、5根掌骨 Metacarpals、14節指骨 Phalanges)
-     * 並構建關節鏈以支援自然放鬆 (Relaxed)、勝利剪刀手 (Peace)、握拳 (Fist)、平展 (Open) 等藝用手勢姿態
-     */
-    _buildHandMesh(side, gesture = 'relaxed') {
-        const sign = (side === 'left') ? 1 : -1;
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        const group = new THREE.Group();
-        group.name = `Hand_${side}`;
-
-        // -------------------------------------------------------------
-        // 1. 腕骨群 (Carpal Bones - 8塊腕骨構成的穹窿腕弓 Carpal Arch)
-        // -------------------------------------------------------------
-        const carpalGroup = new THREE.Group();
-        carpalGroup.name = `Carpals_${side}`;
-        group.add(carpalGroup);
-
-        // 近側列 (Proximal row): 舟狀骨、月狀骨、三角骨、豆狀骨
-        // (1) 舟狀骨 (Scaphoid): 橈側承重主力，呈彎舟狀
-        const scaphoidGeo = new THREE.CylinderGeometry(0.20, 0.23, 0.58, 8);
-        const scaphoidMesh = new THREE.Mesh(scaphoidGeo, this.materials.bone);
-        scaphoidMesh.rotation.z = sign * 0.35;
-        scaphoidMesh.rotation.y = 0.2;
-        scaphoidMesh.position.set(sign * 0.38, -0.38, 0.0);
-        this._tagBone(scaphoidMesh, `${sideLabel} Scaphoid`);
-        carpalGroup.add(scaphoidMesh);
-
-        // 舟狀骨粗隆 (Scaphoid Tubercle - 大魚際肌起點，掌側骨點)
-        const scaphoidTubercleGeo = new THREE.SphereGeometry(0.16, 8, 8);
-        const scaphoidTubercleMesh = new THREE.Mesh(scaphoidTubercleGeo, this.materials.boneHighlight);
-        scaphoidTubercleMesh.position.set(sign * 0.46, -0.48, 0.26);
-        this._tagBone(scaphoidTubercleMesh, `${sideLabel} Scaphoid`);
-        carpalGroup.add(scaphoidTubercleMesh);
-
-        // (2) 月狀骨 (Lunate): 位於橈腕關節正中切凹處，呈半月形
-        const lunateGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.50, 8);
-        const lunateMesh = new THREE.Mesh(lunateGeo, this.materials.bone);
-        lunateMesh.rotation.x = Math.PI * 0.5;
-        lunateMesh.position.set(sign * 0.02, -0.34, -0.02);
-        this._tagBone(lunateMesh, `${sideLabel} Lunate`);
-        carpalGroup.add(lunateMesh);
-
-        // (3) 三角骨 (Triquetrum): 位於尺側，呈錐形
-        const triquetrumGeo = new THREE.BoxGeometry(0.35, 0.44, 0.38);
-        const triquetrumMesh = new THREE.Mesh(triquetrumGeo, this.materials.bone);
-        triquetrumMesh.position.set(-sign * 0.38, -0.38, -0.05);
-        this._tagBone(triquetrumMesh, `${sideLabel} Triquetrum`);
-        carpalGroup.add(triquetrumMesh);
-
-        // (4) 豆狀骨 (Pisiform - 極其重要的藝用表面骨點，位於手腕尺側掌面最突出處！)
-        const pisiformGeo = new THREE.SphereGeometry(0.20, 10, 10);
-        const pisiformMesh = new THREE.Mesh(pisiformGeo, this.materials.boneHighlight);
-        pisiformMesh.scale.set(1.0, 1.25, 0.9);
-        pisiformMesh.position.set(-sign * 0.44, -0.52, 0.30);
-        this._tagBone(pisiformMesh, `${sideLabel} Pisiform`);
-        carpalGroup.add(pisiformMesh);
-        this._addLandmark(`Pisiform_${side}`, pisiformMesh.position.clone(), group);
-
-        // 遠側列 (Distal row): 大多角骨、小多角骨、頭狀骨、鉤骨
-        // (5) 大多角骨 (Trapezium): 具備馬鞍狀關節面，連接第一掌骨實現拇指對掌
-        const trapeziumGeo = new THREE.BoxGeometry(0.38, 0.40, 0.40);
-        const trapeziumMesh = new THREE.Mesh(trapeziumGeo, this.materials.bone);
-        trapeziumMesh.position.set(sign * 0.48, -0.72, 0.12);
-        this._tagBone(trapeziumMesh, `${sideLabel} Trapezium`);
-        carpalGroup.add(trapeziumMesh);
-
-        // (6) 小多角骨 (Trapezoid): 楔形嵌入第二掌骨底
-        const trapezoidGeo = new THREE.BoxGeometry(0.30, 0.40, 0.34);
-        const trapezoidMesh = new THREE.Mesh(trapezoidGeo, this.materials.bone);
-        trapezoidMesh.position.set(sign * 0.24, -0.75, 0.02);
-        this._tagBone(trapezoidMesh, `${sideLabel} Trapezoid`);
-        carpalGroup.add(trapezoidMesh);
-
-        // (7) 頭狀骨 (Capitate - 最大的腕骨，腕弓拱頂石，支撐第三掌骨)
-        const capitateGeo = new THREE.BoxGeometry(0.42, 0.50, 0.42);
-        const capitateMesh = new THREE.Mesh(capitateGeo, this.materials.bone);
-        capitateMesh.position.set(sign * 0.02, -0.78, 0.04);
-        this._tagBone(capitateMesh, `${sideLabel} Capitate`);
-        carpalGroup.add(capitateMesh);
-
-        // (8) 鉤骨 (Hamate): 支撐第四、五掌骨
-        const hamateGeo = new THREE.BoxGeometry(0.38, 0.44, 0.38);
-        const hamateMesh = new THREE.Mesh(hamateGeo, this.materials.bone);
-        hamateMesh.position.set(-sign * 0.30, -0.75, 0.0);
-        this._tagBone(hamateMesh, `${sideLabel} Hamate`);
-        carpalGroup.add(hamateMesh);
-
-        // 鉤骨鉤 (Hook of Hamate - 掌側突出骨鉤)
-        const hamateHookGeo = new THREE.ConeGeometry(0.10, 0.30, 6);
-        const hamateHookMesh = new THREE.Mesh(hamateHookGeo, this.materials.boneHighlight);
-        hamateHookMesh.rotation.x = Math.PI * 0.5;
-        hamateHookMesh.position.set(-sign * 0.30, -0.80, 0.25);
-        this._tagBone(hamateHookMesh, `${sideLabel} Hamate`);
-        carpalGroup.add(hamateHookMesh);
-
-        // -------------------------------------------------------------
-        // 2. 掌骨群 (Metacarpals 1 to 5)
-        // -------------------------------------------------------------
-        const mcGroup = new THREE.Group();
-        mcGroup.name = `Metacarpals_${side}`;
-        group.add(mcGroup);
-
-        const mcConfigs = [
-            { name: 'Thumb',  ordinal: 'First',  base: new THREE.Vector3(sign * 0.48, -0.75, 0.14),  len: 1.60, latDeg: sign * 36, palmarDeg: 22, radShaft: 0.16, headScale: 0.22 },
-            { name: 'Index',  ordinal: 'Second', base: new THREE.Vector3(sign * 0.26, -0.82, 0.02),  len: 2.10, latDeg: sign * 6,  palmarDeg: 4,  radShaft: 0.14, headScale: 0.22 },
-            { name: 'Middle', ordinal: 'Third',  base: new THREE.Vector3(sign * 0.02, -0.85, 0.04),  len: 2.25, latDeg: 0,         palmarDeg: 2,  radShaft: 0.15, headScale: 0.24 },
-            { name: 'Ring',   ordinal: 'Fourth', base: new THREE.Vector3(-sign * 0.18, -0.82, 0.02), len: 2.05, latDeg: -sign * 5, palmarDeg: 4,  radShaft: 0.13, headScale: 0.21 },
-            { name: 'Little', ordinal: 'Fifth',  base: new THREE.Vector3(-sign * 0.36, -0.75, -0.02),len: 1.75, latDeg: -sign * 12,palmarDeg: 6,  radShaft: 0.12, headScale: 0.20 },
-        ];
-
-        const mcpJoints = {};
-
-        mcConfigs.forEach(mc => {
-            const sRad = THREE.MathUtils.degToRad(mc.latDeg);
-            const pRad = THREE.MathUtils.degToRad(mc.palmarDeg);
-            const dx = Math.sin(sRad);
-            const dz = Math.sin(pRad);
-            const dy = -Math.sqrt(Math.max(0.001, 1.0 - dx * dx - dz * dz));
-            const dir = new THREE.Vector3(dx, dy, dz).normalize();
-
-            const mcpPos = new THREE.Vector3().copy(mc.base).addScaledVector(dir, mc.len);
-            mcpJoints[mc.name] = { mcpPos, dir, mc };
-            const mcBoneName = `${sideLabel} ${mc.ordinal} Metacarpal`;
-
-            // 掌骨骨幹 (Metacarpal Shaft: 微具掌側凹曲度的管狀骨)
-            const midP = new THREE.Vector3().copy(mc.base).addScaledVector(dir, mc.len * 0.5);
-            midP.z += (mc.name === 'Thumb' ? 0.08 : 0.04); // 掌側生理弧度
-            const mcCurve = new THREE.CatmullRomCurve3([mc.base, midP, mcpPos]);
-            const shaftGeo = new THREE.TubeGeometry(mcCurve, 8, mc.radShaft, 8, false);
-            const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
-            shaftMesh.castShadow = true;
-            this._tagBone(shaftMesh, mcBoneName);
-            mcGroup.add(shaftMesh);
-
-            // 掌骨頭 (MCP Knuckle: 拳頭握緊時突出的指節骨點)
-            const knuckleGeo = new THREE.SphereGeometry(mc.headScale, 10, 10);
-            const knuckleMesh = new THREE.Mesh(knuckleGeo, this.materials.boneHighlight);
-            knuckleMesh.position.copy(mcpPos);
-            this._tagBone(knuckleMesh, mcBoneName);
-            mcGroup.add(knuckleMesh);
-
-            if (mc.name === 'Thumb' || mc.name === 'Index' || mc.name === 'Middle') {
-                this._addLandmark(`MCP_${mc.name}_${side}`, mcpPos.clone(), group);
-            }
-        });
-
-        // -------------------------------------------------------------
-        // 3. 指骨群 (Phalanges - 拇指2節，食/中/無名/小指各3節，共14節)
-        // 構建層級旋轉關節鏈 (MCP -> PIP -> DIP)，支援動態曲折手勢
-        // -------------------------------------------------------------
-        const phalangesGroup = new THREE.Group();
-        phalangesGroup.name = `Phalanges_${side}`;
-        group.add(phalangesGroup);
-
-        const fingerConfigs = [
-            { name: 'Thumb',  fullLabel: 'Thumb',         pLen: 1.05, mLen: 0,    dLen: 0.80, pRad: 0.14, dRad: 0.12, tuft: [0.22, 0.18, 0.12] },
-            { name: 'Index',  fullLabel: 'Index Finger',  pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
-            { name: 'Middle', fullLabel: 'Middle Finger', pLen: 1.15, mLen: 0.75, dLen: 0.55, pRad: 0.14, mRad: 0.12, dRad: 0.10, tuft: [0.19, 0.15, 0.09] },
-            { name: 'Ring',   fullLabel: 'Ring Finger',   pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
-            { name: 'Little', fullLabel: 'Little Finger', pLen: 0.80, mLen: 0.52, dLen: 0.40, pRad: 0.11, mRad: 0.09, dRad: 0.07, tuft: [0.15, 0.12, 0.07] },
-        ];
-
-        const joints = {};
-
-        fingerConfigs.forEach(fc => {
-            const { mcpPos, dir } = mcpJoints[fc.name];
-            const proxBoneName = `${sideLabel} Proximal Phalanx of ${fc.fullLabel}`;
-            const midBoneName = `${sideLabel} Middle Phalanx of ${fc.fullLabel}`;
-            const distBoneName = `${sideLabel} Distal Phalanx of ${fc.fullLabel}`;
-
-            // 掌指關節 (MCP Joint Group)
-            const mcpJoint = new THREE.Group();
-            mcpJoint.name = `MCP_Joint_${fc.name}_${side}`;
-            mcpJoint.position.copy(mcpPos);
-            // 朝向指骨延伸向量
-            mcpJoint.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), dir);
-
-            if (fc.name === 'Thumb') {
-                // 拇指對掌生理偏轉角 (Opposition)
-                mcpJoint.rotation.y += sign * 0.55;
-                mcpJoint.rotation.z += sign * 0.45;
-            }
-
-            phalangesGroup.add(mcpJoint);
-
-            // 近節指骨 (Proximal Phalanx)
-            const pShaftGeo = new THREE.CylinderGeometry(fc.pRad * 0.85, fc.pRad, fc.pLen, 8);
-            const pShaftMesh = new THREE.Mesh(pShaftGeo, this.materials.bone);
-            pShaftMesh.position.set(0, -fc.pLen * 0.5, 0);
-            this._tagBone(pShaftMesh, proxBoneName);
-            mcpJoint.add(pShaftMesh);
-
-            // 近端指間關節 (PIP Joint Group / 拇指為 IP 關節)
-            const pipJoint = new THREE.Group();
-            pipJoint.name = `PIP_Joint_${fc.name}_${side}`;
-            pipJoint.position.set(0, -fc.pLen, 0);
-            mcpJoint.add(pipJoint);
-
-            const pipKnuckleGeo = new THREE.SphereGeometry(fc.pRad * 1.1, 8, 8);
-            const pipKnuckleMesh = new THREE.Mesh(pipKnuckleGeo, this.materials.boneHighlight);
-            this._tagBone(pipKnuckleMesh, fc.mLen > 0 ? midBoneName : distBoneName);
-            pipJoint.add(pipKnuckleMesh);
-
-            let dipJoint = null;
-
-            if (fc.mLen > 0) {
-                // 2-5 指具備中節指骨 (Middle Phalanx)
-                const mShaftGeo = new THREE.CylinderGeometry(fc.mRad * 0.85, fc.mRad, fc.mLen, 8);
-                const mShaftMesh = new THREE.Mesh(mShaftGeo, this.materials.bone);
-                mShaftMesh.position.set(0, -fc.mLen * 0.5, 0);
-                this._tagBone(mShaftMesh, midBoneName);
-                pipJoint.add(mShaftMesh);
-
-                // 遠端指間關節 (DIP Joint Group)
-                dipJoint = new THREE.Group();
-                dipJoint.name = `DIP_Joint_${fc.name}_${side}`;
-                dipJoint.position.set(0, -fc.mLen, 0);
-                pipJoint.add(dipJoint);
-
-                const dipKnuckleGeo = new THREE.SphereGeometry(fc.mRad * 1.05, 8, 8);
-                const dipKnuckleMesh = new THREE.Mesh(dipKnuckleGeo, this.materials.boneHighlight);
-                this._tagBone(dipKnuckleMesh, distBoneName);
-                dipJoint.add(dipKnuckleMesh);
-
-                // 遠節指骨 (Distal Phalanx)
-                const dShaftGeo = new THREE.CylinderGeometry(fc.dRad * 0.8, fc.dRad, fc.dLen, 8);
-                const dShaftMesh = new THREE.Mesh(dShaftGeo, this.materials.bone);
-                dShaftMesh.position.set(0, -fc.dLen * 0.5, 0);
-                this._tagBone(dShaftMesh, distBoneName);
-                dipJoint.add(dShaftMesh);
-
-                // 指甲粗隆 / 指尖膨大部 (Ungual Tuberosity)
-                const tuftGeo = new THREE.BoxGeometry(...fc.tuft);
-                const tuftMesh = new THREE.Mesh(tuftGeo, this.materials.boneHighlight);
-                tuftMesh.position.set(0, -fc.dLen, 0);
-                this._tagBone(tuftMesh, distBoneName);
-                dipJoint.add(tuftMesh);
-            } else {
-                // 拇指僅有遠節指骨
-                const dShaftGeo = new THREE.CylinderGeometry(fc.dRad * 0.85, fc.dRad, fc.dLen, 8);
-                const dShaftMesh = new THREE.Mesh(dShaftGeo, this.materials.bone);
-                dShaftMesh.position.set(0, -fc.dLen * 0.5, 0);
-                this._tagBone(dShaftMesh, distBoneName);
-                pipJoint.add(dShaftMesh);
-
-                const tuftGeo = new THREE.BoxGeometry(...fc.tuft);
-                const tuftMesh = new THREE.Mesh(tuftGeo, this.materials.boneHighlight);
-                tuftMesh.position.set(0, -fc.dLen, 0);
-                this._tagBone(tuftMesh, distBoneName);
-                pipJoint.add(tuftMesh);
-            }
-
-            joints[fc.name] = { mcpJoint, pipJoint, dipJoint, name: fc.name };
-        });
-
-        // 應用手勢初始姿態
-        this._applyHandGestureDirect(joints, side, gesture);
-
-        return { mesh: group, joints };
-    }
-
-    /**
-     * 驅動手部關節鏈達成各種藝用姿態 (Relaxed, Peace/Victory, Fist, Open)
-     */
-    /**
-     * 驅動手部關節鏈達成各種藝用姿態或 21 節點連續自適應指骨角度
-     * @param {Object} joints 手部關節字典
-     * @param {string} side 'left' | 'right'
-     * @param {string|Object} gesture 手勢名稱 (字串) 或 逐指連續角度字典 (物件)
+     * 驅動手部 14 節可動指骨達成預設計手勢或 MediaPipe 21 節點連續指角
      */
     _applyHandGestureDirect(joints, side, gesture = 'relaxed') {
+        if (!joints) return;
         const sign = (side === 'left') ? 1 : -1;
         const GESTURES = {
-            relaxed: { // 自然放鬆微屈曲手勢
-                Thumb:  { mcp: 0.15, pip: 0.22, dip: 0.15, spread: 0 },
-                Index:  { mcp: 0.15, pip: 0.25, dip: 0.15, spread: 0 },
-                Middle: { mcp: 0.20, pip: 0.32, dip: 0.18, spread: 0 },
-                Ring:   { mcp: 0.25, pip: 0.38, dip: 0.20, spread: 0 },
-                Little: { mcp: 0.30, pip: 0.45, dip: 0.22, spread: 0 }
+            relaxed: {
+                Thumb:  { mcp: 0.18, pip: 0.25, dip: 0.15, spread: 0 },
+                Index:  { mcp: 0.18, pip: 0.30, dip: 0.20, spread: 0 },
+                Middle: { mcp: 0.20, pip: 0.34, dip: 0.22, spread: 0 },
+                Ring:   { mcp: 0.24, pip: 0.38, dip: 0.24, spread: 0 },
+                Little: { mcp: 0.28, pip: 0.42, dip: 0.26, spread: 0 }
             },
-            point: { // 食指指向 / 手槍姿態 (食指完全伸展，其餘手指與拇指自然曲折)
+            point: {
                 Thumb:  { mcp: 0.65, pip: 0.95, dip: 0.55, spread: sign * 0.10 },
                 Index:  { mcp: 0.02, pip: 0.03, dip: 0.02, spread: sign * 0.04 },
                 Middle: { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },
                 Ring:   { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
                 Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }
             },
-            peace: { // 剪刀手 / 勝利手勢 (食指與中指伸直呈V字張開，拇指與無名指小指彎曲緊握)
+            peace: {
                 Thumb:  { mcp: 0.70, pip: 1.05, dip: 0.60, spread: 0 },
-                Index:  { mcp: 0.02, pip: 0.04, dip: 0.02, spread: sign * 0.12 },  // 伸直微外張
-                Middle: { mcp: 0.02, pip: 0.04, dip: 0.02, spread: -sign * 0.12 }, // 伸直微內張
-                Ring:   { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },             // 緊密屈曲
-                Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }              // 緊密屈曲
+                Index:  { mcp: 0.02, pip: 0.04, dip: 0.02, spread: sign * 0.12 },
+                Middle: { mcp: 0.02, pip: 0.04, dip: 0.02, spread: -sign * 0.12 },
+                Ring:   { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },
+                Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }
             },
-            thumbsUp: { // 大拇指比讚 (大拇指豎立，四指握緊)
+            thumbsUp: {
                 Thumb:  { mcp: 0.05, pip: 0.05, dip: 0.05, spread: sign * 0.25 },
                 Index:  { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },
                 Middle: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
                 Ring:   { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
                 Little: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 }
             },
-            ok: { // OK 手勢 (拇指與食指指尖相碰成環，中指無名指小指張開)
+            ok: {
                 Thumb:  { mcp: 0.65, pip: 0.85, dip: 0.50, spread: sign * 0.05 },
                 Index:  { mcp: 0.75, pip: 1.05, dip: 0.65, spread: 0 },
                 Middle: { mcp: 0.05, pip: 0.05, dip: 0.05, spread: 0 },
                 Ring:   { mcp: 0.05, pip: 0.05, dip: 0.05, spread: -sign * 0.06 },
                 Little: { mcp: 0.05, pip: 0.05, dip: 0.05, spread: -sign * 0.12 }
             },
-            open: { // 五指伸展張開
-                Thumb:  { mcp: 0.05, pip: 0.05, dip: 0.05, spread: sign * 0.15 },
+            open: {
+                Thumb:  { mcp: 0.02, pip: 0.02, dip: 0.02, spread: sign * 0.15 },
                 Index:  { mcp: 0.00, pip: 0.00, dip: 0.00, spread: sign * 0.08 },
                 Middle: { mcp: 0.00, pip: 0.00, dip: 0.00, spread: 0 },
                 Ring:   { mcp: 0.00, pip: 0.00, dip: 0.00, spread: -sign * 0.08 },
                 Little: { mcp: 0.00, pip: 0.00, dip: 0.00, spread: -sign * 0.15 }
             },
-            fist: { // 緊密握拳 (拳頭姿態)
+            fist: {
                 Thumb:  { mcp: 0.95, pip: 1.35, dip: 0.90, spread: 0 },
                 Index:  { mcp: 1.45, pip: 1.65, dip: 1.10, spread: 0 },
                 Middle: { mcp: 1.50, pip: 1.70, dip: 1.15, spread: 0 },
@@ -1431,812 +1057,117 @@ export class AnatomicalTorso {
             ? gesture
             : (GESTURES[gesture] || GESTURES.relaxed);
 
+        // GLB 原始手部已帶有自然放鬆微屈弧度，扣除此基準偏移量讓各手勢完美貼合
+        const REST_MCP = 0.18;
+        const REST_PIP = 0.30;
+        const REST_DIP = 0.22;
+
         Object.keys(joints).forEach(fingerName => {
             const j = joints[fingerName];
-            const angles = config[fingerName] || { mcp: 0, pip: 0, dip: 0, spread: 0 };
+            const angles = config[fingerName] || { mcp: REST_MCP, pip: REST_PIP, dip: REST_DIP, spread: 0 };
 
-            if (j.mcpJoint) {
-                // X 軸負向旋轉即為掌側屈曲 (Flexion)
-                j.mcpJoint.rotation.x = -THREE.MathUtils.clamp(angles.mcp || 0, 0, 1.70);
-                if (angles.spread !== undefined) {
-                    j.mcpJoint.rotation.z = THREE.MathUtils.clamp(angles.spread || 0, -0.35, 0.35);
+            const targetMcp = THREE.MathUtils.clamp(angles.mcp || 0, 0, 1.70);
+            const targetPip = THREE.MathUtils.clamp(angles.pip || 0, 0, 1.85);
+            const targetDip = THREE.MathUtils.clamp(angles.dip || 0, 0, 1.55);
+
+            const dMcp = targetMcp - REST_MCP;
+            const dPip = targetPip - REST_PIP;
+            const dDip = targetDip - REST_DIP;
+
+            if (fingerName === 'Thumb') {
+                if (j.mcpJoint) {
+                    j.mcpJoint.rotation.x = -(dMcp * 0.65);
+                    j.mcpJoint.rotation.z = sign * (dMcp * 0.78) + THREE.MathUtils.clamp(angles.spread || 0, -0.35, 0.35);
                 }
-            }
-            if (j.pipJoint) {
-                j.pipJoint.rotation.x = -THREE.MathUtils.clamp(angles.pip || 0, 0, 1.85);
-            }
-            if (j.dipJoint) {
-                j.dipJoint.rotation.x = -THREE.MathUtils.clamp(angles.dip || 0, 0, 1.55);
+                if (j.pipJoint) {
+                    j.pipJoint.rotation.x = -(dPip * 0.55);
+                    j.pipJoint.rotation.z = sign * (dPip * 0.65);
+                }
+            } else {
+                if (j.mcpJoint) {
+                    j.mcpJoint.rotation.x = -dMcp;
+                    if (angles.spread !== undefined) {
+                        j.mcpJoint.rotation.z = THREE.MathUtils.clamp(angles.spread || 0, -0.35, 0.35);
+                    }
+                }
+                if (j.pipJoint) {
+                    j.pipJoint.rotation.x = -dPip;
+                }
+                if (j.dipJoint) {
+                    j.dipJoint.rotation.x = -dDip;
+                }
             }
         });
     }
 
     setHandGesture(side, gesture) {
-        if (!this.shoulderGirdle[side] || !this.shoulderGirdle[side].handJoints) return;
-        this.shoulderGirdle[side].currentGesture = (typeof gesture === 'string') ? gesture : 'custom';
-        this._applyHandGestureDirect(this.shoulderGirdle[side].handJoints, side, gesture);
+        if (!this.shoulderGirdle[side]) return;
+        this.shoulderGirdle[side].currentGesture = gesture;
+        if (this.shoulderGirdle[side].handJoints) {
+            this._applyHandGestureDirect(this.shoulderGirdle[side].handJoints, side, gesture);
+        }
     }
 
     setFingerAngles(side, fingerAngles) {
-        if (!this.shoulderGirdle[side] || !this.shoulderGirdle[side].handJoints) return;
-        this.shoulderGirdle[side].currentGesture = 'custom';
-        this._applyHandGestureDirect(this.shoulderGirdle[side].handJoints, side, fingerAngles);
-    }
-
-    _buildPelvis() {
-        const pelvisGroup = new THREE.Group();
-        pelvisGroup.name = "Bony_Pelvis";
-        this.pelvisUnit.add(pelvisGroup);
-
-        const sacrumMesh = this._createSacrumMesh();
-        sacrumMesh.position.set(0, 0, -0.6);
-        pelvisGroup.add(sacrumMesh);
-        this.pelvisBones.sacrum = sacrumMesh;
-
-        const coccyxMesh = this._createCoccyxMesh();
-        coccyxMesh.position.set(0, -4.5, -1.8);
-        pelvisGroup.add(coccyxMesh);
-        this.pelvisBones.coccyx = coccyxMesh;
-
-        ['left', 'right'].forEach(side => {
-            const hipBone = this._createInnominateBone(side);
-            pelvisGroup.add(hipBone);
-        });
-
-        const symphysisGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.2, 12);
-        const symphysisMesh = new THREE.Mesh(symphysisGeo, this.materials.cartilage);
-        symphysisMesh.name = "PubicSymphysis";
-        symphysisMesh.rotation.z = Math.PI * 0.5;
-        symphysisMesh.position.set(0, -3.8, 2.7);
-        symphysisMesh.userData.isCavityHole = true;
-        pelvisGroup.add(symphysisMesh);
-        this.pelvisBones.pubicSymphysis = symphysisMesh;
-
-        this._addLandmark("PubicSymphysisPoint", new THREE.Vector3(0, -3.8, 2.9), this.pelvisUnit);
-    }
-
-    _createSacrumMesh() {
-        const group = new THREE.Group();
-        group.name = "Sacrum";
-
-        const sacrumShape = new THREE.Shape();
-        sacrumShape.moveTo(-2.2, 0);
-        sacrumShape.lineTo(2.2, 0);
-        sacrumShape.lineTo(1.5, -2.2);
-        sacrumShape.lineTo(0.6, -4.2);
-        sacrumShape.lineTo(-0.6, -4.2);
-        sacrumShape.lineTo(-1.5, -2.2);
-        sacrumShape.closePath();
-
-        const extrudeSettings = { depth: 0.9, bevelEnabled: true, bevelSegments: 3, steps: 1, bevelSize: 0.15, bevelThickness: 0.15 };
-        const sacrumGeo = new THREE.ExtrudeGeometry(sacrumShape, extrudeSettings);
-        const sacrumMesh = new THREE.Mesh(sacrumGeo, this.materials.bone);
-        sacrumMesh.rotation.x = -0.22;
-        sacrumMesh.position.set(0, 0, -0.5);
-        sacrumMesh.castShadow = true;
-        group.add(sacrumMesh);
-
-        const crestGeo = new THREE.BoxGeometry(0.35, 3.8, 0.45);
-        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
-        crestMesh.rotation.x = -0.22;
-        crestMesh.position.set(0, -2.0, -0.6);
-        group.add(crestMesh);
-
-        return this._tagBone(group, "Sacrum");
-    }
-
-    _createCoccyxMesh() {
-        const group = new THREE.Group();
-        group.name = "Coccyx";
-
-        const points = [
-            new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, -0.6, 0.15),
-            new THREE.Vector3(0, -1.2, 0.4)
-        ];
-        const curve = new THREE.CatmullRomCurve3(points);
-        const geo = new THREE.TubeGeometry(curve, 8, 0.24, 6, false);
-        const mesh = new THREE.Mesh(geo, this.materials.bone);
-        group.add(mesh);
-
-        return this._tagBone(group, "Coccyx");
-    }
-
-    _createInnominateBone(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const hipGroup = new THREE.Group();
-        hipGroup.name = `HipBone_${side}`;
-
-        const iliumGroup = new THREE.Group();
-        iliumGroup.name = `Ilium_${side}`;
-
-        const pPSIS = new THREE.Vector3(sign * 2.0, 0.2, -1.2);
-        const pSummit = new THREE.Vector3(sign * 4.6, 0.8, 0.2);
-        const pASIS = new THREE.Vector3(sign * 3.8, -1.4, 2.6);
-
-        const crestCurve = new THREE.CatmullRomCurve3([pPSIS, pSummit, pASIS]);
-        const crestGeo = new THREE.TubeGeometry(crestCurve, 16, 0.25, 8, false);
-        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
-        crestMesh.castShadow = true;
-        iliumGroup.add(crestMesh);
-
-        const iliumShape = new THREE.Shape();
-        iliumShape.moveTo(sign * 2.0, 0.0);
-        iliumShape.lineTo(sign * 4.5, 0.6);
-        iliumShape.lineTo(sign * 3.8, -1.4);
-        iliumShape.lineTo(sign * 3.2, -3.2);
-        iliumShape.lineTo(sign * 1.8, -2.5);
-        iliumShape.closePath();
-
-        const wingGeo = new THREE.ExtrudeGeometry(iliumShape, { depth: 0.18, bevelEnabled: true, bevelSize: 0.08, bevelThickness: 0.08 });
-        const wingMesh = new THREE.Mesh(wingGeo, this.materials.pelvisWing);
-        wingMesh.position.set(0, 0, 0.2);
-        wingMesh.rotation.y = -sign * 0.15;
-        iliumGroup.add(wingMesh);
-
-        hipGroup.add(iliumGroup);
-        if (side === 'left') this.pelvisBones.iliumL = iliumGroup;
-        else this.pelvisBones.iliumR = iliumGroup;
-
-        this._addLandmark(`ASIS_${side}`, new THREE.Vector3(sign * 3.8, -1.4, 2.6), this.pelvisUnit);
-
-        const ischiumGroup = new THREE.Group();
-        ischiumGroup.name = `Ischium_${side}`;
-
-        const tuberosityGeo = new THREE.SphereGeometry(0.7, 10, 10);
-        const tuberosityMesh = new THREE.Mesh(tuberosityGeo, this.materials.boneHighlight);
-        tuberosityMesh.scale.set(1.0, 1.4, 0.8);
-        tuberosityMesh.position.set(sign * 2.6, -5.4, -0.6);
-        ischiumGroup.add(tuberosityMesh);
-
-        const ischialRamusP0 = new THREE.Vector3(sign * 2.6, -5.4, -0.6);
-        const ischialRamusP1 = new THREE.Vector3(sign * 1.6, -5.2, 1.2);
-        const ischialCurve = new THREE.CatmullRomCurve3([ischialRamusP0, ischialRamusP1]);
-        const ramusGeo = new THREE.TubeGeometry(ischialCurve, 8, 0.25, 6, false);
-        const ramusMesh = new THREE.Mesh(ramusGeo, this.materials.bone);
-        ischiumGroup.add(ramusMesh);
-
-        hipGroup.add(ischiumGroup);
-        if (side === 'left') this.pelvisBones.ischiumL = ischiumGroup;
-        else this.pelvisBones.ischiumR = ischiumGroup;
-
-        const pubisGroup = new THREE.Group();
-        pubisGroup.name = `Pubis_${side}`;
-
-        const pubicP0 = new THREE.Vector3(sign * 3.0, -3.2, 1.2);
-        const pubicP1 = new THREE.Vector3(sign * 1.5, -3.6, 2.4);
-        const pubicP2 = new THREE.Vector3(sign * 0.45, -3.8, 2.7);
-
-        const pubicCurve = new THREE.CatmullRomCurve3([pubicP0, pubicP1, pubicP2]);
-        const pubicGeo = new THREE.TubeGeometry(pubicCurve, 10, 0.25, 6, false);
-        const pubicMesh = new THREE.Mesh(pubicGeo, this.materials.bone);
-        pubisGroup.add(pubicMesh);
-
-        const infP0 = pubicP2;
-        const infP1 = ischialRamusP1;
-        const infCurve = new THREE.CatmullRomCurve3([infP0, infP1]);
-        const infGeo = new THREE.TubeGeometry(infCurve, 8, 0.22, 6, false);
-        const infMesh = new THREE.Mesh(infGeo, this.materials.bone);
-        pubisGroup.add(infMesh);
-
-        hipGroup.add(pubisGroup);
-        if (side === 'left') this.pelvisBones.pubisL = pubisGroup;
-        else this.pelvisBones.pubisR = pubisGroup;
-
-        const acetabulumGeo = new THREE.CylinderGeometry(0.75, 0.85, 0.45, 14);
-        const acetabulumMesh = new THREE.Mesh(acetabulumGeo, this.materials.bone);
-        acetabulumMesh.name = `Acetabulum_${side}`;
-        acetabulumMesh.rotation.z = Math.PI * 0.5;
-        acetabulumMesh.position.set(sign * 3.6, -3.4, 0.6);
-        hipGroup.add(acetabulumMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(hipGroup, `${sideLabel} Hip Bone`);
-    }
-
-    _createClavicleMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Clavicle_${side}`;
-
-        // 鎖骨起自胸鎖關節 (0,0,0)，呈經典人體雙曲「S」形走向肩胛岡肩峰端
-        // 內側 2/3 前凸微隆起，外側 1/3 後凹走向後背肩峰 (3.85, -0.40, -5.10)
-        const p0 = new THREE.Vector3(0, 0, 0);
-        const p1 = new THREE.Vector3(sign * 1.5, 0.12, 0.20);
-        const p2 = new THREE.Vector3(sign * 2.8, -0.10, -2.5);
-        const p3 = new THREE.Vector3(sign * 3.85, -0.40, -5.10);
-
-        const curve = new THREE.CatmullRomCurve3([p0, p1, p2, p3]);
-        const tubeGeo = new THREE.TubeGeometry(curve, 24, 0.22, 10, false);
-        const mesh = new THREE.Mesh(tubeGeo, this.materials.boneHighlight);
-        mesh.castShadow = true;
-        group.add(mesh);
-
-        // 胸骨端關節頭 (Sternal End)
-        const headGeo = new THREE.SphereGeometry(0.35, 10, 10);
-        const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
-        headMesh.scale.set(1.1, 1.2, 1.1);
-        group.add(headMesh);
-
-        // 肩峰端扁平關節面 (Acromial End)
-        const acromialHeadGeo = new THREE.SphereGeometry(0.32, 10, 10);
-        const acromialHead = new THREE.Mesh(acromialHeadGeo, this.materials.boneHighlight);
-        acromialHead.position.copy(p3);
-        acromialHead.scale.set(1.1, 0.7, 1.1);
-        group.add(acromialHead);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Clavicle`);
-    }
-
-    _createScapulaMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Scapula_${side}`;
-
-        // 1. 肩峰 (Acromion Process) - 位於肩胛骨頂外側，與鎖骨外側端精密咬合形成 AC Joint
-        const acromionGeo = new THREE.BoxGeometry(0.85, 0.32, 1.2);
-        const acromionMesh = new THREE.Mesh(acromionGeo, this.materials.boneHighlight);
-        acromionMesh.position.set(0, 0, 0.3);
-        group.add(acromionMesh);
-
-        // 2. 肩胛岡 (Spine of Scapula) - 從肩峰向脊椎內下方橫越肩胛骨背側
-        const spineP0 = new THREE.Vector3(0, 0, 0.3);
-        const spineP1 = new THREE.Vector3(-sign * 1.6, -0.35, -0.1);
-        const spineP2 = new THREE.Vector3(-sign * 3.4, -0.85, -0.2);
-
-        const spineCurve = new THREE.CatmullRomCurve3([spineP0, spineP1, spineP2]);
-        const spineGeo = new THREE.TubeGeometry(spineCurve, 14, 0.20, 8, false);
-        const spineMesh = new THREE.Mesh(spineGeo, this.materials.boneHighlight);
-        spineMesh.castShadow = true;
-        group.add(spineMesh);
-
-        // 3. 肩胛骨主體薄板 (Scapular Blade) - 三角形翼狀骨板，緊密平貼背部肋骨表面 (Z ~ -0.2)
-        const scapulaShape = new THREE.Shape();
-        scapulaShape.moveTo(0, 0);
-        scapulaShape.lineTo(-sign * 3.6, -0.8);  // 上角 (Superior Angle)
-        scapulaShape.lineTo(-sign * 3.0, -5.2);  // 下角 (Inferior Angle, 達第7肋水準)
-        scapulaShape.lineTo(0.3, -2.4);          // 外側緣 (Lateral Border)
-        scapulaShape.closePath();
-
-        const extrudeSettings = { depth: 0.16, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.05, bevelThickness: 0.05 };
-        const bladeGeo = new THREE.ExtrudeGeometry(scapulaShape, extrudeSettings);
-        const bladeMesh = new THREE.Mesh(bladeGeo, this.materials.bone);
-        bladeMesh.position.set(0, -0.3, -0.2);
-        group.add(bladeMesh);
-
-        // 4. 肩臼 (Glenoid Fossa) - 承接肱骨頭
-        const glenoidGeo = new THREE.CylinderGeometry(0.55, 0.62, 0.4, 12);
-        const glenoidMesh = new THREE.Mesh(glenoidGeo, this.materials.bone);
-        glenoidMesh.rotation.z = Math.PI * 0.5;
-        glenoidMesh.position.set(sign * 0.35, -1.1, 0.2);
-        group.add(glenoidMesh);
-
-        // 5. 喙突 (Coracoid Process) - 從肩胛頸向前外側突起
-        const coracoidGeo = new THREE.CylinderGeometry(0.18, 0.22, 0.75, 8);
-        const coracoidMesh = new THREE.Mesh(coracoidGeo, this.materials.boneHighlight);
-        coracoidMesh.rotation.x = Math.PI * 0.38;
-        coracoidMesh.position.set(sign * 0.1, -0.5, 0.65);
-        group.add(coracoidMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Scapula`);
-    }
-
-    _createHumerusMesh(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Humerus_${side}`;
-
-        const headGeo = new THREE.SphereGeometry(0.68, 16, 16);
-        const headMesh = new THREE.Mesh(headGeo, this.materials.bone);
-        headMesh.position.set(-sign * 0.15, 0.15, 0);
-        group.add(headMesh);
-
-        const tuberGeo = new THREE.BoxGeometry(0.65, 0.7, 0.7);
-        const tuberMesh = new THREE.Mesh(tuberGeo, this.materials.bone);
-        tuberMesh.position.set(sign * 0.42, 0.1, 0);
-        group.add(tuberMesh);
-
-        const armLength = 8.5;
-        const shaftGeo = new THREE.CylinderGeometry(0.36, 0.4, armLength, 12);
-        const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
-        shaftMesh.position.set(0, -armLength * 0.5, 0);
-        shaftMesh.castShadow = true;
-        group.add(shaftMesh);
-
-        const elbowGeo = new THREE.BoxGeometry(1.3, 0.7, 0.8);
-        const elbowMesh = new THREE.Mesh(elbowGeo, this.materials.bone);
-        elbowMesh.position.set(0, -armLength, 0);
-        group.add(elbowMesh);
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Humerus`);
-    }
-
-    _createVertebraMesh(name, width, height, type) {
-        const group = new THREE.Group();
-        group.name = `Vertebra_${name}`;
-
-        const bodyGeo = new THREE.CylinderGeometry(width * 0.48, width * 0.5, height * 0.72, 16);
-        const bodyMesh = new THREE.Mesh(bodyGeo, this.materials.bone);
-        bodyMesh.castShadow = true;
-        group.add(bodyMesh);
-
-        const discGeo = new THREE.CylinderGeometry(width * 0.49, width * 0.49, height * 0.25, 16);
-        const discMesh = new THREE.Mesh(discGeo, this.materials.disc);
-        discMesh.position.y = -height * 0.46;
-        group.add(discMesh);
-
-        const transGeo = new THREE.BoxGeometry(width * 1.5, height * 0.3, width * 0.4);
-        const transMesh = new THREE.Mesh(transGeo, this.materials.bone);
-        transMesh.position.set(0, 0, -width * 0.32);
-        group.add(transMesh);
-
-        const spinousLen = (type === 'thoracic') ? width * 1.2 : width * 0.8;
-        const spinousGeo = new THREE.ConeGeometry(width * 0.2, spinousLen, 8);
-        const spinousMesh = new THREE.Mesh(spinousGeo, this.materials.bone);
-        
-        if (type === 'thoracic') {
-            spinousMesh.rotation.x = Math.PI * 0.68;
-            spinousMesh.position.set(0, -height * 0.35, -width * 0.65 - spinousLen * 0.35);
-        } else {
-            spinousMesh.rotation.x = Math.PI * 0.5;
-            spinousMesh.position.set(0, 0, -width * 0.5 - spinousLen * 0.35);
+        if (!this.shoulderGirdle[side]) return;
+        this.shoulderGirdle[side].currentGesture = fingerAngles;
+        if (this.shoulderGirdle[side].handJoints) {
+            this._applyHandGestureDirect(this.shoulderGirdle[side].handJoints, side, fingerAngles);
         }
-        group.add(spinousMesh);
-
-        let fullBoneName = `Vertebra ${name}`;
-        if (type === 'cervical') {
-            if (name === 'C1') fullBoneName = 'Cervical Vertebra C1 (Atlas)';
-            else if (name === 'C2') fullBoneName = 'Cervical Vertebra C2 (Axis)';
-            else fullBoneName = `Cervical Vertebra ${name}`;
-        } else if (type === 'thoracic') {
-            fullBoneName = `Thoracic Vertebra ${name}`;
-        } else if (type === 'lumbar') {
-            fullBoneName = `Lumbar Vertebra ${name}`;
-        }
-
-        return this._tagBone(group, fullBoneName);
-    }
-
-    _createRibWithSternumAttachment(ribNum, width, side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const group = new THREE.Group();
-        group.name = `Rib_${ribNum}_${side}`;
-
-        const isFloating = (ribNum >= 11);
-        const isFalse = (ribNum >= 8 && ribNum <= 10);
-
-        const pStart = new THREE.Vector3(sign * 0.85, 0, -0.4);
-        const pAngle = new THREE.Vector3(sign * (width * 0.7), -0.2, -1.1);
-
-        const dropY = Math.min(ribNum * 0.35, 2.4);
-        const pLateral = new THREE.Vector3(sign * width, -dropY * 0.6, 1.2);
-
-        let pAnterior;
-        if (isFloating) {
-            pAnterior = new THREE.Vector3(sign * (width * 0.75), -dropY * 0.85, 2.4);
-        } else if (isFalse) {
-            const subcostalX = sign * (1.8 + (10 - ribNum) * 0.5);
-            pAnterior = new THREE.Vector3(subcostalX, -dropY, 4.4);
-        } else {
-            const sternumY = -dropY + (8 - ribNum) * 0.25;
-            pAnterior = new THREE.Vector3(sign * 0.85, sternumY, 4.9);
-        }
-
-        const curve = new THREE.CatmullRomCurve3([pStart, pAngle, pLateral, pAnterior]);
-        const tubeRadius = (ribNum <= 2) ? 0.16 : 0.13;
-        const ribGeo = new THREE.TubeGeometry(curve, 18, tubeRadius, 8, false);
-        const ribMesh = new THREE.Mesh(ribGeo, this.materials.bone);
-        ribMesh.castShadow = true;
-        group.add(ribMesh);
-
-        if (!isFloating) {
-            let targetX = sign * 0.85;
-            let targetY = pAnterior.y + 0.2;
-            let targetZ = 5.0;
-
-            if (isFalse) {
-                targetX = sign * 1.0;
-                targetY = pAnterior.y + 0.6;
-                targetZ = 4.8;
-            }
-
-            const cartCurve = new THREE.CatmullRomCurve3([
-                pAnterior,
-                new THREE.Vector3((pAnterior.x + targetX) * 0.5, (pAnterior.y + targetY) * 0.5, 4.95),
-                new THREE.Vector3(targetX, targetY, targetZ)
-            ]);
-            const cartGeo = new THREE.TubeGeometry(cartCurve, 8, tubeRadius * 1.05, 8, false);
-            const cartMesh = new THREE.Mesh(cartGeo, this.materials.cartilage);
-            group.add(cartMesh);
-        }
-
-        const sideLabel = (side === 'left') ? 'Left' : 'Right';
-        return this._tagBone(group, `${sideLabel} Rib ${ribNum}`);
-    }
-
-    _createSternumMesh() {
-        const group = new THREE.Group();
-        group.name = "Sternum";
-
-        const manuGeo = new THREE.BoxGeometry(2.2, 1.8, 0.4);
-        const manuMesh = new THREE.Mesh(manuGeo, this.materials.bone);
-        manuMesh.position.y = 2.4;
-        group.add(manuMesh);
-
-        const bodyGeo = new THREE.BoxGeometry(1.6, 4.2, 0.35);
-        const bodyMesh = new THREE.Mesh(bodyGeo, this.materials.bone);
-        bodyMesh.position.y = -0.6;
-        group.add(bodyMesh);
-
-        const xiphGeo = new THREE.ConeGeometry(0.35, 1.0, 4);
-        const xiphMesh = new THREE.Mesh(xiphGeo, this.materials.cartilage);
-        xiphMesh.rotation.z = Math.PI;
-        xiphMesh.position.set(0, -3.2, 0);
-        group.add(xiphMesh);
-
-        return this._tagBone(group, "Sternum");
     }
 
     /**
-     * 建立舌骨 (Hyoid Bone - 位於下頜骨與喉部第 3 頸椎之間的馬蹄形獨立舌骨)
+     * 完整姿態驅動（含骨盆、腰椎、胸廓、肩帶、肱骨與前臂雙骨屈伸翻轉、下肢關節）
      */
-    _createHyoidMesh() {
-        const group = new THREE.Group();
-        group.name = "Hyoid_Bone";
+    setTorsoPose(poseParams) {
+        this._lastPose = { ...poseParams };
+        let {
+            pelvisRoll = 0,
+            pelvisPitch = 0,
+            pelvisYaw = 0,
+            thoracicPitch = 0,
+            thoracicYaw = 0,
+            thoracicRoll = 0,
+            lumbarPitch = 0,
+            lumbarYaw = 0,
+            lumbarRoll = 0,
+            cervicalPitch = 0,
+            cervicalYaw = 0,
+            headPitch = 0,
+            headYaw = 0,
+            headRoll = 0,
+            leftArmPitch = 0,
+            leftArmRoll = 0.12,
+            leftArmYaw = 0,
+            rightArmPitch = 0,
+            rightArmRoll = -0.12,
+            rightArmYaw = 0,
+            leftElbowFlex = 0.15,
+            leftForearmTwist = 1.48,
+            rightElbowFlex = 0.15,
+            rightForearmTwist = 1.48,
+            leftHandGesture = null,
+            rightHandGesture = null,
+            leftHandAngles = null,
+            rightHandAngles = null,
+            leftHipPitch = 0,
+            leftHipRoll = 0.08,
+            leftHipYaw = 0,
+            rightHipPitch = 0,
+            rightHipRoll = -0.08,
+            rightHipYaw = 0,
+            leftKneeFlex = 0.08,
+            rightKneeFlex = 0.08,
+            leftAnklePitch = -0.04,
+            leftAnkleYaw = 0.12,
+            leftAnkleRoll = 0,
+            rightAnklePitch = -0.04,
+            rightAnkleYaw = -0.12,
+            rightAnkleRoll = 0,
+            headToBodyRatio = null,
+            skullScale = null
+        } = poseParams;
 
-        // 馬蹄形舌骨體與左右大角 (Body & Greater Cornua of Hyoid)
-        const curve = new THREE.CatmullRomCurve3([
-            new THREE.Vector3(0.55, 0.08, -0.45),
-            new THREE.Vector3(0.42, 0.02, -0.05),
-            new THREE.Vector3(0.0, 0.0, 0.18),
-            new THREE.Vector3(-0.42, 0.02, -0.05),
-            new THREE.Vector3(-0.55, 0.08, -0.45)
-        ]);
-        const hyoidGeo = new THREE.TubeGeometry(curve, 14, 0.09, 6, false);
-        const hyoidMesh = new THREE.Mesh(hyoidGeo, this.materials.boneHighlight);
-        group.add(hyoidMesh);
-
-        return this._tagBone(group, "Hyoid Bone");
-    }
-
-    /**
-     * 建立完整 28 塊頭顱與耳內骨骼系統 (22 Skull Bones + 6 Auditory Ossicles)
-     * - 8 塊腦顱骨 (Cranium): Frontal, Left/Right Parietal, Left/Right Temporal, Occipital, Sphenoid, Ethmoid
-     * - 14 塊面顱骨 (Facial): Mandible, Left/Right Maxilla, Left/Right Zygomatic, Left/Right Nasal,
-     *   Left/Right Lacrimal, Left/Right Palatine, Left/Right Inferior Nasal Concha, Vomer
-     * - 6 塊聽小骨 (Auditory Ossicles): Left/Right Malleus, Left/Right Incus, Left/Right Stapes
-     */
-    _createSkullMesh() {
-        const group = new THREE.Group();
-        group.name = "Human_Skull";
-
-        // 1. 額骨 (Frontal Bone: 前額穹隆 + 眉弓隆起 + 眼眶上緣)
-        const frontalDomeGeo = new THREE.SphereGeometry(1.83, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.45);
-        const frontalDomeMesh = new THREE.Mesh(frontalDomeGeo, this.materials.bone);
-        frontalDomeMesh.scale.set(0.99, 1.08, 1.12);
-        frontalDomeMesh.rotation.x = 0.65;
-        frontalDomeMesh.position.set(0, 1.88, -0.22);
-        frontalDomeMesh.castShadow = true;
-        this._tagBone(frontalDomeMesh, "Frontal Bone");
-        group.add(frontalDomeMesh);
-
-        const browGeo = new THREE.BoxGeometry(2.25, 0.42, 0.65);
-        const browMesh = new THREE.Mesh(browGeo, this.materials.boneHighlight);
-        browMesh.position.set(0, 1.65, 1.30);
-        this._tagBone(browMesh, "Frontal Bone");
-        group.add(browMesh);
-
-        // 2. 左頂骨與右頂骨 (Left & Right Parietal Bones: 顱頂左右雙側穹隆)
-        const parietalLGeo = new THREE.SphereGeometry(1.85, 14, 12, -Math.PI * 0.5, Math.PI, 0, Math.PI * 0.58);
-        const parietalLMesh = new THREE.Mesh(parietalLGeo, this.materials.bone);
-        parietalLMesh.scale.set(1.0, 1.12, 1.20);
-        parietalLMesh.position.set(0.02, 1.86, -0.38);
-        parietalLMesh.castShadow = true;
-        this._tagBone(parietalLMesh, "Left Parietal Bone");
-        group.add(parietalLMesh);
-
-        const parietalRGeo = new THREE.SphereGeometry(1.85, 14, 12, Math.PI * 0.5, Math.PI, 0, Math.PI * 0.58);
-        const parietalRMesh = new THREE.Mesh(parietalRGeo, this.materials.bone);
-        parietalRMesh.scale.set(1.0, 1.12, 1.20);
-        parietalRMesh.position.set(-0.02, 1.86, -0.38);
-        parietalRMesh.castShadow = true;
-        this._tagBone(parietalRMesh, "Right Parietal Bone");
-        group.add(parietalRMesh);
-
-        // 3. 枕骨 (Occipital Bone: 後顱底與枕外隆凸)
-        const occBaseGeo = new THREE.SphereGeometry(1.48, 14, 10);
-        const occBaseMesh = new THREE.Mesh(occBaseGeo, this.materials.bone);
-        occBaseMesh.scale.set(1.02, 0.88, 1.05);
-        occBaseMesh.position.set(0, 1.20, -0.95);
-        this._tagBone(occBaseMesh, "Occipital Bone");
-        group.add(occBaseMesh);
-
-        const occiputGeo = new THREE.SphereGeometry(0.5, 8, 8);
-        const occiputMesh = new THREE.Mesh(occiputGeo, this.materials.boneHighlight);
-        occiputMesh.scale.set(1.1, 0.8, 0.9);
-        occiputMesh.position.set(0, 0.85, -1.65);
-        this._tagBone(occiputMesh, "Occipital Bone");
-        group.add(occiputMesh);
-
-        // 4. 左右顳骨與中耳三聽小骨 (Left & Right Temporal Bones + Malleus, Incus, Stapes)
-        [-1, 1].forEach(sign => {
-            const sideLabel = (sign === 1) ? 'Left' : 'Right';
-            const tempBoneName = `${sideLabel} Temporal Bone`;
-
-            // 顳骨鱗部與岩部 (Squamous & Petrous Temporal)
-            const tempGeo = new THREE.SphereGeometry(0.75, 12, 10);
-            const tempMesh = new THREE.Mesh(tempGeo, this.materials.bone);
-            tempMesh.scale.set(0.52, 0.92, 1.18);
-            tempMesh.position.set(sign * 1.52, 1.12, -0.45);
-            this._tagBone(tempMesh, tempBoneName);
-            group.add(tempMesh);
-
-            // 顳骨乳突 (Mastoid Process)
-            const mastoidGeo = new THREE.ConeGeometry(0.26, 0.55, 8);
-            const mastoidMesh = new THREE.Mesh(mastoidGeo, this.materials.boneHighlight);
-            mastoidMesh.rotation.x = Math.PI;
-            mastoidMesh.position.set(sign * 1.46, 0.45, -0.72);
-            this._tagBone(mastoidMesh, tempBoneName);
-            group.add(mastoidMesh);
-
-            // 顳骨顴突 (Zygomatic Process of Temporal Bone - 顴弓後半段)
-            const tempArchCurve = new THREE.CatmullRomCurve3([
-                new THREE.Vector3(sign * 1.72, 0.84, 0.08),
-                new THREE.Vector3(sign * 1.68, 0.82, -0.30),
-                new THREE.Vector3(sign * 1.62, 0.80, -0.65)
-            ]);
-            const tempArchGeo = new THREE.TubeGeometry(tempArchCurve, 6, 0.14, 6, false);
-            const tempArchMesh = new THREE.Mesh(tempArchGeo, this.materials.boneHighlight);
-            this._tagBone(tempArchMesh, tempBoneName);
-            group.add(tempArchMesh);
-
-            // 中耳聽小骨 (Auditory Ossicles: Malleus, Incus, Stapes - 位於外耳道口與鼓室處)
-            const malleusGeo = new THREE.SphereGeometry(0.11, 8, 8);
-            const malleusMesh = new THREE.Mesh(malleusGeo, this.materials.boneHighlight);
-            malleusMesh.position.set(sign * 1.66, 0.76, -0.40);
-            this._tagBone(malleusMesh, `${sideLabel} Malleus`);
-            group.add(malleusMesh);
-
-            const incusGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
-            const incusMesh = new THREE.Mesh(incusGeo, this.materials.bone);
-            incusMesh.position.set(sign * 1.56, 0.78, -0.48);
-            this._tagBone(incusMesh, `${sideLabel} Incus`);
-            group.add(incusMesh);
-
-            const stapesGeo = new THREE.TorusGeometry(0.08, 0.03, 6, 8);
-            const stapesMesh = new THREE.Mesh(stapesGeo, this.materials.boneHighlight);
-            stapesMesh.position.set(sign * 1.46, 0.76, -0.54);
-            this._tagBone(stapesMesh, `${sideLabel} Stapes`);
-            group.add(stapesMesh);
-        });
-
-        // 5. 蝶骨 (Sphenoid Bone: 顱底中央蝶鞍與兩側太陽穴蝶骨大翼 Greater Wings)
-        const sphenoidBodyGeo = new THREE.BoxGeometry(1.2, 0.45, 0.55);
-        const sphenoidBodyMesh = new THREE.Mesh(sphenoidBodyGeo, this.materials.bone);
-        sphenoidBodyMesh.position.set(0, 1.02, 0.35);
-        this._tagBone(sphenoidBodyMesh, "Sphenoid Bone");
-        group.add(sphenoidBodyMesh);
-
-        [-1, 1].forEach(sign => {
-            const wingGeo = new THREE.BoxGeometry(0.32, 0.62, 0.52);
-            const wingMesh = new THREE.Mesh(wingGeo, this.materials.boneHighlight);
-            wingMesh.position.set(sign * 1.48, 1.22, 0.38);
-            this._tagBone(wingMesh, "Sphenoid Bone");
-            group.add(wingMesh);
-        });
-
-        // 6. 篩骨 (Ethmoid Bone: 篩板、垂直板與兩側眼眶內壁篩骨紙板 Orbital Plates)
-        const ethmoidGeo = new THREE.BoxGeometry(0.52, 0.48, 0.55);
-        const ethmoidMesh = new THREE.Mesh(ethmoidGeo, this.materials.bone);
-        ethmoidMesh.position.set(0, 1.12, 1.08);
-        this._tagBone(ethmoidMesh, "Ethmoid Bone");
-        group.add(ethmoidMesh);
-
-        // 7. 雙側眼眶與淚骨 (Orbital Rims & Left/Right Lacrimal Bones)
-        [-1, 1].forEach(sign => {
-            const sideLabel = (sign === 1) ? 'Left' : 'Right';
-
-            const orbitRimGeo = new THREE.TorusGeometry(0.52, 0.15, 8, 14);
-            const orbitRimMesh = new THREE.Mesh(orbitRimGeo, this.materials.boneHighlight);
-            orbitRimMesh.position.set(sign * 0.82, 1.15, 1.35);
-            this._tagBone(orbitRimMesh, "Frontal Bone");
-            group.add(orbitRimMesh);
-
-            // 淚骨 (Lacrimal Bone: 眼眶內側前壁淚囊窩小骨)
-            const lacrimalGeo = new THREE.BoxGeometry(0.16, 0.36, 0.24);
-            const lacrimalMesh = new THREE.Mesh(lacrimalGeo, this.materials.boneHighlight);
-            lacrimalMesh.position.set(sign * 0.42, 1.10, 1.42);
-            this._tagBone(lacrimalMesh, `${sideLabel} Lacrimal Bone`);
-            group.add(lacrimalMesh);
-
-            const darkOrbitGeo = new THREE.CylinderGeometry(0.46, 0.35, 0.4, 10);
-            const darkOrbitMat = new THREE.MeshBasicMaterial({ color: 0x1a1512 });
-            const darkOrbitMesh = new THREE.Mesh(darkOrbitGeo, darkOrbitMat);
-            darkOrbitMesh.rotation.x = Math.PI * 0.5;
-            darkOrbitMesh.position.set(sign * 0.82, 1.15, 1.25);
-            darkOrbitMesh.userData.isCavityHole = true;
-            group.add(darkOrbitMesh);
-        });
-
-        // 8. 左右顴骨與顴弓前半段 (Left & Right Zygomatic Bones)
-        [-1, 1].forEach(sign => {
-            const sideLabel = (sign === 1) ? 'Left' : 'Right';
-            const zygoBoneName = `${sideLabel} Zygomatic Bone`;
-
-            const zygoGeo = new THREE.BoxGeometry(0.65, 0.72, 0.75);
-            const zygoMesh = new THREE.Mesh(zygoGeo, this.materials.boneHighlight);
-            zygoMesh.position.set(sign * 1.45, 0.90, 0.95);
-            this._tagBone(zygoMesh, zygoBoneName);
-            group.add(zygoMesh);
-
-            const archP0 = new THREE.Vector3(sign * 1.45, 0.90, 0.95);
-            const archP1 = new THREE.Vector3(sign * 1.74, 0.86, 0.50);
-            const archP2 = new THREE.Vector3(sign * 1.72, 0.84, 0.08);
-            const archCurve = new THREE.CatmullRomCurve3([archP0, archP1, archP2]);
-            const archGeo = new THREE.TubeGeometry(archCurve, 6, 0.14, 6, false);
-            const archMesh = new THREE.Mesh(archGeo, this.materials.boneHighlight);
-            this._tagBone(archMesh, zygoBoneName);
-            group.add(archMesh);
-        });
-
-        // 9. 左右鼻骨、梨狀孔、犁骨與下鼻甲 (Left/Right Nasal Bones, Vomer & Left/Right Inferior Nasal Conchae)
-        [-1, 1].forEach(sign => {
-            const sideLabel = (sign === 1) ? 'Left' : 'Right';
-            const nasalGeo = new THREE.BoxGeometry(0.16, 0.72, 0.28);
-            const nasalMesh = new THREE.Mesh(nasalGeo, this.materials.boneHighlight);
-            nasalMesh.rotation.x = -0.32;
-            nasalMesh.position.set(sign * 0.09, 1.18, 1.64);
-            this._tagBone(nasalMesh, `${sideLabel} Nasal Bone`);
-            group.add(nasalMesh);
-
-            // 下鼻甲 (Inferior Nasal Concha: 梨狀孔外側壁捲曲骨片)
-            const conchaGeo = new THREE.SphereGeometry(0.11, 8, 6);
-            const conchaMesh = new THREE.Mesh(conchaGeo, this.materials.boneHighlight);
-            conchaMesh.scale.set(0.6, 0.9, 1.8);
-            conchaMesh.position.set(sign * 0.15, 0.62, 1.42);
-            this._tagBone(conchaMesh, `${sideLabel} Inferior Nasal Concha`);
-            group.add(conchaMesh);
-        });
-
-        // 犁骨 (Vomer: 鼻腔正中下部骨性鼻中隔)
-        const vomerGeo = new THREE.BoxGeometry(0.06, 0.56, 0.45);
-        const vomerMesh = new THREE.Mesh(vomerGeo, this.materials.boneHighlight);
-        vomerMesh.position.set(0, 0.60, 1.44);
-        this._tagBone(vomerMesh, "Vomer");
-        group.add(vomerMesh);
-
-        const piriformGeo = new THREE.BoxGeometry(0.42, 0.70, 0.35);
-        const piriformMat = new THREE.MeshBasicMaterial({ color: 0x151110 });
-        const piriformMesh = new THREE.Mesh(piriformGeo, piriformMat);
-        piriformMesh.position.set(0, 0.65, 1.32);
-        piriformMesh.userData.isCavityHole = true;
-        group.add(piriformMesh);
-
-        // 10. 左右上頜骨與左右腭骨 (Left/Right Maxilla & Left/Right Palatine Bones)
-        const teethMat = new THREE.MeshStandardMaterial({ color: 0xfaf5ec, roughness: 0.25 });
-        [-1, 1].forEach(sign => {
-            const sideLabel = (sign === 1) ? 'Left' : 'Right';
-            const maxillaName = `${sideLabel} Maxilla`;
-
-            const maxillaGeo = new THREE.BoxGeometry(0.76, 0.80, 1.05);
-            const maxillaMesh = new THREE.Mesh(maxillaGeo, this.materials.bone);
-            maxillaMesh.position.set(sign * 0.39, 0.15, 1.05);
-            this._tagBone(maxillaMesh, maxillaName);
-            group.add(maxillaMesh);
-
-            const startAng = (sign === 1) ? 0 : -Math.PI * 0.45;
-            const upperTeethGeo = new THREE.CylinderGeometry(0.62, 0.68, 0.32, 6, 1, false, startAng, Math.PI * 0.45);
-            const upperTeethMesh = new THREE.Mesh(upperTeethGeo, teethMat);
-            upperTeethMesh.position.set(0, -0.20, 1.05);
-            this._tagBone(upperTeethMesh, maxillaName);
-            group.add(upperTeethMesh);
-
-            // 腭骨 (Palatine Bone: 上頜骨後方構成硬腭後 1/4 與鼻腔底壁的 L 形骨板)
-            const palatineGeo = new THREE.BoxGeometry(0.62, 0.26, 0.48);
-            const palatineMesh = new THREE.Mesh(palatineGeo, this.materials.boneHighlight);
-            palatineMesh.position.set(sign * 0.32, -0.05, 0.35);
-            this._tagBone(palatineMesh, `${sideLabel} Palatine Bone`);
-            group.add(palatineMesh);
-        });
-
-        // 11. 下頜骨系統 (Mandible: 下頜體、下頜角、下頜支與下巴頦結節)
-        const mandibleGroup = new THREE.Group();
-        mandibleGroup.name = "Mandible";
-
-        const chinGeo = new THREE.BoxGeometry(0.82, 0.62, 0.72);
-        const chinMesh = new THREE.Mesh(chinGeo, this.materials.boneHighlight);
-        chinMesh.position.set(0, -0.68, 1.25);
-        mandibleGroup.add(chinMesh);
-
-        const lowerTeethGeo = new THREE.CylinderGeometry(0.58, 0.63, 0.30, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
-        const lowerTeethMesh = new THREE.Mesh(lowerTeethGeo, teethMat);
-        lowerTeethMesh.position.set(0, -0.45, 1.02);
-        mandibleGroup.add(lowerTeethMesh);
-
-        [-1, 1].forEach(sign => {
-            const jawP0 = new THREE.Vector3(0, -0.68, 1.25);
-            const jawP1 = new THREE.Vector3(sign * 1.05, -0.60, 0.75);
-            const jawP2 = new THREE.Vector3(sign * 1.40, -0.25, -0.05);
-            const jawP3 = new THREE.Vector3(sign * 1.35, 0.55, -0.20);
-
-            const jawCurve = new THREE.CatmullRomCurve3([jawP0, jawP1, jawP2, jawP3]);
-            const jawGeo = new THREE.TubeGeometry(jawCurve, 12, 0.22, 6, false);
-            const jawMesh = new THREE.Mesh(jawGeo, this.materials.bone);
-            jawMesh.castShadow = true;
-            mandibleGroup.add(jawMesh);
-
-            const gonionGeo = new THREE.SphereGeometry(0.26, 6, 6);
-            const gonionMesh = new THREE.Mesh(gonionGeo, this.materials.boneHighlight);
-            gonionMesh.position.copy(jawP2);
-            mandibleGroup.add(gonionMesh);
-        });
-
-        this._tagBone(mandibleGroup, "Mandible");
-        group.add(mandibleGroup);
-        return group;
-    }
-
-    _addLandmark(_name, _localPos, _parent) {
-        // 關鍵藝用骨點功能已移除，不再建立隱藏球體網格
-    }
-
-    /**
-     * 完整姿態驅動（含骨盆、腰椎、胸廓、肩帶、肱骨與前臂雙骨屈伸翻轉）
-     */
-    setTorsoPose({
-        pelvisRoll = 0,
-        pelvisPitch = 0,
-        pelvisYaw = 0,
-        thoracicPitch = 0,
-        thoracicYaw = 0,
-        thoracicRoll = 0,
-        lumbarPitch = 0,
-        lumbarYaw = 0,
-        lumbarRoll = 0,
-        cervicalPitch = 0,
-        cervicalYaw = 0,
-        // 頭部與顱骨姿態 (Head Pose)
-        headPitch = 0,
-        headYaw = 0,
-        headRoll = 0,
-        leftArmPitch = 0,
-        leftArmRoll = 0.12,
-        leftArmYaw = 0,
-        rightArmPitch = 0,
-        rightArmRoll = -0.12,
-        rightArmYaw = 0,
-        // 前臂肘關節屈曲 (Flexion) 與 旋前/旋後 (Twist)
-        leftElbowFlex = 0.2,
-        leftForearmTwist = 0.3,
-        rightElbowFlex = 0.2,
-        rightForearmTwist = 0.3,
-        // 手部姿態手勢與 21 節點連續角度
-        leftHandGesture = null,
-        rightHandGesture = null,
-        leftHandAngles = null,
-        rightHandAngles = null,
-        // 下肢骨骼姿態 (髖關節、膝關節屈曲、踝關節)
-        leftHipPitch = 0,
-        leftHipRoll = 0,
-        leftHipYaw = 0,
-        rightHipPitch = 0,
-        rightHipRoll = 0,
-        rightHipYaw = 0,
-        leftKneeFlex = 0,
-        rightKneeFlex = 0,
-        leftAnklePitch = 0,
-        leftAnkleYaw = 0,
-        leftAnkleRoll = 0,
-        rightAnklePitch = 0,
-        rightAnkleYaw = 0,
-        rightAnkleRoll = 0,
-        // 頭身比與頭骨縮放 (Head Proportion)
-        headToBodyRatio = null,
-        skullScale = null
-    }) {
         if (headToBodyRatio) {
             this.setHeadRatio(headToBodyRatio);
         } else if (skullScale) {
@@ -2244,15 +1175,13 @@ export class AnatomicalTorso {
             if (this.skullGroup) this.skullGroup.scale.setScalar(this.headScale);
         }
 
-        // 1. 骨盆整體單元旋轉 (強制使用 YXZ 順序，確保側身 90° 時 pelvisPitch 沿骨盆自身矢狀面前後俯仰)
+        // 1. 骨盆整體單元旋轉
         this.pelvisUnit.rotation.order = 'YXZ';
         this.pelvisUnit.rotation.x = pelvisPitch;
         this.pelvisUnit.rotation.y = pelvisYaw;
         this.pelvisUnit.rotation.z = pelvisRoll;
 
-        // 2. 胸腔與骨盆相對轉角生理極限硬體約束 + 腰椎 5 節連續曲度分配 (Thoraco-Pelvic Coupling & Smooth Lumbar Arc)
-        // 確保不論來自 AI 解算或手動滑桿調節，胸腔與骨盆之相對轉角永遠符合人體解剖極限：
-        // |ΔPitch| <= 0.40 (~23°), |ΔYaw| <= 0.45 (~25.8°), |ΔRoll| <= 0.35 (~20°)
+        // 2. 胸腔與骨盆相對轉角生理極限硬體約束 + 腰椎 5 節連續曲度分配
         let rawDiffYaw = thoracicYaw - pelvisYaw;
         while (rawDiffYaw > Math.PI) rawDiffYaw -= 2 * Math.PI;
         while (rawDiffYaw < -Math.PI) rawDiffYaw += 2 * Math.PI;
@@ -2270,7 +1199,6 @@ export class AnatomicalTorso {
         let accumYaw = pelvisYaw;
         let accumRoll = pelvisRoll;
 
-        // 由 5 節腰椎 (L5-L1) 平滑分擔 65% 的胸盆相對轉角，餘下 35% 由胸腰交界 (T12-L1) 承接，徹底消除折角
         const safeLumbarPitch = THREE.MathUtils.clamp(lumbarPitch || (safeDiffPitch * 0.65), -0.35, 0.35);
         const safeLumbarYaw = THREE.MathUtils.clamp(lumbarYaw || (safeDiffYaw * 0.65), -0.28, 0.28);
         const safeLumbarRoll = THREE.MathUtils.clamp(lumbarRoll || (safeDiffRoll * 0.65), -0.30, 0.30);
@@ -2287,19 +1215,14 @@ export class AnatomicalTorso {
             accumRoll += rotZ;
         });
 
-        // 3. 胸椎與肋骨整體單元 (精確補足剩餘轉角，使胸廓在世界/相機空間之姿態 100% 精確等於約束後的 thoracicPitch/Yaw/Roll)
+        // 3. 胸椎與肋骨整體單元
         this.thoracicCageUnit.rotation.order = 'YXZ';
         this.thoracicCageUnit.rotation.x = thoracicPitch - accumPitch;
         this.thoracicCageUnit.rotation.y = thoracicYaw - accumYaw;
         this.thoracicCageUnit.rotation.z = thoracicRoll - accumRoll;
 
-        // 4. 頸椎與寰枕關節頭骨旋轉 (Cervical Spine & Skull Rotation)
-        // 生物力學：頭骨相對於相機世界之總轉向為 headYaw。
-        // 由於頸椎與頭骨掛載於胸廓單元 (已旋轉 thoracicYaw)，
-        // 頭頸相對於胸廓之生理相對轉角為 safeRelativeYaw = clamp(headYaw - thoracicYaw, -1.35, 1.35)
+        // 4. 頸椎與寰枕關節頭骨旋轉
         const cCount = this.cervicalVertebrae.length;
-        let accumCervicalPitch = 0;
-        let accumCervicalYaw = 0;
         let accumCervicalRoll = 0;
 
         let diffNeckYaw = headYaw - thoracicYaw;
@@ -2309,104 +1232,76 @@ export class AnatomicalTorso {
         const cervicalPartYaw = safeRelativeYaw * 0.65;
         const cranialPartYaw = safeRelativeYaw - cervicalPartYaw;
 
-        this.cervicalVertebrae.forEach((vert, idx) => {
+        this.cervicalVertebrae.forEach((vert) => {
             vert.rotation.order = 'YXZ';
-            // 7 節頸椎平滑分擔 cervicalPitch 與 cervicalPartYaw
             const rotX = cervicalPitch / cCount;
             const rotY = cervicalPartYaw / cCount;
             const rotZ = (headRoll - thoracicRoll) / cCount * 0.4;
             vert.rotation.x = rotX;
             vert.rotation.y = rotY;
             vert.rotation.z = rotZ;
-            accumCervicalPitch += rotX;
-            accumCervicalYaw += rotY;
             accumCervicalRoll += rotZ;
         });
 
         if (this.headJoint) {
             this.headJoint.rotation.order = 'YXZ';
-            // 寰枕關節承擔頭骨獨立點頭/仰頭，不倒扣 thoracicPitch
             this.headJoint.rotation.x = headPitch;
             this.headJoint.rotation.y = cranialPartYaw;
             this.headJoint.rotation.z = headRoll - accumCervicalRoll;
         }
 
-        // 5. 左大臂肱骨與肩胛胸壁滑動節律 (Scapulohumeral Rhythm)
-        if (this.shoulderGirdle.left.humerusJoint) {
-            const jL = this.shoulderGirdle.left.humerusJoint;
-            const safeRollL = leftArmRoll;
-            jL.rotation.order = 'YXZ';
-            jL.rotation.x = leftArmPitch;
-            jL.rotation.y = leftArmYaw;
-            jL.rotation.z = safeRollL;
+        // 5. 左右大臂肱骨與肩胛胸壁 2:1 滑動節律
+        const baseX = this.shoulderBaseX || 4.30;
+        ['left', 'right'].forEach(side => {
+            const sign = (side === 'left') ? 1 : -1;
+            const armPitch = (side === 'left') ? leftArmPitch : rightArmPitch;
+            const armRoll = (side === 'left') ? leftArmRoll : rightArmRoll;
+            const armYaw = (side === 'left') ? leftArmYaw : rightArmYaw;
+            const rec = this.shoulderGirdle[side];
 
-            // 生理肩肱節律 (2:1 比例動態耦合)：
-            // 計算上肢相對於垂直下垂位的綜合抬高角 (Elevation angle)
-            const elevL = Math.max(0, Math.hypot(leftArmPitch, safeRollL) - 0.35);
-            const scapRotL = Math.min(0.55, elevL * 0.32);
-            const scapElevL = scapRotL * 0.75;
+            if (rec && rec.humerusJoint) {
+                const j = rec.humerusJoint;
+                j.rotation.order = 'YXZ';
+                j.rotation.x = armPitch;
+                j.rotation.y = armYaw;
+                j.rotation.z = armRoll;
 
-            // 肩胛骨在胸廓後背表面向上旋轉與微升滑動 (僅旋轉視覺网格 scapulaMesh，保持父節點 scapulaUnit 零旋轉以確保盂肱關節正交基底純淨)
-            const baseX = this.shoulderBaseX || 4.45;
-            if (this.shoulderGirdle.left.scapula) {
-                const scL = this.shoulderGirdle.left.scapula;
-                scL.rotation.set(0, 0, 0);
-                scL.position.set(baseX + scapRotL * 0.20, 9.8 + scapElevL, -1.2 + scapRotL * 0.15);
-                if (this.shoulderGirdle.left.scapulaMesh) {
-                    this.shoulderGirdle.left.scapulaMesh.rotation.z = -scapRotL;
-                    this.shoulderGirdle.left.scapulaMesh.rotation.y = -scapRotL * 0.15;
+                const elev = Math.max(0, Math.hypot(armPitch, armRoll) - 0.35);
+                const scapRot = Math.min(0.55, elev * 0.32);
+                const scapElev = scapRot * 0.75;
+
+                if (rec.scapula && rec.restScapulaPos) {
+                    const ribZScale = this.ribcageGroup ? this.ribcageGroup.scale.z : 1.0;
+                    rec.scapula.rotation.set(0, 0, 0);
+                    rec.scapula.position.set(
+                        sign * (baseX + scapRot * 0.20),
+                        rec.restScapulaPos.y + scapElev,
+                        rec.restScapulaPos.z * ribZScale + scapRot * 0.15
+                    );
+                    if (rec.scapulaMesh) {
+                        rec.scapulaMesh.rotation.z = -sign * scapRot;
+                        rec.scapulaMesh.rotation.y = -sign * scapRot * 0.15;
+                    }
+                }
+
+                if (rec.clavicle) {
+                    rec.clavicle.rotation.z = sign * scapRot * 0.65;
+                    rec.clavicle.rotation.y = -sign * scapRot * 0.18;
                 }
             }
+        });
 
-            if (this.shoulderGirdle.left.clavicle) {
-                this.shoulderGirdle.left.clavicle.rotation.z = scapRotL * 0.65;
-                this.shoulderGirdle.left.clavicle.rotation.y = -scapRotL * 0.18;
-            }
-        }
-
-        // 6. 右大臂肱骨與肩胛胸壁滑動節律
-        if (this.shoulderGirdle.right.humerusJoint) {
-            const jR = this.shoulderGirdle.right.humerusJoint;
-            const safeRollR = rightArmRoll;
-            jR.rotation.order = 'YXZ';
-            jR.rotation.x = rightArmPitch;
-            jR.rotation.y = rightArmYaw;
-            jR.rotation.z = safeRollR;
-
-            const elevR = Math.max(0, Math.hypot(rightArmPitch, safeRollR) - 0.35);
-            const scapRotR = Math.min(0.55, elevR * 0.32);
-            const scapElevR = scapRotR * 0.75;
-
-            const baseX = this.shoulderBaseX || 4.45;
-            if (this.shoulderGirdle.right.scapula) {
-                const scR = this.shoulderGirdle.right.scapula;
-                scR.rotation.set(0, 0, 0);
-                scR.position.set(-baseX - scapRotR * 0.20, 9.8 + scapElevR, -1.2 + scapRotR * 0.15);
-                if (this.shoulderGirdle.right.scapulaMesh) {
-                    this.shoulderGirdle.right.scapulaMesh.rotation.z = scapRotR;
-                    this.shoulderGirdle.right.scapulaMesh.rotation.y = scapRotR * 0.15;
-                }
-            }
-
-            if (this.shoulderGirdle.right.clavicle) {
-                this.shoulderGirdle.right.clavicle.rotation.z = -scapRotR * 0.65;
-                this.shoulderGirdle.right.clavicle.rotation.y = scapRotR * 0.18;
-            }
-        }
-
-        // 7. 左前臂肘關節屈曲與橈骨翻轉交叉 (向前屈曲，X軸負向旋轉)
+        // 6. 左右前臂肘關節屈曲與剛體橈骨旋前/旋後交叉
         if (this.shoulderGirdle.left.elbowJoint) {
             this.shoulderGirdle.left.elbowJoint.rotation.x = -leftElbowFlex;
             this._updateRadiusMesh('left', leftForearmTwist);
         }
-
-        // 8. 右前臂肘關節屈曲與橈骨翻轉交叉 (向前屈曲，X軸負向旋轉)
         if (this.shoulderGirdle.right.elbowJoint) {
             this.shoulderGirdle.right.elbowJoint.rotation.x = -rightElbowFlex;
             this._updateRadiusMesh('right', rightForearmTwist);
         }
 
-        // 9. 手部手勢與指骨連續角度更新 (支援 21 節點逐指動態驅動)
+        // 7. 手部手勢與指骨連續角度更新
         if (leftHandGesture && leftHandGesture !== 'auto') {
             this.setHandGesture('left', leftHandGesture);
         } else if (leftHandAngles) {
@@ -2423,7 +1318,7 @@ export class AnatomicalTorso {
             this.setHandGesture('right', rightHandGesture);
         }
 
-        // 10. 左下肢 (髖關節、膝關節屈曲、踝關節)
+        // 8. 左右下肢 (髖、膝、踝)
         if (this.lowerLimbs.left.hipJoint) {
             const hL = this.lowerLimbs.left.hipJoint;
             hL.rotation.order = 'YXZ';
@@ -2435,13 +1330,13 @@ export class AnatomicalTorso {
             this.lowerLimbs.left.kneeJoint.rotation.x = leftKneeFlex;
         }
         if (this.lowerLimbs.left.ankleJoint) {
-            this.lowerLimbs.left.ankleJoint.rotation.order = 'YXZ';
-            this.lowerLimbs.left.ankleJoint.rotation.x = leftAnklePitch;
-            this.lowerLimbs.left.ankleJoint.rotation.y = leftAnkleYaw;
-            this.lowerLimbs.left.ankleJoint.rotation.z = leftAnkleRoll;
+            const aL = this.lowerLimbs.left.ankleJoint;
+            aL.rotation.order = 'YXZ';
+            aL.rotation.x = leftAnklePitch;
+            aL.rotation.y = leftAnkleYaw;
+            aL.rotation.z = leftAnkleRoll;
         }
 
-        // 11. 右下肢 (髖關節、膝關節屈曲、踝關節)
         if (this.lowerLimbs.right.hipJoint) {
             const hR = this.lowerLimbs.right.hipJoint;
             hR.rotation.order = 'YXZ';
@@ -2453,25 +1348,21 @@ export class AnatomicalTorso {
             this.lowerLimbs.right.kneeJoint.rotation.x = rightKneeFlex;
         }
         if (this.lowerLimbs.right.ankleJoint) {
-            this.lowerLimbs.right.ankleJoint.rotation.order = 'YXZ';
-            this.lowerLimbs.right.ankleJoint.rotation.x = rightAnklePitch;
-            this.lowerLimbs.right.ankleJoint.rotation.y = rightAnkleYaw;
-            this.lowerLimbs.right.ankleJoint.rotation.z = rightAnkleRoll;
+            const aR = this.lowerLimbs.right.ankleJoint;
+            aR.rotation.order = 'YXZ';
+            aR.rotation.x = rightAnklePitch;
+            aR.rotation.y = rightAnkleYaw;
+            aR.rotation.z = rightAnkleRoll;
         }
 
-        // 12. 地面自動吸附 (Auto Ground Snap)
+        // 9. 地面自動吸附 (Auto Ground Snap)
         if (this.autoGroundSnap) {
             this.snapToGround(this.groundY);
         }
     }
 
-    /**
-     * 地面自動吸附 (Auto Ground Snap)
-     * 計算人體骨骼在未偏移狀態下的最低接觸點 (足底骨、髕骨/膝關節、脛骨小腿或骨盆坐骨)，
-     * 並自動將 rootGroup 平移下沉，使最低承重接觸面精確貼合在地面 (預設 Y = -25.5)。
-     */
     snapToGround(groundY = -25.5) {
-        if (!this.rootGroup) return 0;
+        if (!this.rootGroup || !this.isMedicalLoaded) return 0;
 
         const prevY = this.rootGroup.position.y;
         this.rootGroup.position.y = 0;
@@ -2483,38 +1374,37 @@ export class AnatomicalTorso {
             return prevY;
         }
 
-        const rawLowestY = bbox.min.y;
-        const targetOffsetY = groundY - rawLowestY;
-
+        const targetOffsetY = groundY - bbox.min.y;
         this.rootGroup.position.y = targetOffsetY;
         this.rootGroup.updateMatrixWorld(true);
-
         return targetOffsetY;
     }
 
-    toggleRibcage(visible) {
-        this.ribsLeft.forEach(r => r.visible = visible);
-        this.ribsRight.forEach(r => r.visible = visible);
-        if (this.sternum) this.sternum.visible = visible;
-    }
-
     toggleSkull(visible) {
+        this.visibilityState.skull = visible;
         if (this.skullGroup) this.skullGroup.visible = visible;
         if (this.hyoidMesh) this.hyoidMesh.visible = visible;
     }
 
+    toggleRibcage(visible) {
+        this.visibilityState.ribcage = visible;
+        if (this.ribcageGroup) this.ribcageGroup.visible = visible;
+    }
+
     toggleShoulderGirdle(visible) {
+        this.visibilityState.shoulderGirdle = visible;
         ['left', 'right'].forEach(side => {
             if (this.shoulderGirdle[side].clavicle) {
                 this.shoulderGirdle[side].clavicle.visible = visible;
             }
-            if (this.shoulderGirdle[side].scapula) {
-                this.shoulderGirdle[side].scapula.visible = visible;
+            if (this.shoulderGirdle[side].scapulaMesh) {
+                this.shoulderGirdle[side].scapulaMesh.visible = visible;
             }
         });
     }
 
     toggleArms(visible) {
+        this.visibilityState.arms = visible;
         ['left', 'right'].forEach(side => {
             if (this.shoulderGirdle[side].humerus) {
                 this.shoulderGirdle[side].humerus.visible = visible;
@@ -2523,6 +1413,7 @@ export class AnatomicalTorso {
     }
 
     toggleForearms(visible) {
+        this.visibilityState.forearms = visible;
         ['left', 'right'].forEach(side => {
             if (this.shoulderGirdle[side].ulna) {
                 this.shoulderGirdle[side].ulna.visible = visible;
@@ -2534,6 +1425,7 @@ export class AnatomicalTorso {
     }
 
     toggleHands(visible) {
+        this.visibilityState.hands = visible;
         ['left', 'right'].forEach(side => {
             if (this.shoulderGirdle[side].handGroup) {
                 this.shoulderGirdle[side].handGroup.visible = visible;
@@ -2542,13 +1434,14 @@ export class AnatomicalTorso {
     }
 
     togglePelvis(visible) {
-        if (this.pelvisUnit) {
-            const bonyPelvis = this.pelvisUnit.getObjectByName("Bony_Pelvis");
-            if (bonyPelvis) bonyPelvis.visible = visible;
+        this.visibilityState.pelvis = visible;
+        if (this.bonyPelvisGroup) {
+            this.bonyPelvisGroup.visible = visible;
         }
     }
 
     toggleFemurs(visible) {
+        this.visibilityState.femurs = visible;
         ['left', 'right'].forEach(side => {
             if (this.lowerLimbs[side].femur) {
                 this.lowerLimbs[side].femur.visible = visible;
@@ -2560,6 +1453,7 @@ export class AnatomicalTorso {
     }
 
     toggleLowerLegs(visible) {
+        this.visibilityState.lowerLegs = visible;
         ['left', 'right'].forEach(side => {
             if (this.lowerLimbs[side].tibia) {
                 this.lowerLimbs[side].tibia.visible = visible;
@@ -2571,6 +1465,7 @@ export class AnatomicalTorso {
     }
 
     toggleFeet(visible) {
+        this.visibilityState.feet = visible;
         ['left', 'right'].forEach(side => {
             if (this.lowerLimbs[side].footGroup) {
                 this.lowerLimbs[side].footGroup.visible = visible;

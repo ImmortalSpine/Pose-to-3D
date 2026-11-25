@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=8.6';
-import { VisionSemanticClassifier } from './visionClassifier.js?v=8.6';
+import { ConfidenceEvaluator, ThoracoPelvicCoupler, HierarchicalArmSolver } from './kinematicSolver.js?v=9.0';
+import { VisionSemanticClassifier } from './visionClassifier.js?v=9.0';
 
 /**
  * AnatoPose 3D - Torso, Pelvis & Upper Limb Pose Estimator
@@ -18,26 +18,26 @@ import { VisionSemanticClassifier } from './visionClassifier.js?v=8.6';
  * 骨盆 (Ilium / ASIS / Pubic Symphysis) 位於 Y ∈ [-12.0, -6.0]，因此 yMin 必須涵蓋至 -12.5！
  */
 export const ANATOMICAL_COLLISION_CONFIG = {
-    // 1. 脊椎與薦骨剛性禁區 (Spine & Sacrum Shield Core) - 嚴禁任何上肢骨骼穿透
+    // 1. 脊椎與薦骨剛性禁區 (Spine & Sacrum Shield Core - 校準至 BodyParts3D * 28.0 醫學尺寸)
     spineShield: {
-        radiusX: 2.8,       // 脊椎與橫突/棘突禁區橫向半徑 (|X| < 2.8)
-        radiusZ: 2.2,       // 脊椎柱後壁至前縱韌帶矢狀深度 (Z < 2.2)
-        yMin: -12.5,        // 涵蓋胸椎、腰椎 (-6.75..0) 與骨盆/薦骨 (-12.5..-6.0)
-        yMax: 8.5           // 胸椎上口 (T1)
+        radiusX: 2.2,
+        radiusZ: 1.9,
+        yMin: -8.5,
+        yMax: 7.5
     },
     // 2. 腹壁、胸腹與骨盆前緣橢圓包絡面 (Thoraco-Abdominal & Pelvic Anterior Envelope)
     torsoEnvelope: {
-        radiusX: 4.8,       // 側腰與骨盆髂脊外緣半徑 (Ilium Summit |X| = 4.6)
-        radiusZ: 2.8,       // 腹壁與骨盆前凸矢狀半徑 (ASIS Z=2.6, Pubis Z=2.7)
-        centerZ: 0.8,       // 腹腔與骨盆前表面中心相對於脊椎前移量
-        waistYMin: -12.0,   // 骨盆恥骨聯合與髖關節下緣
-        waistYMax: 3.5      // 肋弓與劍突高度
+        radiusX: 3.9,
+        radiusZ: 2.4,
+        centerZ: 0.7,
+        waistYMin: -8.5,
+        waistYMax: 3.5
     },
-    // 3. 手部與指骨末端幾何常數
+    // 3. 手部與指骨末端幾何常數 (單位換算至 48.0 身高基準)
     handClearance: {
-        armLen: 8.5,        // 肱骨大臂長度
-        foreLen: 7.4,       // 前臂尺骨橈骨長度
-        handLen: 3.5        // 掌骨與指骨延伸等效長度
+        armLen: 7.90,       // 肱骨大臂長度 (0.2821m * 28)
+        foreLen: 7.17,      // 前臂尺骨橈骨長度 (0.2562m * 28)
+        handLen: 3.20       // 掌骨與指骨延伸等效長度
     }
 };
 

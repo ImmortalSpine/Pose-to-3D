@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=8.13';
-import { TorsoPoseEstimator } from './poseDetector.js?v=8.6';
+import { AnatomicalTorso } from './anatomy.js?v=9.0';
+import { TorsoPoseEstimator } from './poseDetector.js?v=9.0';
 
 class App {
     constructor() {
@@ -47,7 +47,7 @@ class App {
             headYaw: 0,
             headRoll: 0,
             headToBodyRatio: 7.1,
-            skullScale: 1.47,
+            skullScale: 1.15,
             leftArmPitch: 0,
             leftArmRoll: 0.12,
             leftArmYaw: 0,
@@ -163,7 +163,15 @@ class App {
     }
 
     _initAnatomy() {
-        this.anatomicalTorso = new AnatomicalTorso();
+        if (this.statusText) {
+            this.statusText.textContent = "載入開源醫學級 206 塊 3D 骨骼模型中...";
+        }
+        this.anatomicalTorso = new AnatomicalTorso(() => {
+            if (this.statusText && this.statusText.textContent.includes("載入開源醫學")) {
+                this.statusText.textContent = "✅ 醫學級 206 塊 3D 骨骼模型已就緒，請上傳人體模特兒圖片";
+            }
+            this._fitCameraToSkeleton('front');
+        });
         this.scene.add(this.anatomicalTorso.rootGroup);
         this._initBonePicker();
     }
@@ -249,7 +257,7 @@ class App {
         if (!this.boneTooltip || this.boneTooltip.style.display === 'none') return;
         if (!this.selectedBoneMesh || !this.selectedBoneAnchorLocal) return;
 
-        // 若選中的是動態重建的橈骨 (Radius)，自動重新綁定最新網格節點
+        // 若選中的是骨骼網格但節點已被重建，自動重新綁定最新網格節點
         if (!this.selectedBoneMesh.parent && this.anatomicalTorso.selectedBoneName) {
             this.anatomicalTorso.rootGroup.traverse(child => {
                 if (child.isMesh && child.userData.boneName === this.anatomicalTorso.selectedBoneName) {
@@ -815,7 +823,7 @@ class App {
 
     _setHeadRatio(ratio) {
         this.currentPose.headToBodyRatio = ratio;
-        this.currentPose.skullScale = (48.0 / ratio) / 4.60;
+        this.currentPose.skullScale = (48.0 / ratio) / 5.90;
         this.anatomicalTorso.setHeadRatio(ratio);
 
         const slider = document.getElementById('sliderHeadRatio');
@@ -1009,7 +1017,7 @@ class App {
             headYaw: 0,
             headRoll: 0,
             headToBodyRatio: 7.1,
-            skullScale: 1.47,
+            skullScale: 1.15,
             leftArmPitch: 0,
             leftArmRoll: 0.12,
             leftArmYaw: 0,

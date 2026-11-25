@@ -213,9 +213,9 @@ export class HierarchicalArmSolver {
         }
 
         const cfg = collisionConfig;
-        const pShoulderLocal = new THREE.Vector3(sign * 5.35, 8.6, -1.0);
-        const L1 = cfg.handClearance.armLen;  // 8.5
-        const L2 = cfg.handClearance.foreLen; // 7.4
+        const pShoulderLocal = new THREE.Vector3(sign * 4.48, 6.94, -0.25);
+        const L1 = cfg.handClearance.armLen;  // 7.90
+        const L2 = cfg.handClearance.foreLen; // 7.17
 
         let uArm, uFore;
         let pElbowLocal, pWristLocal, pHandTip;
@@ -254,9 +254,9 @@ export class HierarchicalArmSolver {
         if (overheadTargetInfo && overheadTargetInfo.isClasped) {
             // -------------------------------------------------------------
             // 模式 1：過頂合攏手 / 芭蕾五位手閉環 IK (Clasped Overhead Arched IK)
-            // 將雙腕目標橫向間距設為 ±2.15，使延伸出的雙手掌與指尖在頭頂中線優雅相接，杜絕雙前臂交叉成剪刀 X 形！
+            // 將雙腕目標橫向間距設為 ±1.90，使延伸出的雙手掌與指尖在頭頂中線優雅相接
             // -------------------------------------------------------------
-            const pWristTarget = new THREE.Vector3(sign * 2.15, 21.6, 1.25);
+            const pWristTarget = new THREE.Vector3(sign * 1.90, 17.5, 1.05);
 
             const vST = pWristTarget.clone().sub(pShoulderLocal);
             const dST = vST.length();
@@ -297,17 +297,17 @@ export class HierarchicalArmSolver {
 
             const scaleH = torsoHeight || 0.45;
             const dyHead = (midEyeY - testPt.y) / scaleH;
-            const targetY = clamp(17.8 + dyHead * 4.8, 13.0, 20.2);
+            const targetY = clamp(13.0 + dyHead * 3.8, 9.8, 16.0);
 
             let targetZ;
-            if (targetY < 15.5) {
-                targetX = targetSign * clamp(Math.abs(rawDx) / 0.16 * 1.4, 0.7, 1.8);
-                targetZ = 2.1;
+            if (targetY < 11.4) {
+                targetX = targetSign * clamp(Math.abs(rawDx) / 0.16 * 1.2, 0.65, 1.5);
+                targetZ = 1.9;
             } else {
-                const rxRatio = Math.min(1.0, Math.abs(targetX) / 2.3);
-                const ryRatio = Math.min(1.0, Math.abs(targetY - 17.8) / 2.5);
+                const rxRatio = Math.min(1.0, Math.abs(targetX) / 2.1);
+                const ryRatio = Math.min(1.0, Math.abs(targetY - 13.0) / 2.2);
                 const rRemain = Math.max(0.0, 1.0 - rxRatio * rxRatio - ryRatio * ryRatio);
-                targetZ = 0.8 + 2.2 * Math.sqrt(rRemain) + 0.35;
+                targetZ = 0.7 + 1.9 * Math.sqrt(rRemain) + 0.30;
             }
 
             const pWristTarget = new THREE.Vector3(targetX, targetY, targetZ);
@@ -442,7 +442,7 @@ export class HierarchicalArmSolver {
 
                 // 2. 前臂方向：融合相機 2D 仰角向量與頸圈/鎖骨解剖目標點，
                 //    既確保相機視角下「前臂 100% 位於大臂上方呈自然 V 字形」，又引導手掌落在頸圈旁
-                const pNeckTarget = new THREE.Vector3(sign * 1.6, 12.6, 1.2);
+                const pNeckTarget = new THREE.Vector3(sign * 1.4, 9.8, 1.1);
                 const uToNeck = pNeckTarget.clone().sub(pElbowLocal).normalize();
                 const handWeight = (confidences.hand >= 0.85) ? 0.42 : 0.30;
                 uFore.multiplyScalar(1.0 - handWeight).addScaledVector(uToNeck, handWeight).normalize();
@@ -507,20 +507,20 @@ export class HierarchicalArmSolver {
             pHandTip = pElbowLocal.clone().addScaledVector(uFore, L2 + cfg.handClearance.handLen);
 
             const testPenetration = (pt) => {
-                const inY = (pt.y >= -12.5 && pt.y <= cfg.spineShield.yMax);
+                const inY = (pt.y >= -8.8 && pt.y <= cfg.spineShield.yMax);
                 if (!inY) return { penetrates: false, zSurface: 0 };
 
-                const zBack = -1.5;
+                const zBack = -1.4;
                 if (pt.z < zBack) return { penetrates: false, zSurface: 0 };
 
                 const inSpineShield = (Math.abs(pt.x) < cfg.spineShield.radiusX && pt.z < cfg.spineShield.radiusZ);
-                const effRadX = 5.2;
+                const effRadX = 4.2;
                 const normX = Math.min(1.0, Math.abs(pt.x) / effRadX);
                 let zSurface = cfg.torsoEnvelope.centerZ + cfg.torsoEnvelope.radiusZ * Math.sqrt(Math.max(0.0, 1.0 - normX * normX));
 
-                // 骨盆髂前上棘 (ASIS: |X|=3.8, Z=2.6) 與恥骨聯合 (Pubis: X=0, Z=2.7) 前緣包絡保護
-                if (pt.y >= -12.5 && pt.y <= -4.5 && Math.abs(pt.x) <= 5.0) {
-                    const zPelvis = 2.75 - 0.22 * (Math.abs(pt.x) / 5.0);
+                // 骨盆髂前上棘與恥骨聯合前緣包絡保護
+                if (pt.y >= -8.8 && pt.y <= -3.2 && Math.abs(pt.x) <= 4.1) {
+                    const zPelvis = 2.45 - 0.22 * (Math.abs(pt.x) / 4.1);
                     zSurface = Math.max(zSurface, zPelvis);
                 }
 
