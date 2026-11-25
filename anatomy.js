@@ -177,6 +177,7 @@ export class AnatomicalTorso {
             elbowJoint: null, forearmAlign: null, ulnaCaliber: null, ulna: null,
             radiusGroup: null, radiusAlign: null, radiusCaliber: null, radiusMesh: null,
             radProxLocal: null, radDistRestLocal: null, ulnaDistLocal: null, wristRestLocal: null,
+            pronationAxisLocal: null,
             handGroup: null, handAlign: null, handMesh: null, handJoints: null,
             currentGesture: 'relaxed', currentTwist: 1.48
         };
@@ -439,19 +440,19 @@ export class AnatomicalTorso {
         rec.pElM = pEl;
         rec.pWrM = pWr;
 
-        const forearmAlign = new THREE.Group();
-        forearmAlign.name = `Forearm_Align_${side}`;
-        forearmAlign.quaternion.copy(qAlignFore);
-        elbowJoint.add(forearmAlign);
-        rec.forearmAlign = forearmAlign;
-
         const ulnaCaliber = new THREE.Group();
         ulnaCaliber.name = `Ulna_${side}`;
-        forearmAlign.add(ulnaCaliber);
+        elbowJoint.add(ulnaCaliber);
         rec.ulnaCaliber = ulnaCaliber;
         rec.ulna = ulnaCaliber;
 
-        // 5. 橈骨剛體旋轉機構 (近端橈骨頭為球心，遠端繞尺骨頭做前向半圓弧跨越)
+        const forearmAlign = new THREE.Group();
+        forearmAlign.name = `Forearm_Align_${side}`;
+        forearmAlign.quaternion.copy(qAlignFore);
+        ulnaCaliber.add(forearmAlign);
+        rec.forearmAlign = forearmAlign;
+
+        // 5. 橈骨剛體旋轉機構 (繞真正解剖學旋前/旋後軸：近端橈骨頭 <-> 遠端尺骨頭連線旋轉)
         const pRadProx = new THREE.Vector3(sign * P.radProxX, P.radProxY, P.radProxZ);
         const pRadDist = new THREE.Vector3(sign * P.radDistX, P.radDistY, P.radDistZ);
         const pUlnaDist = new THREE.Vector3(sign * P.ulnaDistX, P.ulnaDistY, P.ulnaDistZ);
@@ -461,6 +462,7 @@ export class AnatomicalTorso {
         rec.radDistRestLocal = toElbowAligned(pRadDist);
         rec.ulnaDistLocal = toElbowAligned(pUlnaDist);
         rec.wristRestLocal = toElbowAligned(pWr);
+        rec.pronationAxisLocal = rec.radProxLocal.clone().sub(rec.ulnaDistLocal).normalize();
 
         const radiusGroup = new THREE.Group();
         radiusGroup.name = `Radius_Group_${side}`;
@@ -468,16 +470,16 @@ export class AnatomicalTorso {
         elbowJoint.add(radiusGroup);
         rec.radiusGroup = radiusGroup;
 
+        const radiusCaliber = new THREE.Group();
+        radiusCaliber.name = `Radius_Caliber_${side}`;
+        radiusGroup.add(radiusCaliber);
+        rec.radiusCaliber = radiusCaliber;
+
         const radiusAlign = new THREE.Group();
         radiusAlign.name = `Radius_Align_${side}`;
         radiusAlign.quaternion.copy(qAlignFore);
-        radiusGroup.add(radiusAlign);
+        radiusCaliber.add(radiusAlign);
         rec.radiusAlign = radiusAlign;
-
-        const radiusCaliber = new THREE.Group();
-        radiusCaliber.name = `Radius_Caliber_${side}`;
-        radiusAlign.add(radiusCaliber);
-        rec.radiusCaliber = radiusCaliber;
 
         // 6. 手部關節鏈 (Carpals -> Metacarpals -> 5 指 MCP / PIP / DIP)
         const handGroup = new THREE.Group();
@@ -699,13 +701,13 @@ export class AnatomicalTorso {
                 );
                 this._mountMesh(
                     meshMap[`ulna_${s}`],
-                    rec.ulnaCaliber,
+                    rec.forearmAlign,
                     [sign * P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ],
                     `ulna_${s}`
                 );
                 rec.radiusMesh = this._mountMesh(
                     meshMap[`radius_${s}`],
-                    rec.radiusCaliber,
+                    rec.radiusAlign,
                     [sign * P.radProxX, P.radProxY, P.radProxZ],
                     `radius_${s}`
                 );
@@ -966,32 +968,20 @@ export class AnatomicalTorso {
         if (!rec) return;
         rec.currentTwist = twistAngle;
 
-        if (!rec.radiusGroup || !rec.radProxLocal || !rec.radDistRestLocal || !rec.ulnaDistLocal || !rec.wristRestLocal) {
+        if (!rec.radiusGroup || !rec.radProxLocal || !rec.wristRestLocal || !rec.pronationAxisLocal) {
             return;
         }
 
-        const A = rec.radProxLocal;
-        const U_dist = rec.ulnaDistLocal;
-        const R_dist_0 = rec.radDistRestLocal;
-        const W_0 = rec.wristRestLocal;
-
-        const yAxis = new THREE.Vector3(0, 1, 0);
+        // 沿著真實解剖學旋前/旋後斜軸 (遠端尺骨頭 -> 近端橈骨頭) 進行單一剛體旋轉
+        // 確保近端橈骨頭於肘關節內原位自轉，且遠端橈骨與腕骨/手掌維持剛體貼合、絕不脫臼或產生間隙
         const rotAngle = -sign * twistAngle;
+        const qPron = new THREE.Quaternion().setFromAxisAngle(rec.pronationAxisLocal, rotAngle);
+        rec.radiusGroup.quaternion.copy(qPron);
 
-        // 1. 繞遠端尺骨頭旋轉橈骨遠端，模擬真實「橈骨跨過尺骨前方」半圓弧運動
-        const R_dist_new = R_dist_0.clone().sub(U_dist).applyAxisAngle(yAxis, rotAngle).add(U_dist);
-        const vRest = R_dist_0.clone().sub(A);
-        const vNew = R_dist_new.clone().sub(A);
-
-        const qSwing = new THREE.Quaternion().setFromUnitVectors(vRest.normalize(), vNew.clone().normalize());
-        const qSpin = new THREE.Quaternion().setFromAxisAngle(vNew.normalize(), rotAngle);
-        rec.radiusGroup.quaternion.copy(qSpin).multiply(qSwing);
-
-        // 2. 同步旋轉與定位手腕與手掌
         if (rec.handGroup) {
-            const W_new = W_0.clone().sub(U_dist).applyAxisAngle(yAxis, rotAngle).add(U_dist);
-            rec.handGroup.position.copy(W_new);
-            rec.handGroup.rotation.y = rotAngle;
+            const wristOffset = rec.wristRestLocal.clone().sub(rec.radProxLocal).applyQuaternion(qPron);
+            rec.handGroup.position.copy(rec.radProxLocal).add(wristOffset);
+            rec.handGroup.quaternion.copy(qPron);
         }
     }
 
