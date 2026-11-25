@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>AnatoPose 3D - 藝用脊椎與肋骨姿態還原系統</title>
-    <link rel="stylesheet" href="style.css?v=8.8">
+    <link rel="stylesheet" href="style.css?v=8.12">
 
     <!-- MediaPipe Holistic (官方推薦統一拓撲架構：整合全身 33 節點與雙手各 21 節點，徹底消除多腳本 WASM/WebGL 記憶體衝突) -->
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -75,6 +75,9 @@
             </div>
             <div class="viewport-canvas-container" id="viewportArea">
                 <canvas id="canvas3d"></canvas>
+
+                <!-- 點擊骨頭顯示英文名稱懸浮標籤 -->
+                <div class="bone-name-tooltip" id="boneNameTooltip" style="display:none;"></div>
 
                 <!-- 畫布懸浮縮放控制器 -->
                 <div class="viewport-floating-controls">
@@ -595,7 +598,7 @@
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=8.6"></script>
+    <script type="module" src="app.js?v=8.12"></script>
 </body>
 </html>
 

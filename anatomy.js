@@ -127,11 +127,73 @@ export class AnatomicalTorso {
             }),
             landmark: new THREE.MeshBasicMaterial({
                 color: 0xff3366
+            }),
+            selectedBone: new THREE.MeshStandardMaterial({
+                color: 0xff925c,
+                emissive: 0xe0531c,
+                emissiveIntensity: 0.45,
+                roughness: 0.26,
+                metalness: 0.12
             })
         };
 
+        this.selectedBoneName = null;
+        this.hyoidMesh = null;
+
         this._buildAnatomy();
         this.setGender('female');
+    }
+
+    /**
+     * 為骨骼網格標記標準英文解剖名稱 (English Anatomical Bone Name)
+     */
+    _tagBone(obj, boneName) {
+        if (!obj || !boneName) return obj;
+        obj.userData.boneName = boneName;
+        obj.traverse(child => {
+            if (child.isMesh && !child.userData.isCavityHole && !child.userData.boneName) {
+                child.userData.boneName = boneName;
+                if (!child.userData.origMaterial) {
+                    child.userData.origMaterial = child.material;
+                }
+            }
+        });
+        return obj;
+    }
+
+    /**
+     * 高光選中指定英文名稱的骨骼，或傳入 null 清除選取
+     */
+    selectBoneByName(boneName = null) {
+        this.selectedBoneName = boneName;
+        if (!this.rootGroup) return;
+        this.rootGroup.traverse(child => {
+            if (child.isMesh && !child.userData.isCavityHole) {
+                if (!child.userData.origMaterial) {
+                    child.userData.origMaterial = child.material;
+                }
+                if (boneName && child.userData.boneName === boneName) {
+                    child.material = this.materials.selectedBone;
+                } else {
+                    child.material = child.userData.origMaterial;
+                }
+            }
+        });
+    }
+
+    /**
+     * 取得目前模型中所有已建立的獨立骨骼英文名稱清單 (共 206 塊標準成人骨骼)
+     */
+    getBoneNamesList() {
+        const names = new Set();
+        if (this.rootGroup) {
+            this.rootGroup.traverse(child => {
+                if (child.isMesh && child.userData.boneName && !child.userData.isCavityHole) {
+                    names.add(child.userData.boneName);
+                }
+            });
+        }
+        return Array.from(names);
     }
 
     _buildAnatomy() {
@@ -216,6 +278,14 @@ export class AnatomicalTorso {
             vert.position.set(0, (i === 0) ? 0 : cervicalHeight, Math.sin((i / 6) * Math.PI) * 0.12);
             cParent.add(vert);
             this.cervicalVertebrae.push(vert);
+
+            // 舌骨 (Hyoid Bone) - 位於第 3 頸椎 (C3) 前方、下頜骨下方之馬蹄形獨立骨骼
+            if (cIndex === 3) {
+                this.hyoidMesh = this._createHyoidMesh();
+                this.hyoidMesh.position.set(0, 0.05, 1.35);
+                vert.add(this.hyoidMesh);
+            }
+
             cParent = vert;
         }
 
@@ -635,7 +705,8 @@ export class AnatomicalTorso {
         trochleaMesh.position.set(0, -femurLen + 0.35, 0.25);
         group.add(trochleaMesh);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Femur`);
     }
 
     /**
@@ -660,7 +731,8 @@ export class AnatomicalTorso {
         patellaMesh.castShadow = true;
         group.add(patellaMesh);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Patella`);
     }
 
     /**
@@ -725,7 +797,8 @@ export class AnatomicalTorso {
         articularMesh.position.set(-sign * 0.15, -tibiaLen - 0.15, 0.05);
         group.add(articularMesh);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Tibia`);
     }
 
     /**
@@ -762,45 +835,82 @@ export class AnatomicalTorso {
         malleolusMesh.position.set(sign * 0.85, -tibiaLen - 0.55, -0.15);
         group.add(malleolusMesh);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Fibula`);
     }
 
     /**
-     * 建立完整足部骨骼系統 (Foot Skeleton)
-     * 含距骨 (Talus)、跟骨結節 (Calcaneus)、跗骨群 (Tarsals)、5 根蹠骨 (Metatarsals) 與 14 節趾骨 (Phalanges)
+     * 建立完整足部骨骼系統 (Foot Skeleton: 26 Bones per Foot)
+     * 含全部 7 塊獨立跗骨 (Talus, Calcaneus, Navicular, Cuboid, Medial/Intermediate/Lateral Cuneiform)、
+     * 5 根蹠骨 (Metatarsals 1-5) 與 14 節趾骨 (Phalanges)
      */
     _buildFootMesh(side) {
         const sign = (side === 'left') ? 1 : -1;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
         const group = new THREE.Group();
         group.name = `Foot_${side}`;
 
         // 1. 距骨 (Talus - 鞍狀滑車，嵌合於內外踝之間)
-        const talusGeo = new THREE.BoxGeometry(0.9, 0.7, 1.1);
+        const talusGeo = new THREE.BoxGeometry(0.86, 0.68, 1.05);
         const talusMesh = new THREE.Mesh(talusGeo, this.materials.bone);
-        talusMesh.position.set(0, -0.35, 0.1);
+        talusMesh.position.set(-sign * 0.08, -0.35, 0.08);
+        this._tagBone(talusMesh, `${sideLabel} Talus`);
         group.add(talusMesh);
 
         // 2. 跟骨 (Calcaneus - 足跟結節，向後突出承受體重)
-        const heelGeo = new THREE.BoxGeometry(0.95, 0.9, 1.9);
+        const heelGeo = new THREE.BoxGeometry(0.95, 0.90, 1.90);
         const heelMesh = new THREE.Mesh(heelGeo, this.materials.boneHighlight);
-        heelMesh.position.set(-sign * 0.05, -0.95, -0.85);
+        heelMesh.position.set(sign * 0.05, -0.95, -0.85);
         heelMesh.castShadow = true;
+        this._tagBone(heelMesh, `${sideLabel} Calcaneus`);
         group.add(heelMesh);
 
-        // 3. 跗骨群 (Tarsals - 舟狀骨、骰骨、三塊楔狀骨形成足縱弓)
-        const tarsalGeo = new THREE.BoxGeometry(1.25, 0.65, 1.2);
-        const tarsalMesh = new THREE.Mesh(tarsalGeo, this.materials.bone);
-        tarsalMesh.position.set(0, -0.65, 1.15);
-        group.add(tarsalMesh);
+        // 3. 足舟骨 (Navicular - 位於距骨前方、內側足縱弓頂點之船形骨)
+        const navicularGeo = new THREE.BoxGeometry(0.68, 0.54, 0.42);
+        const navicularMesh = new THREE.Mesh(navicularGeo, this.materials.bone);
+        navicularMesh.position.set(-sign * 0.22, -0.54, 0.85);
+        this._tagBone(navicularMesh, `${sideLabel} Navicular`);
+        group.add(navicularMesh);
 
-        // 4. 蹠骨 (5 Metatarsal Bones - 呈弧形放射狀分佈)
+        // 4. 骰骨 (Cuboid - 位於跟骨前方、足外側柱支撐第 4、5 蹠骨)
+        const cuboidGeo = new THREE.BoxGeometry(0.52, 0.58, 0.72);
+        const cuboidMesh = new THREE.Mesh(cuboidGeo, this.materials.bone);
+        cuboidMesh.position.set(sign * 0.40, -0.70, 1.12);
+        this._tagBone(cuboidMesh, `${sideLabel} Cuboid`);
+        group.add(cuboidMesh);
+
+        // 5. 內側楔狀骨 (Medial Cuneiform - 第一楔狀骨，對接第一蹠骨)
+        const medCunGeo = new THREE.BoxGeometry(0.32, 0.58, 0.46);
+        const medCunMesh = new THREE.Mesh(medCunGeo, this.materials.boneHighlight);
+        medCunMesh.position.set(-sign * 0.42, -0.62, 1.32);
+        this._tagBone(medCunMesh, `${sideLabel} Medial Cuneiform`);
+        group.add(medCunMesh);
+
+        // 6. 中間楔狀骨 (Intermediate Cuneiform - 第二楔狀骨，對接第二蹠骨)
+        const intCunGeo = new THREE.BoxGeometry(0.26, 0.52, 0.42);
+        const intCunMesh = new THREE.Mesh(intCunGeo, this.materials.bone);
+        intCunMesh.position.set(-sign * 0.16, -0.58, 1.30);
+        this._tagBone(intCunMesh, `${sideLabel} Intermediate Cuneiform`);
+        group.add(intCunMesh);
+
+        // 7. 外側楔狀骨 (Lateral Cuneiform - 第三楔狀骨，位於中間楔狀骨與骰骨之間，對接第三蹠骨)
+        const latCunGeo = new THREE.BoxGeometry(0.28, 0.54, 0.44);
+        const latCunMesh = new THREE.Mesh(latCunGeo, this.materials.bone);
+        latCunMesh.position.set(sign * 0.10, -0.63, 1.30);
+        this._tagBone(latCunMesh, `${sideLabel} Lateral Cuneiform`);
+        group.add(latCunMesh);
+
+        // 8. 蹠骨 (5 Metatarsal Bones - 呈弧形放射狀分佈)
         const metatarsalWidths = [0.22, 0.18, 0.17, 0.16, 0.18];
         const metatarsalLengths = [1.8, 2.05, 1.95, 1.85, 1.75];
+        const ordinals = ['First', 'Second', 'Third', 'Fourth', 'Fifth'];
+        const toeNames = ['Hallux', 'Second Toe', 'Third Toe', 'Fourth Toe', 'Fifth Toe'];
 
         for (let i = 0; i < 5; i++) {
             const rayX = -sign * 0.45 + (sign * i * 0.22);
             const w = metatarsalWidths[i];
             const len = metatarsalLengths[i];
+            const mtBoneName = `${sideLabel} ${ordinals[i]} Metatarsal`;
 
             const p0 = new THREE.Vector3(rayX * 0.85, -0.65, 1.6);
             const p1 = new THREE.Vector3(rayX, -0.85, 1.6 + len);
@@ -808,16 +918,19 @@ export class AnatomicalTorso {
             const mCurve = new THREE.CatmullRomCurve3([p0, p1]);
             const mGeo = new THREE.TubeGeometry(mCurve, 6, w, 6, false);
             const mMesh = new THREE.Mesh(mGeo, this.materials.bone);
+            this._tagBone(mMesh, mtBoneName);
             group.add(mMesh);
 
             // 蹠骨頭 (Metatarsal Head - 蹠趾關節)
             const headGeo = new THREE.SphereGeometry(w * 1.25, 8, 8);
             const headMesh = new THREE.Mesh(headGeo, this.materials.boneHighlight);
             headMesh.position.copy(p1);
+            this._tagBone(headMesh, mtBoneName);
             group.add(headMesh);
 
-            // 5. 趾骨群 (Phalanges - 大拇趾 2 節，其餘各 3 節)
+            // 9. 趾骨群 (Phalanges - 大拇趾 2 節，其餘各 3 節，共 14 節)
             const phalanCount = (i === 0) ? 2 : 3;
+            const phalanxLabels = (i === 0) ? ['Proximal', 'Distal'] : ['Proximal', 'Middle', 'Distal'];
             let pPrev = p1.clone();
             const segLen = (i === 0) ? 0.48 : 0.32;
 
@@ -826,15 +939,17 @@ export class AnatomicalTorso {
                 const pCurv = new THREE.CatmullRomCurve3([pPrev, pNext]);
                 const pGeo = new THREE.TubeGeometry(pCurv, 4, w * 0.85, 6, false);
                 const pMesh = new THREE.Mesh(pGeo, this.materials.bone);
+                this._tagBone(pMesh, `${sideLabel} ${phalanxLabels[ph]} Phalanx of ${toeNames[i]}`);
                 group.add(pMesh);
                 pPrev = pNext;
             }
         }
 
-        // 第五蹠骨粗隆 (Tuberosity of 5th Metatarsal - 腳外側體表骨點)
+        // 第五蹠骨粗隆 (Tuberosity of 5th Metatarsal - 屬於第五蹠骨的腳外側體表骨點)
         const tub5Geo = new THREE.SphereGeometry(0.25, 6, 6);
         const tub5Mesh = new THREE.Mesh(tub5Geo, this.materials.boneHighlight);
         tub5Mesh.position.set(sign * 0.65, -0.8, 1.7);
+        this._tagBone(tub5Mesh, `${sideLabel} Fifth Metatarsal`);
         group.add(tub5Mesh);
 
         return { mesh: group };
@@ -887,7 +1002,8 @@ export class AnatomicalTorso {
         styloidMesh.position.set(medialOffsetX - sign * 0.1, -ulnaLen - 0.25, -0.05);
         group.add(styloidMesh);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Ulna`);
     }
 
     /**
@@ -963,6 +1079,15 @@ export class AnatomicalTorso {
         styloidMesh.position.set(distalX + sign * 0.35 * Math.cos(twistAngle), -radiusLen - 0.3, distalZ + 0.35 * Math.sin(twistAngle));
         group.add(styloidMesh);
 
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        const radiusBoneName = `${sideLabel} Radius`;
+        this._tagBone(group, radiusBoneName);
+        if (this.selectedBoneName === radiusBoneName) {
+            group.traverse(child => {
+                if (child.isMesh) child.material = this.materials.selectedBone;
+            });
+        }
+
         radiusGroup.add(group);
         this.shoulderGirdle[side].radiusMesh = group;
 
@@ -984,6 +1109,7 @@ export class AnatomicalTorso {
      */
     _buildHandMesh(side, gesture = 'relaxed') {
         const sign = (side === 'left') ? 1 : -1;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
         const group = new THREE.Group();
         group.name = `Hand_${side}`;
 
@@ -1001,12 +1127,14 @@ export class AnatomicalTorso {
         scaphoidMesh.rotation.z = sign * 0.35;
         scaphoidMesh.rotation.y = 0.2;
         scaphoidMesh.position.set(sign * 0.38, -0.38, 0.0);
+        this._tagBone(scaphoidMesh, `${sideLabel} Scaphoid`);
         carpalGroup.add(scaphoidMesh);
 
         // 舟狀骨粗隆 (Scaphoid Tubercle - 大魚際肌起點，掌側骨點)
         const scaphoidTubercleGeo = new THREE.SphereGeometry(0.16, 8, 8);
         const scaphoidTubercleMesh = new THREE.Mesh(scaphoidTubercleGeo, this.materials.boneHighlight);
         scaphoidTubercleMesh.position.set(sign * 0.46, -0.48, 0.26);
+        this._tagBone(scaphoidTubercleMesh, `${sideLabel} Scaphoid`);
         carpalGroup.add(scaphoidTubercleMesh);
 
         // (2) 月狀骨 (Lunate): 位於橈腕關節正中切凹處，呈半月形
@@ -1014,12 +1142,14 @@ export class AnatomicalTorso {
         const lunateMesh = new THREE.Mesh(lunateGeo, this.materials.bone);
         lunateMesh.rotation.x = Math.PI * 0.5;
         lunateMesh.position.set(sign * 0.02, -0.34, -0.02);
+        this._tagBone(lunateMesh, `${sideLabel} Lunate`);
         carpalGroup.add(lunateMesh);
 
         // (3) 三角骨 (Triquetrum): 位於尺側，呈錐形
         const triquetrumGeo = new THREE.BoxGeometry(0.35, 0.44, 0.38);
         const triquetrumMesh = new THREE.Mesh(triquetrumGeo, this.materials.bone);
         triquetrumMesh.position.set(-sign * 0.38, -0.38, -0.05);
+        this._tagBone(triquetrumMesh, `${sideLabel} Triquetrum`);
         carpalGroup.add(triquetrumMesh);
 
         // (4) 豆狀骨 (Pisiform - 極其重要的藝用表面骨點，位於手腕尺側掌面最突出處！)
@@ -1027,6 +1157,7 @@ export class AnatomicalTorso {
         const pisiformMesh = new THREE.Mesh(pisiformGeo, this.materials.boneHighlight);
         pisiformMesh.scale.set(1.0, 1.25, 0.9);
         pisiformMesh.position.set(-sign * 0.44, -0.52, 0.30);
+        this._tagBone(pisiformMesh, `${sideLabel} Pisiform`);
         carpalGroup.add(pisiformMesh);
         this._addLandmark(`Pisiform_${side}`, pisiformMesh.position.clone(), group);
 
@@ -1035,24 +1166,28 @@ export class AnatomicalTorso {
         const trapeziumGeo = new THREE.BoxGeometry(0.38, 0.40, 0.40);
         const trapeziumMesh = new THREE.Mesh(trapeziumGeo, this.materials.bone);
         trapeziumMesh.position.set(sign * 0.48, -0.72, 0.12);
+        this._tagBone(trapeziumMesh, `${sideLabel} Trapezium`);
         carpalGroup.add(trapeziumMesh);
 
         // (6) 小多角骨 (Trapezoid): 楔形嵌入第二掌骨底
         const trapezoidGeo = new THREE.BoxGeometry(0.30, 0.40, 0.34);
         const trapezoidMesh = new THREE.Mesh(trapezoidGeo, this.materials.bone);
         trapezoidMesh.position.set(sign * 0.24, -0.75, 0.02);
+        this._tagBone(trapezoidMesh, `${sideLabel} Trapezoid`);
         carpalGroup.add(trapezoidMesh);
 
         // (7) 頭狀骨 (Capitate - 最大的腕骨，腕弓拱頂石，支撐第三掌骨)
         const capitateGeo = new THREE.BoxGeometry(0.42, 0.50, 0.42);
         const capitateMesh = new THREE.Mesh(capitateGeo, this.materials.bone);
         capitateMesh.position.set(sign * 0.02, -0.78, 0.04);
+        this._tagBone(capitateMesh, `${sideLabel} Capitate`);
         carpalGroup.add(capitateMesh);
 
         // (8) 鉤骨 (Hamate): 支撐第四、五掌骨
         const hamateGeo = new THREE.BoxGeometry(0.38, 0.44, 0.38);
         const hamateMesh = new THREE.Mesh(hamateGeo, this.materials.bone);
         hamateMesh.position.set(-sign * 0.30, -0.75, 0.0);
+        this._tagBone(hamateMesh, `${sideLabel} Hamate`);
         carpalGroup.add(hamateMesh);
 
         // 鉤骨鉤 (Hook of Hamate - 掌側突出骨鉤)
@@ -1060,6 +1195,7 @@ export class AnatomicalTorso {
         const hamateHookMesh = new THREE.Mesh(hamateHookGeo, this.materials.boneHighlight);
         hamateHookMesh.rotation.x = Math.PI * 0.5;
         hamateHookMesh.position.set(-sign * 0.30, -0.80, 0.25);
+        this._tagBone(hamateHookMesh, `${sideLabel} Hamate`);
         carpalGroup.add(hamateHookMesh);
 
         // -------------------------------------------------------------
@@ -1070,11 +1206,11 @@ export class AnatomicalTorso {
         group.add(mcGroup);
 
         const mcConfigs = [
-            { name: 'Thumb',  base: new THREE.Vector3(sign * 0.48, -0.75, 0.14),  len: 1.60, latDeg: sign * 36, palmarDeg: 22, radShaft: 0.16, headScale: 0.22 },
-            { name: 'Index',  base: new THREE.Vector3(sign * 0.26, -0.82, 0.02),  len: 2.10, latDeg: sign * 6,  palmarDeg: 4,  radShaft: 0.14, headScale: 0.22 },
-            { name: 'Middle', base: new THREE.Vector3(sign * 0.02, -0.85, 0.04),  len: 2.25, latDeg: 0,         palmarDeg: 2,  radShaft: 0.15, headScale: 0.24 },
-            { name: 'Ring',   base: new THREE.Vector3(-sign * 0.18, -0.82, 0.02), len: 2.05, latDeg: -sign * 5, palmarDeg: 4,  radShaft: 0.13, headScale: 0.21 },
-            { name: 'Little', base: new THREE.Vector3(-sign * 0.36, -0.75, -0.02),len: 1.75, latDeg: -sign * 12,palmarDeg: 6,  radShaft: 0.12, headScale: 0.20 },
+            { name: 'Thumb',  ordinal: 'First',  base: new THREE.Vector3(sign * 0.48, -0.75, 0.14),  len: 1.60, latDeg: sign * 36, palmarDeg: 22, radShaft: 0.16, headScale: 0.22 },
+            { name: 'Index',  ordinal: 'Second', base: new THREE.Vector3(sign * 0.26, -0.82, 0.02),  len: 2.10, latDeg: sign * 6,  palmarDeg: 4,  radShaft: 0.14, headScale: 0.22 },
+            { name: 'Middle', ordinal: 'Third',  base: new THREE.Vector3(sign * 0.02, -0.85, 0.04),  len: 2.25, latDeg: 0,         palmarDeg: 2,  radShaft: 0.15, headScale: 0.24 },
+            { name: 'Ring',   ordinal: 'Fourth', base: new THREE.Vector3(-sign * 0.18, -0.82, 0.02), len: 2.05, latDeg: -sign * 5, palmarDeg: 4,  radShaft: 0.13, headScale: 0.21 },
+            { name: 'Little', ordinal: 'Fifth',  base: new THREE.Vector3(-sign * 0.36, -0.75, -0.02),len: 1.75, latDeg: -sign * 12,palmarDeg: 6,  radShaft: 0.12, headScale: 0.20 },
         ];
 
         const mcpJoints = {};
@@ -1089,6 +1225,7 @@ export class AnatomicalTorso {
 
             const mcpPos = new THREE.Vector3().copy(mc.base).addScaledVector(dir, mc.len);
             mcpJoints[mc.name] = { mcpPos, dir, mc };
+            const mcBoneName = `${sideLabel} ${mc.ordinal} Metacarpal`;
 
             // 掌骨骨幹 (Metacarpal Shaft: 微具掌側凹曲度的管狀骨)
             const midP = new THREE.Vector3().copy(mc.base).addScaledVector(dir, mc.len * 0.5);
@@ -1097,12 +1234,14 @@ export class AnatomicalTorso {
             const shaftGeo = new THREE.TubeGeometry(mcCurve, 8, mc.radShaft, 8, false);
             const shaftMesh = new THREE.Mesh(shaftGeo, this.materials.bone);
             shaftMesh.castShadow = true;
+            this._tagBone(shaftMesh, mcBoneName);
             mcGroup.add(shaftMesh);
 
             // 掌骨頭 (MCP Knuckle: 拳頭握緊時突出的指節骨點)
             const knuckleGeo = new THREE.SphereGeometry(mc.headScale, 10, 10);
             const knuckleMesh = new THREE.Mesh(knuckleGeo, this.materials.boneHighlight);
             knuckleMesh.position.copy(mcpPos);
+            this._tagBone(knuckleMesh, mcBoneName);
             mcGroup.add(knuckleMesh);
 
             if (mc.name === 'Thumb' || mc.name === 'Index' || mc.name === 'Middle') {
@@ -1119,17 +1258,20 @@ export class AnatomicalTorso {
         group.add(phalangesGroup);
 
         const fingerConfigs = [
-            { name: 'Thumb',  pLen: 1.05, mLen: 0,    dLen: 0.80, pRad: 0.14, dRad: 0.12, tuft: [0.22, 0.18, 0.12] },
-            { name: 'Index',  pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
-            { name: 'Middle', pLen: 1.15, mLen: 0.75, dLen: 0.55, pRad: 0.14, mRad: 0.12, dRad: 0.10, tuft: [0.19, 0.15, 0.09] },
-            { name: 'Ring',   pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
-            { name: 'Little', pLen: 0.80, mLen: 0.52, dLen: 0.40, pRad: 0.11, mRad: 0.09, dRad: 0.07, tuft: [0.15, 0.12, 0.07] },
+            { name: 'Thumb',  fullLabel: 'Thumb',         pLen: 1.05, mLen: 0,    dLen: 0.80, pRad: 0.14, dRad: 0.12, tuft: [0.22, 0.18, 0.12] },
+            { name: 'Index',  fullLabel: 'Index Finger',  pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
+            { name: 'Middle', fullLabel: 'Middle Finger', pLen: 1.15, mLen: 0.75, dLen: 0.55, pRad: 0.14, mRad: 0.12, dRad: 0.10, tuft: [0.19, 0.15, 0.09] },
+            { name: 'Ring',   fullLabel: 'Ring Finger',   pLen: 1.05, mLen: 0.68, dLen: 0.50, pRad: 0.13, mRad: 0.11, dRad: 0.09, tuft: [0.18, 0.14, 0.08] },
+            { name: 'Little', fullLabel: 'Little Finger', pLen: 0.80, mLen: 0.52, dLen: 0.40, pRad: 0.11, mRad: 0.09, dRad: 0.07, tuft: [0.15, 0.12, 0.07] },
         ];
 
         const joints = {};
 
         fingerConfigs.forEach(fc => {
             const { mcpPos, dir } = mcpJoints[fc.name];
+            const proxBoneName = `${sideLabel} Proximal Phalanx of ${fc.fullLabel}`;
+            const midBoneName = `${sideLabel} Middle Phalanx of ${fc.fullLabel}`;
+            const distBoneName = `${sideLabel} Distal Phalanx of ${fc.fullLabel}`;
 
             // 掌指關節 (MCP Joint Group)
             const mcpJoint = new THREE.Group();
@@ -1150,6 +1292,7 @@ export class AnatomicalTorso {
             const pShaftGeo = new THREE.CylinderGeometry(fc.pRad * 0.85, fc.pRad, fc.pLen, 8);
             const pShaftMesh = new THREE.Mesh(pShaftGeo, this.materials.bone);
             pShaftMesh.position.set(0, -fc.pLen * 0.5, 0);
+            this._tagBone(pShaftMesh, proxBoneName);
             mcpJoint.add(pShaftMesh);
 
             // 近端指間關節 (PIP Joint Group / 拇指為 IP 關節)
@@ -1160,6 +1303,7 @@ export class AnatomicalTorso {
 
             const pipKnuckleGeo = new THREE.SphereGeometry(fc.pRad * 1.1, 8, 8);
             const pipKnuckleMesh = new THREE.Mesh(pipKnuckleGeo, this.materials.boneHighlight);
+            this._tagBone(pipKnuckleMesh, fc.mLen > 0 ? midBoneName : distBoneName);
             pipJoint.add(pipKnuckleMesh);
 
             let dipJoint = null;
@@ -1169,6 +1313,7 @@ export class AnatomicalTorso {
                 const mShaftGeo = new THREE.CylinderGeometry(fc.mRad * 0.85, fc.mRad, fc.mLen, 8);
                 const mShaftMesh = new THREE.Mesh(mShaftGeo, this.materials.bone);
                 mShaftMesh.position.set(0, -fc.mLen * 0.5, 0);
+                this._tagBone(mShaftMesh, midBoneName);
                 pipJoint.add(mShaftMesh);
 
                 // 遠端指間關節 (DIP Joint Group)
@@ -1179,29 +1324,34 @@ export class AnatomicalTorso {
 
                 const dipKnuckleGeo = new THREE.SphereGeometry(fc.mRad * 1.05, 8, 8);
                 const dipKnuckleMesh = new THREE.Mesh(dipKnuckleGeo, this.materials.boneHighlight);
+                this._tagBone(dipKnuckleMesh, distBoneName);
                 dipJoint.add(dipKnuckleMesh);
 
                 // 遠節指骨 (Distal Phalanx)
                 const dShaftGeo = new THREE.CylinderGeometry(fc.dRad * 0.8, fc.dRad, fc.dLen, 8);
                 const dShaftMesh = new THREE.Mesh(dShaftGeo, this.materials.bone);
                 dShaftMesh.position.set(0, -fc.dLen * 0.5, 0);
+                this._tagBone(dShaftMesh, distBoneName);
                 dipJoint.add(dShaftMesh);
 
                 // 指甲粗隆 / 指尖膨大部 (Ungual Tuberosity)
                 const tuftGeo = new THREE.BoxGeometry(...fc.tuft);
                 const tuftMesh = new THREE.Mesh(tuftGeo, this.materials.boneHighlight);
                 tuftMesh.position.set(0, -fc.dLen, 0);
+                this._tagBone(tuftMesh, distBoneName);
                 dipJoint.add(tuftMesh);
             } else {
                 // 拇指僅有遠節指骨
                 const dShaftGeo = new THREE.CylinderGeometry(fc.dRad * 0.85, fc.dRad, fc.dLen, 8);
                 const dShaftMesh = new THREE.Mesh(dShaftGeo, this.materials.bone);
                 dShaftMesh.position.set(0, -fc.dLen * 0.5, 0);
+                this._tagBone(dShaftMesh, distBoneName);
                 pipJoint.add(dShaftMesh);
 
                 const tuftGeo = new THREE.BoxGeometry(...fc.tuft);
                 const tuftMesh = new THREE.Mesh(tuftGeo, this.materials.boneHighlight);
                 tuftMesh.position.set(0, -fc.dLen, 0);
+                this._tagBone(tuftMesh, distBoneName);
                 pipJoint.add(tuftMesh);
             }
 
@@ -1333,145 +1483,6 @@ export class AnatomicalTorso {
             pelvisGroup.add(hipBone);
         });
 
-        const symphysisGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.2, 12);
-        const symphysisMesh = new THREE.Mesh(symphysisGeo, this.materials.cartilage);
-        symphysisMesh.name = "PubicSymphysis";
-        symphysisMesh.rotation.z = Math.PI * 0.5;
-        symphysisMesh.position.set(0, -3.8, 2.7);
-        pelvisGroup.add(symphysisMesh);
-        this.pelvisBones.pubicSymphysis = symphysisMesh;
-
-        this._addLandmark("PubicSymphysisPoint", new THREE.Vector3(0, -3.8, 2.9), this.pelvisUnit);
-    }
-
-    _createSacrumMesh() {
-        const group = new THREE.Group();
-        group.name = "Sacrum";
-
-        const sacrumShape = new THREE.Shape();
-        sacrumShape.moveTo(-2.2, 0);
-        sacrumShape.lineTo(2.2, 0);
-        sacrumShape.lineTo(1.5, -2.2);
-        sacrumShape.lineTo(0.6, -4.2);
-        sacrumShape.lineTo(-0.6, -4.2);
-        sacrumShape.lineTo(-1.5, -2.2);
-        sacrumShape.closePath();
-
-        const extrudeSettings = { depth: 0.9, bevelEnabled: true, bevelSegments: 3, steps: 1, bevelSize: 0.15, bevelThickness: 0.15 };
-        const sacrumGeo = new THREE.ExtrudeGeometry(sacrumShape, extrudeSettings);
-        const sacrumMesh = new THREE.Mesh(sacrumGeo, this.materials.bone);
-        sacrumMesh.rotation.x = -0.22;
-        sacrumMesh.position.set(0, 0, -0.5);
-        sacrumMesh.castShadow = true;
-        group.add(sacrumMesh);
-
-        const crestGeo = new THREE.BoxGeometry(0.35, 3.8, 0.45);
-        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
-        crestMesh.rotation.x = -0.22;
-        crestMesh.position.set(0, -2.0, -0.6);
-        group.add(crestMesh);
-
-        return group;
-    }
-
-    _createCoccyxMesh() {
-        const group = new THREE.Group();
-        group.name = "Coccyx";
-
-        const points = [
-            new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, -0.6, 0.15),
-            new THREE.Vector3(0, -1.2, 0.4)
-        ];
-        const curve = new THREE.CatmullRomCurve3(points);
-        const geo = new THREE.TubeGeometry(curve, 8, 0.24, 6, false);
-        const mesh = new THREE.Mesh(geo, this.materials.bone);
-        group.add(mesh);
-
-        return group;
-    }
-
-    _createInnominateBone(side) {
-        const sign = (side === 'left') ? 1 : -1;
-        const hipGroup = new THREE.Group();
-        hipGroup.name = `HipBone_${side}`;
-
-        const iliumGroup = new THREE.Group();
-        iliumGroup.name = `Ilium_${side}`;
-
-        const pPSIS = new THREE.Vector3(sign * 2.0, 0.2, -1.2);
-        const pSummit = new THREE.Vector3(sign * 4.6, 0.8, 0.2);
-        const pASIS = new THREE.Vector3(sign * 3.8, -1.4, 2.6);
-
-        const crestCurve = new THREE.CatmullRomCurve3([pPSIS, pSummit, pASIS]);
-        const crestGeo = new THREE.TubeGeometry(crestCurve, 16, 0.25, 8, false);
-        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
-        crestMesh.castShadow = true;
-        iliumGroup.add(crestMesh);
-
-        const iliumShape = new THREE.Shape();
-        iliumShape.moveTo(sign * 2.0, 0.0);
-        iliumShape.lineTo(sign * 4.5, 0.6);
-        iliumShape.lineTo(sign * 3.8, -1.4);
-        iliumShape.lineTo(sign * 3.2, -3.2);
-        iliumShape.lineTo(sign * 1.8, -2.5);
-        iliumShape.closePath();
-
-        const wingGeo = new THREE.ExtrudeGeometry(iliumShape, { depth: 0.18, bevelEnabled: true, bevelSize: 0.08, bevelThickness: 0.08 });
-        const wingMesh = new THREE.Mesh(wingGeo, this.materials.pelvisWing);
-        wingMesh.position.set(0, 0, 0.2);
-        wingMesh.rotation.y = -sign * 0.15;
-        iliumGroup.add(wingMesh);
-
-        hipGroup.add(iliumGroup);
-        if (side === 'left') this.pelvisBones.iliumL = iliumGroup;
-        else this.pelvisBones.iliumR = iliumGroup;
-
-        this._addLandmark(`ASIS_${side}`, new THREE.Vector3(sign * 3.8, -1.4, 2.6), this.pelvisUnit);
-
-        const ischiumGroup = new THREE.Group();
-        ischiumGroup.name = `Ischium_${side}`;
-
-        const tuberosityGeo = new THREE.SphereGeometry(0.7, 10, 10);
-        const tuberosityMesh = new THREE.Mesh(tuberosityGeo, this.materials.boneHighlight);
-        tuberosityMesh.scale.set(1.0, 1.4, 0.8);
-        tuberosityMesh.position.set(sign * 2.6, -5.4, -0.6);
-        ischiumGroup.add(tuberosityMesh);
-
-        const ischialRamusP0 = new THREE.Vector3(sign * 2.6, -5.4, -0.6);
-        const ischialRamusP1 = new THREE.Vector3(sign * 1.6, -5.2, 1.2);
-        const ischialCurve = new THREE.CatmullRomCurve3([ischialRamusP0, ischialRamusP1]);
-        const ramusGeo = new THREE.TubeGeometry(ischialCurve, 8, 0.25, 6, false);
-        const ramusMesh = new THREE.Mesh(ramusGeo, this.materials.bone);
-        ischiumGroup.add(ramusMesh);
-
-        hipGroup.add(ischiumGroup);
-        if (side === 'left') this.pelvisBones.ischiumL = ischiumGroup;
-        else this.pelvisBones.ischiumR = ischiumGroup;
-
-        const pubisGroup = new THREE.Group();
-        pubisGroup.name = `Pubis_${side}`;
-
-        const pubicP0 = new THREE.Vector3(sign * 3.0, -3.2, 1.2);
-        const pubicP1 = new THREE.Vector3(sign * 1.5, -3.6, 2.4);
-        const pubicP2 = new THREE.Vector3(sign * 0.45, -3.8, 2.7);
-
-        const pubicCurve = new THREE.CatmullRomCurve3([pubicP0, pubicP1, pubicP2]);
-        const pubicGeo = new THREE.TubeGeometry(pubicCurve, 10, 0.25, 6, false);
-        const pubicMesh = new THREE.Mesh(pubicGeo, this.materials.bone);
-        pubisGroup.add(pubicMesh);
-
-        const infP0 = pubicP2;
-        const infP1 = ischialRamusP1;
-        const infCurve = new THREE.CatmullRomCurve3([infP0, infP1]);
-        const infGeo = new THREE.TubeGeometry(infCurve, 8, 0.22, 6, false);
-        const infMesh = new THREE.Mesh(infGeo, this.materials.bone);
-        pubisGroup.add(infMesh);
-
-        hipGroup.add(pubisGroup);
-        if (side === 'left') this.pelvisBones.pubisL = pubisGroup;
-        else this.pelvisBones.pubisR = pubisGroup;
-
         const acetabulumGeo = new THREE.CylinderGeometry(0.75, 0.85, 0.45, 14);
         const acetabulumMesh = new THREE.Mesh(acetabulumGeo, this.materials.bone);
         acetabulumMesh.name = `Acetabulum_${side}`;
@@ -1479,7 +1490,8 @@ export class AnatomicalTorso {
         acetabulumMesh.position.set(sign * 3.6, -3.4, 0.6);
         hipGroup.add(acetabulumMesh);
 
-        return hipGroup;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(hipGroup, `${sideLabel} Hip Bone`);
     }
 
     _createClavicleMesh(side) {
@@ -1513,7 +1525,8 @@ export class AnatomicalTorso {
         acromialHead.scale.set(1.1, 0.7, 1.1);
         group.add(acromialHead);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Clavicle`);
     }
 
     _createScapulaMesh(side) {
@@ -1566,7 +1579,8 @@ export class AnatomicalTorso {
         coracoidMesh.position.set(sign * 0.1, -0.5, 0.65);
         group.add(coracoidMesh);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Scapula`);
     }
 
     _createHumerusMesh(side) {
@@ -1596,7 +1610,8 @@ export class AnatomicalTorso {
         elbowMesh.position.set(0, -armLength, 0);
         group.add(elbowMesh);
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Humerus`);
     }
 
     _createVertebraMesh(name, width, height, type) {
@@ -1631,7 +1646,18 @@ export class AnatomicalTorso {
         }
         group.add(spinousMesh);
 
-        return group;
+        let fullBoneName = `Vertebra ${name}`;
+        if (type === 'cervical') {
+            if (name === 'C1') fullBoneName = 'Cervical Vertebra C1 (Atlas)';
+            else if (name === 'C2') fullBoneName = 'Cervical Vertebra C2 (Axis)';
+            else fullBoneName = `Cervical Vertebra ${name}`;
+        } else if (type === 'thoracic') {
+            fullBoneName = `Thoracic Vertebra ${name}`;
+        } else if (type === 'lumbar') {
+            fullBoneName = `Lumbar Vertebra ${name}`;
+        }
+
+        return this._tagBone(group, fullBoneName);
     }
 
     _createRibWithSternumAttachment(ribNum, width, side) {
@@ -1687,7 +1713,8 @@ export class AnatomicalTorso {
             group.add(cartMesh);
         }
 
-        return group;
+        const sideLabel = (side === 'left') ? 'Left' : 'Right';
+        return this._tagBone(group, `${sideLabel} Rib ${ribNum}`);
     }
 
     _createSternumMesh() {
@@ -1710,97 +1737,272 @@ export class AnatomicalTorso {
         xiphMesh.position.set(0, -3.2, 0);
         group.add(xiphMesh);
 
-        return group;
+        return this._tagBone(group, "Sternum");
     }
 
     /**
-     * 建立完整藝用解剖頭骨系統 (Skull & Mandible)
-     * 含腦顱骨穹隆 (Calvaria)、額骨眉弓 (Brow Ridge)、雙側眼眶 (Orbits)、
-     * 顴骨與顴弓 (Zygomatic Bones & Arches)、鼻骨梨狀孔 (Nasal Bone & Aperture)、
-     * 上頜骨牙列 (Maxilla & Upper Teeth)、以及完整下頜骨與下巴頦結節 (Mandible & Mental Protuberance)
+     * 建立舌骨 (Hyoid Bone - 位於下頜骨與喉部第 3 頸椎之間的馬蹄形獨立舌骨)
+     */
+    _createHyoidMesh() {
+        const group = new THREE.Group();
+        group.name = "Hyoid_Bone";
+
+        // 馬蹄形舌骨體與左右大角 (Body & Greater Cornua of Hyoid)
+        const curve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(0.55, 0.08, -0.45),
+            new THREE.Vector3(0.42, 0.02, -0.05),
+            new THREE.Vector3(0.0, 0.0, 0.18),
+            new THREE.Vector3(-0.42, 0.02, -0.05),
+            new THREE.Vector3(-0.55, 0.08, -0.45)
+        ]);
+        const hyoidGeo = new THREE.TubeGeometry(curve, 14, 0.09, 6, false);
+        const hyoidMesh = new THREE.Mesh(hyoidGeo, this.materials.boneHighlight);
+        group.add(hyoidMesh);
+
+        return this._tagBone(group, "Hyoid Bone");
+    }
+
+    /**
+     * 建立完整 28 塊頭顱與耳內骨骼系統 (22 Skull Bones + 6 Auditory Ossicles)
+     * - 8 塊腦顱骨 (Cranium): Frontal, Left/Right Parietal, Left/Right Temporal, Occipital, Sphenoid, Ethmoid
+     * - 14 塊面顱骨 (Facial): Mandible, Left/Right Maxilla, Left/Right Zygomatic, Left/Right Nasal,
+     *   Left/Right Lacrimal, Left/Right Palatine, Left/Right Inferior Nasal Concha, Vomer
+     * - 6 塊聽小骨 (Auditory Ossicles): Left/Right Malleus, Left/Right Incus, Left/Right Stapes
      */
     _createSkullMesh() {
         const group = new THREE.Group();
         group.name = "Human_Skull";
 
-        // 1. 腦顱骨穹隆 (Cranial Vault / Calvaria) - 頂骨、枕骨、額骨
-        const craniumGeo = new THREE.SphereGeometry(1.85, 16, 16);
-        const craniumMesh = new THREE.Mesh(craniumGeo, this.materials.bone);
-        craniumMesh.scale.set(1.0, 1.12, 1.22);
-        craniumMesh.position.set(0, 1.85, -0.35);
-        craniumMesh.castShadow = true;
-        group.add(craniumMesh);
+        // 1. 額骨 (Frontal Bone: 前額穹隆 + 眉弓隆起 + 眼眶上緣)
+        const frontalDomeGeo = new THREE.SphereGeometry(1.83, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.45);
+        const frontalDomeMesh = new THREE.Mesh(frontalDomeGeo, this.materials.bone);
+        frontalDomeMesh.scale.set(0.99, 1.08, 1.12);
+        frontalDomeMesh.rotation.x = 0.65;
+        frontalDomeMesh.position.set(0, 1.88, -0.22);
+        frontalDomeMesh.castShadow = true;
+        this._tagBone(frontalDomeMesh, "Frontal Bone");
+        group.add(frontalDomeMesh);
 
-        // 枕外隆凸 (External Occipital Protuberance - 後腦勺骨點)
+        const browGeo = new THREE.BoxGeometry(2.25, 0.42, 0.65);
+        const browMesh = new THREE.Mesh(browGeo, this.materials.boneHighlight);
+        browMesh.position.set(0, 1.65, 1.30);
+        this._tagBone(browMesh, "Frontal Bone");
+        group.add(browMesh);
+
+        // 2. 左頂骨與右頂骨 (Left & Right Parietal Bones: 顱頂左右雙側穹隆)
+        const parietalLGeo = new THREE.SphereGeometry(1.85, 14, 12, -Math.PI * 0.5, Math.PI, 0, Math.PI * 0.58);
+        const parietalLMesh = new THREE.Mesh(parietalLGeo, this.materials.bone);
+        parietalLMesh.scale.set(1.0, 1.12, 1.20);
+        parietalLMesh.position.set(0.02, 1.86, -0.38);
+        parietalLMesh.castShadow = true;
+        this._tagBone(parietalLMesh, "Left Parietal Bone");
+        group.add(parietalLMesh);
+
+        const parietalRGeo = new THREE.SphereGeometry(1.85, 14, 12, Math.PI * 0.5, Math.PI, 0, Math.PI * 0.58);
+        const parietalRMesh = new THREE.Mesh(parietalRGeo, this.materials.bone);
+        parietalRMesh.scale.set(1.0, 1.12, 1.20);
+        parietalRMesh.position.set(-0.02, 1.86, -0.38);
+        parietalRMesh.castShadow = true;
+        this._tagBone(parietalRMesh, "Right Parietal Bone");
+        group.add(parietalRMesh);
+
+        // 3. 枕骨 (Occipital Bone: 後顱底與枕外隆凸)
+        const occBaseGeo = new THREE.SphereGeometry(1.48, 14, 10);
+        const occBaseMesh = new THREE.Mesh(occBaseGeo, this.materials.bone);
+        occBaseMesh.scale.set(1.02, 0.88, 1.05);
+        occBaseMesh.position.set(0, 1.20, -0.95);
+        this._tagBone(occBaseMesh, "Occipital Bone");
+        group.add(occBaseMesh);
+
         const occiputGeo = new THREE.SphereGeometry(0.5, 8, 8);
         const occiputMesh = new THREE.Mesh(occiputGeo, this.materials.boneHighlight);
         occiputMesh.scale.set(1.1, 0.8, 0.9);
         occiputMesh.position.set(0, 0.85, -1.65);
+        this._tagBone(occiputMesh, "Occipital Bone");
         group.add(occiputMesh);
 
-        // 2. 額骨前壁與眉弓隆起 (Frontal Bone & Superciliary Arches / Glabella)
-        const browGeo = new THREE.BoxGeometry(2.25, 0.42, 0.65);
-        const browMesh = new THREE.Mesh(browGeo, this.materials.boneHighlight);
-        browMesh.position.set(0, 1.65, 1.30);
-        group.add(browMesh);
-
-        // 3. 雙側眼眶骨架 (Orbital Cavities & Rims)
+        // 4. 左右顳骨與中耳三聽小骨 (Left & Right Temporal Bones + Malleus, Incus, Stapes)
         [-1, 1].forEach(sign => {
+            const sideLabel = (sign === 1) ? 'Left' : 'Right';
+            const tempBoneName = `${sideLabel} Temporal Bone`;
+
+            // 顳骨鱗部與岩部 (Squamous & Petrous Temporal)
+            const tempGeo = new THREE.SphereGeometry(0.75, 12, 10);
+            const tempMesh = new THREE.Mesh(tempGeo, this.materials.bone);
+            tempMesh.scale.set(0.52, 0.92, 1.18);
+            tempMesh.position.set(sign * 1.52, 1.12, -0.45);
+            this._tagBone(tempMesh, tempBoneName);
+            group.add(tempMesh);
+
+            // 顳骨乳突 (Mastoid Process)
+            const mastoidGeo = new THREE.ConeGeometry(0.26, 0.55, 8);
+            const mastoidMesh = new THREE.Mesh(mastoidGeo, this.materials.boneHighlight);
+            mastoidMesh.rotation.x = Math.PI;
+            mastoidMesh.position.set(sign * 1.46, 0.45, -0.72);
+            this._tagBone(mastoidMesh, tempBoneName);
+            group.add(mastoidMesh);
+
+            // 顳骨顴突 (Zygomatic Process of Temporal Bone - 顴弓後半段)
+            const tempArchCurve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(sign * 1.72, 0.84, 0.08),
+                new THREE.Vector3(sign * 1.68, 0.82, -0.30),
+                new THREE.Vector3(sign * 1.62, 0.80, -0.65)
+            ]);
+            const tempArchGeo = new THREE.TubeGeometry(tempArchCurve, 6, 0.14, 6, false);
+            const tempArchMesh = new THREE.Mesh(tempArchGeo, this.materials.boneHighlight);
+            this._tagBone(tempArchMesh, tempBoneName);
+            group.add(tempArchMesh);
+
+            // 中耳聽小骨 (Auditory Ossicles: Malleus, Incus, Stapes - 位於外耳道口與鼓室處)
+            const malleusGeo = new THREE.SphereGeometry(0.11, 8, 8);
+            const malleusMesh = new THREE.Mesh(malleusGeo, this.materials.boneHighlight);
+            malleusMesh.position.set(sign * 1.66, 0.76, -0.40);
+            this._tagBone(malleusMesh, `${sideLabel} Malleus`);
+            group.add(malleusMesh);
+
+            const incusGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+            const incusMesh = new THREE.Mesh(incusGeo, this.materials.bone);
+            incusMesh.position.set(sign * 1.56, 0.78, -0.48);
+            this._tagBone(incusMesh, `${sideLabel} Incus`);
+            group.add(incusMesh);
+
+            const stapesGeo = new THREE.TorusGeometry(0.08, 0.03, 6, 8);
+            const stapesMesh = new THREE.Mesh(stapesGeo, this.materials.boneHighlight);
+            stapesMesh.position.set(sign * 1.46, 0.76, -0.54);
+            this._tagBone(stapesMesh, `${sideLabel} Stapes`);
+            group.add(stapesMesh);
+        });
+
+        // 5. 蝶骨 (Sphenoid Bone: 顱底中央蝶鞍與兩側太陽穴蝶骨大翼 Greater Wings)
+        const sphenoidBodyGeo = new THREE.BoxGeometry(1.2, 0.45, 0.55);
+        const sphenoidBodyMesh = new THREE.Mesh(sphenoidBodyGeo, this.materials.bone);
+        sphenoidBodyMesh.position.set(0, 1.02, 0.35);
+        this._tagBone(sphenoidBodyMesh, "Sphenoid Bone");
+        group.add(sphenoidBodyMesh);
+
+        [-1, 1].forEach(sign => {
+            const wingGeo = new THREE.BoxGeometry(0.32, 0.62, 0.52);
+            const wingMesh = new THREE.Mesh(wingGeo, this.materials.boneHighlight);
+            wingMesh.position.set(sign * 1.48, 1.22, 0.38);
+            this._tagBone(wingMesh, "Sphenoid Bone");
+            group.add(wingMesh);
+        });
+
+        // 6. 篩骨 (Ethmoid Bone: 篩板、垂直板與兩側眼眶內壁篩骨紙板 Orbital Plates)
+        const ethmoidGeo = new THREE.BoxGeometry(0.52, 0.48, 0.55);
+        const ethmoidMesh = new THREE.Mesh(ethmoidGeo, this.materials.bone);
+        ethmoidMesh.position.set(0, 1.12, 1.08);
+        this._tagBone(ethmoidMesh, "Ethmoid Bone");
+        group.add(ethmoidMesh);
+
+        // 7. 雙側眼眶與淚骨 (Orbital Rims & Left/Right Lacrimal Bones)
+        [-1, 1].forEach(sign => {
+            const sideLabel = (sign === 1) ? 'Left' : 'Right';
+
             const orbitRimGeo = new THREE.TorusGeometry(0.52, 0.15, 8, 14);
             const orbitRimMesh = new THREE.Mesh(orbitRimGeo, this.materials.boneHighlight);
             orbitRimMesh.position.set(sign * 0.82, 1.15, 1.35);
+            this._tagBone(orbitRimMesh, "Frontal Bone");
             group.add(orbitRimMesh);
+
+            // 淚骨 (Lacrimal Bone: 眼眶內側前壁淚囊窩小骨)
+            const lacrimalGeo = new THREE.BoxGeometry(0.16, 0.36, 0.24);
+            const lacrimalMesh = new THREE.Mesh(lacrimalGeo, this.materials.boneHighlight);
+            lacrimalMesh.position.set(sign * 0.42, 1.10, 1.42);
+            this._tagBone(lacrimalMesh, `${sideLabel} Lacrimal Bone`);
+            group.add(lacrimalMesh);
 
             const darkOrbitGeo = new THREE.CylinderGeometry(0.46, 0.35, 0.4, 10);
             const darkOrbitMat = new THREE.MeshBasicMaterial({ color: 0x1a1512 });
             const darkOrbitMesh = new THREE.Mesh(darkOrbitGeo, darkOrbitMat);
             darkOrbitMesh.rotation.x = Math.PI * 0.5;
             darkOrbitMesh.position.set(sign * 0.82, 1.15, 1.25);
+            darkOrbitMesh.userData.isCavityHole = true;
             group.add(darkOrbitMesh);
         });
 
-        // 4. 顴骨與顴弓 (Zygomatic Bones & Zygomatic Arches - 臉部最寬藝用骨點)
+        // 8. 左右顴骨與顴弓前半段 (Left & Right Zygomatic Bones)
         [-1, 1].forEach(sign => {
+            const sideLabel = (sign === 1) ? 'Left' : 'Right';
+            const zygoBoneName = `${sideLabel} Zygomatic Bone`;
+
             const zygoGeo = new THREE.BoxGeometry(0.65, 0.72, 0.75);
             const zygoMesh = new THREE.Mesh(zygoGeo, this.materials.boneHighlight);
             zygoMesh.position.set(sign * 1.45, 0.90, 0.95);
+            this._tagBone(zygoMesh, zygoBoneName);
             group.add(zygoMesh);
 
             const archP0 = new THREE.Vector3(sign * 1.45, 0.90, 0.95);
-            const archP1 = new THREE.Vector3(sign * 1.75, 0.85, 0.1);
-            const archP2 = new THREE.Vector3(sign * 1.65, 0.80, -0.65);
+            const archP1 = new THREE.Vector3(sign * 1.74, 0.86, 0.50);
+            const archP2 = new THREE.Vector3(sign * 1.72, 0.84, 0.08);
             const archCurve = new THREE.CatmullRomCurve3([archP0, archP1, archP2]);
-            const archGeo = new THREE.TubeGeometry(archCurve, 8, 0.14, 6, false);
+            const archGeo = new THREE.TubeGeometry(archCurve, 6, 0.14, 6, false);
             const archMesh = new THREE.Mesh(archGeo, this.materials.boneHighlight);
+            this._tagBone(archMesh, zygoBoneName);
             group.add(archMesh);
         });
 
-        // 5. 鼻骨與梨狀孔 (Nasal Bone & Piriform Aperture)
-        const nasalBridgeGeo = new THREE.ConeGeometry(0.28, 0.90, 5);
-        const nasalBridgeMesh = new THREE.Mesh(nasalBridgeGeo, this.materials.boneHighlight);
-        nasalBridgeMesh.rotation.x = -0.32;
-        nasalBridgeMesh.position.set(0, 1.15, 1.65);
-        group.add(nasalBridgeMesh);
+        // 9. 左右鼻骨、梨狀孔、犁骨與下鼻甲 (Left/Right Nasal Bones, Vomer & Left/Right Inferior Nasal Conchae)
+        [-1, 1].forEach(sign => {
+            const sideLabel = (sign === 1) ? 'Left' : 'Right';
+            const nasalGeo = new THREE.BoxGeometry(0.16, 0.72, 0.28);
+            const nasalMesh = new THREE.Mesh(nasalGeo, this.materials.boneHighlight);
+            nasalMesh.rotation.x = -0.32;
+            nasalMesh.position.set(sign * 0.09, 1.18, 1.64);
+            this._tagBone(nasalMesh, `${sideLabel} Nasal Bone`);
+            group.add(nasalMesh);
 
-        const piriformGeo = new THREE.BoxGeometry(0.42, 0.70, 0.4);
+            // 下鼻甲 (Inferior Nasal Concha: 梨狀孔外側壁捲曲骨片)
+            const conchaGeo = new THREE.SphereGeometry(0.11, 8, 6);
+            const conchaMesh = new THREE.Mesh(conchaGeo, this.materials.boneHighlight);
+            conchaMesh.scale.set(0.6, 0.9, 1.8);
+            conchaMesh.position.set(sign * 0.15, 0.62, 1.42);
+            this._tagBone(conchaMesh, `${sideLabel} Inferior Nasal Concha`);
+            group.add(conchaMesh);
+        });
+
+        // 犁骨 (Vomer: 鼻腔正中下部骨性鼻中隔)
+        const vomerGeo = new THREE.BoxGeometry(0.06, 0.56, 0.45);
+        const vomerMesh = new THREE.Mesh(vomerGeo, this.materials.boneHighlight);
+        vomerMesh.position.set(0, 0.60, 1.44);
+        this._tagBone(vomerMesh, "Vomer");
+        group.add(vomerMesh);
+
+        const piriformGeo = new THREE.BoxGeometry(0.42, 0.70, 0.35);
         const piriformMat = new THREE.MeshBasicMaterial({ color: 0x151110 });
         const piriformMesh = new THREE.Mesh(piriformGeo, piriformMat);
-        piriformMesh.position.set(0, 0.65, 1.35);
+        piriformMesh.position.set(0, 0.65, 1.32);
+        piriformMesh.userData.isCavityHole = true;
         group.add(piriformMesh);
 
-        // 6. 上頜骨與上牙弓 (Maxilla & Upper Dentition)
-        const maxillaGeo = new THREE.BoxGeometry(1.55, 0.80, 1.05);
-        const maxillaMesh = new THREE.Mesh(maxillaGeo, this.materials.bone);
-        maxillaMesh.position.set(0, 0.15, 1.05);
-        group.add(maxillaMesh);
-
-        const upperTeethGeo = new THREE.CylinderGeometry(0.62, 0.68, 0.32, 10, 1, false, -Math.PI * 0.45, Math.PI * 0.9);
+        // 10. 左右上頜骨與左右腭骨 (Left/Right Maxilla & Left/Right Palatine Bones)
         const teethMat = new THREE.MeshStandardMaterial({ color: 0xfaf5ec, roughness: 0.25 });
-        const upperTeethMesh = new THREE.Mesh(upperTeethGeo, teethMat);
-        upperTeethMesh.position.set(0, -0.20, 1.05);
-        group.add(upperTeethMesh);
+        [-1, 1].forEach(sign => {
+            const sideLabel = (sign === 1) ? 'Left' : 'Right';
+            const maxillaName = `${sideLabel} Maxilla`;
 
-        // 7. 下頜骨系統 (Mandible: 下頜體、下頜角、下頜支與下巴頦結節)
+            const maxillaGeo = new THREE.BoxGeometry(0.76, 0.80, 1.05);
+            const maxillaMesh = new THREE.Mesh(maxillaGeo, this.materials.bone);
+            maxillaMesh.position.set(sign * 0.39, 0.15, 1.05);
+            this._tagBone(maxillaMesh, maxillaName);
+            group.add(maxillaMesh);
+
+            const startAng = (sign === 1) ? 0 : -Math.PI * 0.45;
+            const upperTeethGeo = new THREE.CylinderGeometry(0.62, 0.68, 0.32, 6, 1, false, startAng, Math.PI * 0.45);
+            const upperTeethMesh = new THREE.Mesh(upperTeethGeo, teethMat);
+            upperTeethMesh.position.set(0, -0.20, 1.05);
+            this._tagBone(upperTeethMesh, maxillaName);
+            group.add(upperTeethMesh);
+
+            // 腭骨 (Palatine Bone: 上頜骨後方構成硬腭後 1/4 與鼻腔底壁的 L 形骨板)
+            const palatineGeo = new THREE.BoxGeometry(0.62, 0.26, 0.48);
+            const palatineMesh = new THREE.Mesh(palatineGeo, this.materials.boneHighlight);
+            palatineMesh.position.set(sign * 0.32, -0.05, 0.35);
+            this._tagBone(palatineMesh, `${sideLabel} Palatine Bone`);
+            group.add(palatineMesh);
+        });
+
+        // 11. 下頜骨系統 (Mandible: 下頜體、下頜角、下頜支與下巴頦結節)
         const mandibleGroup = new THREE.Group();
         mandibleGroup.name = "Mandible";
 
@@ -1832,6 +2034,7 @@ export class AnatomicalTorso {
             mandibleGroup.add(gonionMesh);
         });
 
+        this._tagBone(mandibleGroup, "Mandible");
         group.add(mandibleGroup);
         return group;
     }
@@ -2157,6 +2360,7 @@ export class AnatomicalTorso {
 
     toggleSkull(visible) {
         if (this.skullGroup) this.skullGroup.visible = visible;
+        if (this.hyoidMesh) this.hyoidMesh.visible = visible;
     }
 
     toggleShoulderGirdle(visible) {

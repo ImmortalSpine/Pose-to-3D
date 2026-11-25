@@ -642,3 +642,23 @@ input:checked + .slider:before {
     padding: 10px 11px 4px 11px;
     border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
+
+/* 3D 骨骼點擊英文名稱懸浮標籤 */
+.bone-name-tooltip {
+    position: absolute;
+    z-index: 40;
+    pointer-events: none;
+    background: rgba(18, 20, 28, 0.92);
+    color: #ffffff;
+    border: 1.5px solid var(--accent);
+    border-radius: 7px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    transform: translate(-50%, -130%);
+    transition: opacity 0.15s ease;
+}

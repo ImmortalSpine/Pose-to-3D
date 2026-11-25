@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=8.6';
+import { AnatomicalTorso } from './anatomy.js?v=8.12';
 import { TorsoPoseEstimator } from './poseDetector.js?v=8.6';
 
 class App {
@@ -165,6 +165,124 @@ class App {
     _initAnatomy() {
         this.anatomicalTorso = new AnatomicalTorso();
         this.scene.add(this.anatomicalTorso.rootGroup);
+        this._initBonePicker();
+    }
+
+    /**
+     * 初始化 3D 骨骼滑鼠點擊射線檢測 (206 Bones Raycast Picker)
+     * 點擊任一骨頭時高光該骨骼並顯示其英文解剖名稱 (English Bone Name)
+     */
+    _initBonePicker() {
+        this.raycaster = new THREE.Raycaster();
+        this.pointerNDC = new THREE.Vector2();
+        this.boneTooltip = document.getElementById('boneNameTooltip');
+        this.selectedBoneAnchorLocal = null;
+        this.selectedBoneMesh = null;
+
+        let downX = 0;
+        let downY = 0;
+
+        this.canvas.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return;
+            downX = e.clientX;
+            downY = e.clientY;
+        });
+
+        this.canvas.addEventListener('pointerup', (e) => {
+            if (e.button !== 0) return;
+            // 區分單純點擊與拖曳旋轉視角 (移動小於 5px 視為點擊)
+            const moveDist = Math.hypot(e.clientX - downX, e.clientY - downY);
+            if (moveDist > 5) return;
+
+            const rect = this.canvas.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+
+            this.pointerNDC.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            this.pointerNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+            const hits = this.raycaster.intersectObject(this.anatomicalTorso.rootGroup, true);
+
+            let pickedHit = null;
+            for (const hit of hits) {
+                if (!hit.object || !hit.object.isMesh) continue;
+                if (hit.object.userData.isCavityHole) continue;
+                // 確保該網格及其所有父層級皆處於可見狀態
+                let vis = true;
+                let curr = hit.object;
+                while (curr) {
+                    if (curr.visible === false) {
+                        vis = false;
+                        break;
+                    }
+                    curr = curr.parent;
+                }
+                if (vis && hit.object.userData.boneName) {
+                    pickedHit = hit;
+                    break;
+                }
+            }
+
+            if (pickedHit) {
+                const boneName = pickedHit.object.userData.boneName;
+                this.anatomicalTorso.selectBoneByName(boneName);
+                this.selectedBoneMesh = pickedHit.object;
+                this.selectedBoneAnchorLocal = pickedHit.object.worldToLocal(pickedHit.point.clone());
+
+                if (this.boneTooltip) {
+                    this.boneTooltip.textContent = boneName;
+                    this.boneTooltip.style.display = 'block';
+                    this._updateBoneTooltipPosition();
+                }
+            } else {
+                this.anatomicalTorso.selectBoneByName(null);
+                this.selectedBoneMesh = null;
+                this.selectedBoneAnchorLocal = null;
+                if (this.boneTooltip) {
+                    this.boneTooltip.style.display = 'none';
+                }
+            }
+        });
+    }
+
+    _updateBoneTooltipPosition() {
+        if (!this.boneTooltip || this.boneTooltip.style.display === 'none') return;
+        if (!this.selectedBoneMesh || !this.selectedBoneAnchorLocal) return;
+
+        // 若選中的是動態重建的橈骨 (Radius)，自動重新綁定最新網格節點
+        if (!this.selectedBoneMesh.parent && this.anatomicalTorso.selectedBoneName) {
+            this.anatomicalTorso.rootGroup.traverse(child => {
+                if (child.isMesh && child.userData.boneName === this.anatomicalTorso.selectedBoneName) {
+                    this.selectedBoneMesh = child;
+                    this.selectedBoneAnchorLocal = new THREE.Vector3(0, 0, 0);
+                }
+            });
+        }
+
+        // 若該部位被右側開關隱藏，自動隱藏標籤
+        let curr = this.selectedBoneMesh;
+        while (curr) {
+            if (curr.visible === false) {
+                this.boneTooltip.style.display = 'none';
+                return;
+            }
+            curr = curr.parent;
+        }
+
+        const worldPt = this.selectedBoneAnchorLocal.clone();
+        this.selectedBoneMesh.localToWorld(worldPt);
+        worldPt.project(this.camera);
+
+        const width = this.viewportArea.clientWidth;
+        const height = this.viewportArea.clientHeight;
+        const screenX = (worldPt.x * 0.5 + 0.5) * width;
+        const screenY = (-worldPt.y * 0.5 + 0.5) * height;
+
+        const clampedX = Math.max(70, Math.min(width - 70, screenX));
+        const clampedY = Math.max(42, Math.min(height - 20, screenY));
+
+        this.boneTooltip.style.left = `${clampedX}px`;
+        this.boneTooltip.style.top = `${clampedY}px`;
     }
 
     _initPoseEstimator() {
@@ -1187,6 +1305,7 @@ class App {
     _animate() {
         requestAnimationFrame(() => this._animate());
         this.controls.update();
+        this._updateBoneTooltipPosition();
         this.renderer.render(this.scene, this.camera);
     }
 }
