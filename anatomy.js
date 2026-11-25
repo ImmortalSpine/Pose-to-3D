@@ -1483,6 +1483,146 @@ export class AnatomicalTorso {
             pelvisGroup.add(hipBone);
         });
 
+        const symphysisGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.2, 12);
+        const symphysisMesh = new THREE.Mesh(symphysisGeo, this.materials.cartilage);
+        symphysisMesh.name = "PubicSymphysis";
+        symphysisMesh.rotation.z = Math.PI * 0.5;
+        symphysisMesh.position.set(0, -3.8, 2.7);
+        symphysisMesh.userData.isCavityHole = true;
+        pelvisGroup.add(symphysisMesh);
+        this.pelvisBones.pubicSymphysis = symphysisMesh;
+
+        this._addLandmark("PubicSymphysisPoint", new THREE.Vector3(0, -3.8, 2.9), this.pelvisUnit);
+    }
+
+    _createSacrumMesh() {
+        const group = new THREE.Group();
+        group.name = "Sacrum";
+
+        const sacrumShape = new THREE.Shape();
+        sacrumShape.moveTo(-2.2, 0);
+        sacrumShape.lineTo(2.2, 0);
+        sacrumShape.lineTo(1.5, -2.2);
+        sacrumShape.lineTo(0.6, -4.2);
+        sacrumShape.lineTo(-0.6, -4.2);
+        sacrumShape.lineTo(-1.5, -2.2);
+        sacrumShape.closePath();
+
+        const extrudeSettings = { depth: 0.9, bevelEnabled: true, bevelSegments: 3, steps: 1, bevelSize: 0.15, bevelThickness: 0.15 };
+        const sacrumGeo = new THREE.ExtrudeGeometry(sacrumShape, extrudeSettings);
+        const sacrumMesh = new THREE.Mesh(sacrumGeo, this.materials.bone);
+        sacrumMesh.rotation.x = -0.22;
+        sacrumMesh.position.set(0, 0, -0.5);
+        sacrumMesh.castShadow = true;
+        group.add(sacrumMesh);
+
+        const crestGeo = new THREE.BoxGeometry(0.35, 3.8, 0.45);
+        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
+        crestMesh.rotation.x = -0.22;
+        crestMesh.position.set(0, -2.0, -0.6);
+        group.add(crestMesh);
+
+        return this._tagBone(group, "Sacrum");
+    }
+
+    _createCoccyxMesh() {
+        const group = new THREE.Group();
+        group.name = "Coccyx";
+
+        const points = [
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(0, -0.6, 0.15),
+            new THREE.Vector3(0, -1.2, 0.4)
+        ];
+        const curve = new THREE.CatmullRomCurve3(points);
+        const geo = new THREE.TubeGeometry(curve, 8, 0.24, 6, false);
+        const mesh = new THREE.Mesh(geo, this.materials.bone);
+        group.add(mesh);
+
+        return this._tagBone(group, "Coccyx");
+    }
+
+    _createInnominateBone(side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const hipGroup = new THREE.Group();
+        hipGroup.name = `HipBone_${side}`;
+
+        const iliumGroup = new THREE.Group();
+        iliumGroup.name = `Ilium_${side}`;
+
+        const pPSIS = new THREE.Vector3(sign * 2.0, 0.2, -1.2);
+        const pSummit = new THREE.Vector3(sign * 4.6, 0.8, 0.2);
+        const pASIS = new THREE.Vector3(sign * 3.8, -1.4, 2.6);
+
+        const crestCurve = new THREE.CatmullRomCurve3([pPSIS, pSummit, pASIS]);
+        const crestGeo = new THREE.TubeGeometry(crestCurve, 16, 0.25, 8, false);
+        const crestMesh = new THREE.Mesh(crestGeo, this.materials.boneHighlight);
+        crestMesh.castShadow = true;
+        iliumGroup.add(crestMesh);
+
+        const iliumShape = new THREE.Shape();
+        iliumShape.moveTo(sign * 2.0, 0.0);
+        iliumShape.lineTo(sign * 4.5, 0.6);
+        iliumShape.lineTo(sign * 3.8, -1.4);
+        iliumShape.lineTo(sign * 3.2, -3.2);
+        iliumShape.lineTo(sign * 1.8, -2.5);
+        iliumShape.closePath();
+
+        const wingGeo = new THREE.ExtrudeGeometry(iliumShape, { depth: 0.18, bevelEnabled: true, bevelSize: 0.08, bevelThickness: 0.08 });
+        const wingMesh = new THREE.Mesh(wingGeo, this.materials.pelvisWing);
+        wingMesh.position.set(0, 0, 0.2);
+        wingMesh.rotation.y = -sign * 0.15;
+        iliumGroup.add(wingMesh);
+
+        hipGroup.add(iliumGroup);
+        if (side === 'left') this.pelvisBones.iliumL = iliumGroup;
+        else this.pelvisBones.iliumR = iliumGroup;
+
+        this._addLandmark(`ASIS_${side}`, new THREE.Vector3(sign * 3.8, -1.4, 2.6), this.pelvisUnit);
+
+        const ischiumGroup = new THREE.Group();
+        ischiumGroup.name = `Ischium_${side}`;
+
+        const tuberosityGeo = new THREE.SphereGeometry(0.7, 10, 10);
+        const tuberosityMesh = new THREE.Mesh(tuberosityGeo, this.materials.boneHighlight);
+        tuberosityMesh.scale.set(1.0, 1.4, 0.8);
+        tuberosityMesh.position.set(sign * 2.6, -5.4, -0.6);
+        ischiumGroup.add(tuberosityMesh);
+
+        const ischialRamusP0 = new THREE.Vector3(sign * 2.6, -5.4, -0.6);
+        const ischialRamusP1 = new THREE.Vector3(sign * 1.6, -5.2, 1.2);
+        const ischialCurve = new THREE.CatmullRomCurve3([ischialRamusP0, ischialRamusP1]);
+        const ramusGeo = new THREE.TubeGeometry(ischialCurve, 8, 0.25, 6, false);
+        const ramusMesh = new THREE.Mesh(ramusGeo, this.materials.bone);
+        ischiumGroup.add(ramusMesh);
+
+        hipGroup.add(ischiumGroup);
+        if (side === 'left') this.pelvisBones.ischiumL = ischiumGroup;
+        else this.pelvisBones.ischiumR = ischiumGroup;
+
+        const pubisGroup = new THREE.Group();
+        pubisGroup.name = `Pubis_${side}`;
+
+        const pubicP0 = new THREE.Vector3(sign * 3.0, -3.2, 1.2);
+        const pubicP1 = new THREE.Vector3(sign * 1.5, -3.6, 2.4);
+        const pubicP2 = new THREE.Vector3(sign * 0.45, -3.8, 2.7);
+
+        const pubicCurve = new THREE.CatmullRomCurve3([pubicP0, pubicP1, pubicP2]);
+        const pubicGeo = new THREE.TubeGeometry(pubicCurve, 10, 0.25, 6, false);
+        const pubicMesh = new THREE.Mesh(pubicGeo, this.materials.bone);
+        pubisGroup.add(pubicMesh);
+
+        const infP0 = pubicP2;
+        const infP1 = ischialRamusP1;
+        const infCurve = new THREE.CatmullRomCurve3([infP0, infP1]);
+        const infGeo = new THREE.TubeGeometry(infCurve, 8, 0.22, 6, false);
+        const infMesh = new THREE.Mesh(infGeo, this.materials.bone);
+        pubisGroup.add(infMesh);
+
+        hipGroup.add(pubisGroup);
+        if (side === 'left') this.pelvisBones.pubisL = pubisGroup;
+        else this.pelvisBones.pubisR = pubisGroup;
+
         const acetabulumGeo = new THREE.CylinderGeometry(0.75, 0.85, 0.45, 14);
         const acetabulumMesh = new THREE.Mesh(acetabulumGeo, this.materials.bone);
         acetabulumMesh.name = `Acetabulum_${side}`;

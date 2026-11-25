@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=8.12';
+import { AnatomicalTorso } from './anatomy.js?v=8.13';
 import { TorsoPoseEstimator } from './poseDetector.js?v=8.6';
 
 class App {
@@ -294,6 +294,7 @@ class App {
         fileInput.addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
                 this._handleImageFile(e.target.files[0]);
+                e.target.value = '';
             }
         });
 
