@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=10.1';
+import { AnatomicalTorso } from './anatomy.js?v=11.0';
 import { TorsoPoseEstimator } from './poseDetector.js?v=9.2';
 
 class App {
@@ -175,6 +175,9 @@ class App {
                 this.statusText.textContent = "✅ 醫學級 206 塊 3D 骨骼模型已就緒，請上傳人體模特兒圖片";
             }
             this._fitCameraToSkeleton('front');
+        });
+        this.anatomicalTorso.muscleSystem?.onLoaded(() => {
+            this._updateMuscleCounterUI();
         });
         this.scene.add(this.anatomicalTorso.rootGroup);
         this._initBonePicker();
@@ -774,7 +777,7 @@ class App {
         const ms = this.anatomicalTorso?.muscleSystem;
         if (!badge || !ms) return;
         const stats = ms.getStats();
-        badge.textContent = `${stats.remaining} / ${stats.total}`;
+        badge.textContent = stats.total > 0 ? `${stats.remaining} / ${stats.total}` : 'Loading...';
     }
 
     _getRatioDesc(ratio) {
