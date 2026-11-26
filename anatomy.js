@@ -19,7 +19,6 @@ import {
     FOOT_STATIC_NAMES,
     loadMedicalSkeletonGLB
 } from './medicalSkeletonLoader.js?v=9.0';
-import { AnatomicalConnectiveSystem } from './connectiveEngine.js?v=16.0';
 
 function toVec3(arr) {
     return new THREE.Vector3(arr[0], arr[1], arr[2]);
@@ -164,10 +163,6 @@ export class AnatomicalTorso {
 
         // 建立關節拓撲骨架結構（立即可用，不阻塞同步初始化）
         this._buildJointRig();
-
-        // 建立關節囊與韌帶結締組織系統 (Z-Anatomy Joints & Ligaments Layer)
-        this.connectiveSystem = new AnatomicalConnectiveSystem(this);
-        this.rootGroup.add(this.connectiveSystem.connectiveGroup);
 
         // 單一骨骼隱藏 / 個別透明度覆寫狀態
         this.boneOpacities = new Map();
@@ -1043,9 +1038,6 @@ export class AnatomicalTorso {
             );
         }
 
-        if (this.connectiveSystem) {
-            this.connectiveSystem.update();
-        }
         return this.currentGender;
     }
 
@@ -1065,9 +1057,6 @@ export class AnatomicalTorso {
                 this.headScale * config.headAspect[1],
                 this.headScale * config.headAspect[2]
             );
-        }
-        if (this.connectiveSystem) {
-            this.connectiveSystem.update();
         }
         return this.headScale;
     }
@@ -1464,12 +1453,7 @@ export class AnatomicalTorso {
             aR.rotation.z = rightAnkleRoll;
         }
 
-        // 9. 同步更新附著結締組織幾何形態 (於接地前依局部關節矩陣重算)
-        if (this.connectiveSystem) {
-            this.connectiveSystem.update();
-        }
-
-        // 10. 地面自動吸附 (Auto Ground Snap)
+        // 9. 地面自動吸附 (Auto Ground Snap)
         if (this.autoGroundSnap) {
             this.snapToGround(this.groundY);
         }
@@ -1498,12 +1482,6 @@ export class AnatomicalTorso {
         this.visibilityState.skull = visible;
         if (this.skullGroup) this.skullGroup.visible = visible;
         if (this.hyoidMesh) this.hyoidMesh.visible = visible;
-    }
-
-    toggleConnective(visible) {
-        if (this.connectiveSystem) {
-            this.connectiveSystem.setVisible(visible);
-        }
     }
 
     toggleRibcage(visible) {

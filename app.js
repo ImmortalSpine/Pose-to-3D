@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=16.0';
+import { AnatomicalTorso } from './anatomy.js?v=17.0';
 import { TorsoPoseEstimator } from './poseDetector.js?v=9.2';
 
 class App {
@@ -16,8 +16,8 @@ class App {
         this.emptyPlaceholder = document.getElementById('emptyPlaceholder');
         this.landmarkCanvas = document.getElementById('landmarkOverlayCanvas');
         this.btnToggle2D = document.getElementById('btnToggle2DLandmarks');
-        this.statusText = document.getElementById('statusText');
-        this.statusPill = document.getElementById('statusPill');
+        this.statusText = null;
+        this.statusPill = null;
 
         this.show2DLandmarks = true;
         this.lastLandmarks2D = null;
@@ -169,17 +169,8 @@ class App {
     }
 
     _initAnatomy() {
-        if (this.statusText) {
-            this.statusText.textContent = "載入開源醫學級 206 塊 3D 骨骼模型中...";
-        }
         this.anatomicalTorso = new AnatomicalTorso(() => {
-            if (this.statusText && this.statusText.textContent.includes("載入開源醫學")) {
-                this.statusText.textContent = "✅ 醫學級 206 塊 3D 骨骼模型已就緒，請上傳人體模特兒圖片";
-            }
             this._fitCameraToSkeleton('front');
-        });
-        this.anatomicalTorso.connectiveSystem?.onLoaded(() => {
-            this._updateConnectiveCounterUI();
         });
         this.scene.add(this.anatomicalTorso.rootGroup);
         this._initBonePicker();
@@ -319,7 +310,7 @@ class App {
                     curr = curr.parent;
                 }
                 const ud = hit.object.userData;
-                if (vis && (ud.connectiveId || ud.boneName)) {
+                if (vis && ud.boneName) {
                     pickedHit = hit;
                     break;
                 }
@@ -342,14 +333,6 @@ class App {
 
     _describeHitPart(mesh) {
         const ud = mesh?.userData || {};
-        if (ud.connectiveId) {
-            return {
-                kind: 'connective',
-                id: ud.connectiveId,
-                name: ud.connectiveName || ud.connectiveId,
-                meta: ud.connectiveCategory || 'Connective Tissue'
-            };
-        }
         if (ud.boneName) {
             return {
                 kind: 'bone',
@@ -362,10 +345,7 @@ class App {
     }
 
     _selectPart(part, hitMesh, hitPoint) {
-        const cs = this.anatomicalTorso.connectiveSystem;
-
         this.anatomicalTorso.selectBoneByName(part.kind === 'bone' ? part.id : null);
-        cs?.selectById(part.kind === 'connective' ? part.id : null);
 
         this.selectedPart = part;
         this.selectedBoneMesh = hitMesh;
@@ -389,7 +369,6 @@ class App {
 
     _clearPartSelection() {
         this.anatomicalTorso?.selectBoneByName(null);
-        this.anatomicalTorso?.connectiveSystem?.selectById(null);
         this.selectedPart = null;
         this.selectedBoneMesh = null;
         this.selectedBoneAnchorLocal = null;
@@ -410,31 +389,20 @@ class App {
 
     _setPartOpacity(part, opacity) {
         if (!part) return;
-        if (part.kind === 'connective') {
-            this.anatomicalTorso.connectiveSystem?.setPartOpacity(part.id, opacity);
-        } else if (part.kind === 'bone') {
+        if (part.kind === 'bone') {
             this.anatomicalTorso.setBoneOpacity(part.id, opacity);
         }
     }
 
     _getPartOpacity(part) {
         if (!part) return 1.0;
-        if (part.kind === 'connective') {
-            return this.anatomicalTorso.connectiveSystem?.getPartOpacity(part.id) ?? 0.92;
-        }
         return this.anatomicalTorso.getBoneOpacity(part.id);
     }
 
     _hidePart(part) {
         if (!part) return;
         let hiddenOk = false;
-        if (part.kind === 'connective') {
-            const cs = this.anatomicalTorso.connectiveSystem;
-            if (cs?.hideById(part.id)) {
-                hiddenOk = true;
-                this._updateConnectiveCounterUI();
-            }
-        } else if (part.kind === 'bone') {
+        if (part.kind === 'bone') {
             if (this.anatomicalTorso.setBoneHidden(part.id, true)) {
                 hiddenOk = true;
             }
@@ -448,17 +416,9 @@ class App {
     }
 
     _undoLastHiddenPart() {
-        const cs = this.anatomicalTorso.connectiveSystem;
         while (this.hiddenPartsHistory.length > 0) {
             const item = this.hiddenPartsHistory.pop();
-            if (item.kind === 'connective') {
-                const entry = cs?.partById?.get(item.id);
-                if (entry && entry.hidden) {
-                    cs.showById(item.id);
-                    this._updateConnectiveCounterUI();
-                    return item.name;
-                }
-            } else if (item.kind === 'bone') {
+            if (item.kind === 'bone') {
                 if (this.anatomicalTorso.hiddenBones?.has(item.id)) {
                     this.anatomicalTorso.setBoneHidden(item.id, false);
                     return item.name;
@@ -585,25 +545,15 @@ class App {
             this.anatomicalTorso.toggleFeet(e.target.checked);
         });
 
-        // 結締組織與單一部位隱藏 / 復原互動控制
-        const cs = this.anatomicalTorso.connectiveSystem;
-        document.getElementById('toggleConnective')?.addEventListener('change', (e) => {
-            this.anatomicalTorso.toggleConnective(e.target.checked);
-            if (!e.target.checked && this.selectedPart?.kind === 'connective') {
-                this._clearPartSelection();
-            }
-        });
+        // Single-bone hide / restore controls
         document.getElementById('btnPartUndo')?.addEventListener('click', () => {
             this._undoLastHiddenPart();
         });
         document.getElementById('btnRestoreAllParts')?.addEventListener('click', () => {
             this.hiddenPartsHistory = [];
-            cs?.restoreAll();
             this.anatomicalTorso.restoreAllBones();
             this._clearPartSelection();
-            this._updateConnectiveCounterUI();
         });
-        this._updateConnectiveCounterUI();
 
         // 地面自動吸附開關
         document.getElementById('toggleGroundSnap')?.addEventListener('change', (e) => {
@@ -629,7 +579,7 @@ class App {
         this.btnToggle2D.addEventListener('click', () => {
             this.show2DLandmarks = !this.show2DLandmarks;
             this.landmarkCanvas.style.display = this.show2DLandmarks ? 'block' : 'none';
-            this.btnToggle2D.textContent = this.show2DLandmarks ? '隱藏特徵線' : '顯示特徵線';
+            this.btnToggle2D.textContent = this.show2DLandmarks ? 'Hide Landmarks' : 'Show Landmarks';
             if (this.show2DLandmarks) this._draw2DLandmarks();
         });
 
@@ -861,21 +811,13 @@ class App {
         }
     }
 
-    _updateConnectiveCounterUI() {
-        const badge = document.getElementById('valConnectiveCounter');
-        const cs = this.anatomicalTorso?.connectiveSystem;
-        if (!badge || !cs) return;
-        const stats = cs.getStats();
-        badge.textContent = stats.total > 0 ? `${stats.visibleCount} / ${stats.total}` : 'Loading...';
-    }
-
     _getRatioDesc(ratio) {
-        let desc = '亞洲大眾寫實';
-        if (ratio < 6.9) desc = '厚實/亞洲日常';
-        else if (ratio <= 7.2) desc = '亞洲大眾寫實';
-        else if (ratio <= 7.7) desc = '修長/時尚模特';
-        else desc = '古典藝術雕塑';
-        return `${ratio.toFixed(1)} 頭身 (${desc})`;
+        let desc = 'Standard';
+        if (ratio < 6.9) desc = 'Compact';
+        else if (ratio <= 7.2) desc = 'Standard';
+        else if (ratio <= 7.7) desc = 'Model';
+        else desc = 'Classical';
+        return `${ratio.toFixed(1)} Heads (${desc})`;
     }
 
     _setGender(gender, isManual = false) {
@@ -897,24 +839,19 @@ class App {
         btnFemale?.classList.toggle('active', this.genderMode === 'female');
         btnMale?.classList.toggle('active', this.genderMode === 'male');
 
-        if (this.statusText && this.statusText.textContent) {
-            const gLabel = this.currentGender === 'male' ? '♂ 男性骨架' : '♀ 女性骨架';
-            this.statusText.textContent = this.statusText.textContent.replace(/性別 \([♀♂] [男女]性骨架\)/, `性別 (${gLabel})`);
-        }
-
         if (badge) {
             const ratioDesc = (this.currentPose && this.currentPose.shoulderToHipRatio)
-                ? ` (肩臀比 ${this.currentPose.shoulderToHipRatio})`
+                ? ` (S/H ${this.currentPose.shoulderToHipRatio})`
                 : '';
             if (this.genderMode === 'auto') {
                 badge.style.color = '#6ee7b7';
-                badge.textContent = (this.currentGender === 'female' ? '♀ 女性 (自適應)' : '♂ 男性 (自適應)') + ratioDesc;
+                badge.textContent = (this.currentGender === 'female' ? '♀ Female (Auto)' : '♂ Male (Auto)') + ratioDesc;
             } else if (this.genderMode === 'female') {
                 badge.style.color = '#f472b6';
-                badge.textContent = '♀ 女性形態 (纖細柔美、寬圓骨盆)';
+                badge.textContent = '♀ Female (Slender frame, wider pelvis)';
             } else {
                 badge.style.color = '#60a5fa';
-                badge.textContent = '♂ 男性形態 (寬肩倒三角、剛挺粗壯)';
+                badge.textContent = '♂ Male (Broad shoulders, heavier frame)';
             }
         }
     }
@@ -923,7 +860,6 @@ class App {
         this.currentStance = mode;
         this._updateStanceUI();
 
-        // 1. 若有原圖 MediaPipe 特徵點，透過 poseEstimator.reprocessWithStance 重新解算完整逆運動學
         try {
             const newPose = this.poseEstimator.reprocessWithStance(mode);
             if (newPose) {
@@ -931,20 +867,12 @@ class App {
                 this.aiPoseBackup = { ...newPose };
                 this.currentPose = { ...newPose };
                 this._updateSlidersUI();
-
-                const ratioStr = newPose.headToBodyRatio ? `${newPose.headToBodyRatio} 頭身` : '7.1 頭身';
-                const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
-                const backStr = newPose.isBackStance ? (newPose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '、正面模式';
-                const profileStr = newPose.isProfileStance ? `、側身模式 (${newPose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
-                const handTrackStr = (newPose.rightHandAngles || newPose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
-                this.statusText.textContent = `✅ 姿態已切換！已適應人物頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}${handTrackStr}`;
                 return;
             }
         } catch (err) {
             console.error("[AnatoPose] reprocessWithStance error:", err);
         }
 
-        // 2. 備援手動翻轉 (無影像特徵時直接翻轉當前 3D 骨架模型)
         if (mode === 'back' || mode === 'over_shoulder') {
             this.currentPose.isBackStance = true;
             this.currentPose.isOverShoulderLook = (mode === 'over_shoulder');
@@ -975,7 +903,6 @@ class App {
         }
         this._applyPose(this.currentPose);
         this._updateSlidersUI();
-        this.statusText.textContent = `✅ 已手動切換為 ${mode === 'back' ? '純背身模式 (180°)' : (mode === 'over_shoulder' ? '背身回眸模式' : '正面模式')}`;
     }
 
     _updateStanceUI() {
@@ -990,13 +917,13 @@ class App {
 
         if (badge) {
             if (this.currentStance === 'back') {
-                badge.textContent = '🔄 純背身 (180°)';
+                badge.textContent = '🔄 Back (180°)';
                 badge.style.color = '#f59e0b';
             } else if (this.currentStance === 'over_shoulder') {
-                badge.textContent = '👀 背身回眸';
+                badge.textContent = '👀 Over Shoulder';
                 badge.style.color = '#ec4899';
             } else {
-                badge.textContent = '🧍 正面模式';
+                badge.textContent = '🧍 Front';
                 badge.style.color = '#6ee7b7';
             }
         }
@@ -1120,7 +1047,6 @@ class App {
     }
 
     async _handleImageFile(file) {
-        this.statusText.textContent = "載入並分析模特兒圖片中...";
         const reader = new FileReader();
         reader.onload = async (e) => {
             const img = new Image();
@@ -1133,7 +1059,6 @@ class App {
 
                 const pose = await this.poseEstimator.estimateFromImage(img);
                 if (pose) {
-                    // 每次上傳新圖片時，自動恢復為 AI 自適應性別偵測，避免前一張圖的手動切換鎖定新圖片
                     this.genderMode = 'auto';
                     if (pose.suggestedGender) {
                         this._setGender(pose.suggestedGender, false);
@@ -1151,29 +1076,16 @@ class App {
                     }
                     this._updateStanceUI();
 
-                    // 識別完成後自動將視角調至最適全身比例，讓使用者第一眼看到完整人體骨架
                     this._fitCameraToSkeleton('front');
 
                     if (pose.landmarks2D) {
                         this.btnToggle2D.style.display = 'inline-block';
-                        this.landmarkCanvas.style.display = 'block';
-                        this._draw2DLandmarks();
+                        this.btnToggle2D.textContent = this.show2DLandmarks ? 'Hide Landmarks' : 'Show Landmarks';
+                        this.landmarkCanvas.style.display = this.show2DLandmarks ? 'block' : 'none';
+                        if (this.show2DLandmarks) this._draw2DLandmarks();
                     }
-
-                    const engineBadge = (pose.semanticSource === 'gemini-vlm')
-                        ? `[🤖 Gemini AI 預判] `
-                        : `[🧠 Holistic 視覺預判] `;
-                    const ratioStr = pose.headToBodyRatio ? `${pose.headToBodyRatio} 頭身` : '7.1 頭身';
-                    const genderStr = this.currentGender === 'female' ? '♀ 女性骨架' : '♂ 男性骨架';
-                    const backStr = pose.isBackStance ? (pose.isOverShoulderLook ? '、背身回眸模式' : '、純背身模式 (180° 後背視角)') : '';
-                    const profileStr = pose.isProfileStance ? `、側身模式 (${pose.profileSign < 0 ? '面向左' : '面向右'} 90°)` : '';
-                    const claspedStr = pose.isOverheadClasped ? '、過頂拱手閉環' : '';
-                    const handTrackStr = (pose.rightHandAngles || pose.leftHandAngles) ? '與 21 節點逐指動態追蹤' : '';
-                    const truncStr = pose.isLegsTruncated ? '、下肢裁切照 (已鎖定標準站姿)' : '';
-                    this.statusText.textContent = `✅ ${engineBadge}姿態識別完成！頭身比 (${ratioStr})、性別 (${genderStr})${backStr}${profileStr}${claspedStr}${handTrackStr}${truncStr}`;
                 } else {
                     this._resetToNeutralPose();
-                    this.statusText.textContent = "未識別到完整人體 (可能為純背面或過度遮擋視角)，已重置為標準解剖姿態";
                 }
             };
             img.src = e.target.result;
