@@ -19,6 +19,7 @@ import {
     FOOT_STATIC_NAMES,
     loadMedicalSkeletonGLB
 } from './medicalSkeletonLoader.js?v=9.0';
+import { AnatomicalMuscleSystem } from './muscleEngine.js?v=10.0';
 
 function toVec3(arr) {
     return new THREE.Vector3(arr[0], arr[1], arr[2]);
@@ -163,6 +164,11 @@ export class AnatomicalTorso {
 
         // 建立關節拓撲骨架結構（立即可用，不阻塞同步初始化）
         this._buildJointRig();
+
+        // 建立程式化動態肌肉系統 (Phase 1: 上肢與胸部，共用同一套關節層級)
+        this.muscleSystem = new AnatomicalMuscleSystem(this);
+        this.rootGroup.add(this.muscleSystem.muscleGroup);
+
         this.setGender('female');
 
         // 非同步載入開源醫學 CT 掃描 206 塊骨骼模型
@@ -794,6 +800,9 @@ export class AnatomicalTorso {
             }
 
             console.log(`[AnatoPose] Open-source medical skeleton loaded (${Object.keys(meshMap).length} anatomical meshes, 206 bones).`);
+            if (this.muscleSystem) {
+                this.muscleSystem.update();
+            }
             if (typeof this.onReady === 'function') {
                 this.onReady(this);
             }
@@ -933,6 +942,10 @@ export class AnatomicalTorso {
                 s * config.headAspect[1],
                 s * config.headAspect[2]
             );
+        }
+
+        if (this.muscleSystem) {
+            this.muscleSystem.update();
         }
 
         return this.currentGender;
@@ -1350,7 +1363,12 @@ export class AnatomicalTorso {
             aR.rotation.z = rightAnkleRoll;
         }
 
-        // 9. 地面自動吸附 (Auto Ground Snap)
+        // 9. 同步更新附著肌肉幾何形態 (於接地前依局部關節矩陣重算)
+        if (this.muscleSystem) {
+            this.muscleSystem.update();
+        }
+
+        // 10. 地面自動吸附 (Auto Ground Snap)
         if (this.autoGroundSnap) {
             this.snapToGround(this.groundY);
         }
@@ -1379,6 +1397,12 @@ export class AnatomicalTorso {
         this.visibilityState.skull = visible;
         if (this.skullGroup) this.skullGroup.visible = visible;
         if (this.hyoidMesh) this.hyoidMesh.visible = visible;
+    }
+
+    toggleMuscles(visible) {
+        if (this.muscleSystem) {
+            this.muscleSystem.setVisible(visible);
+        }
     }
 
     toggleRibcage(visible) {

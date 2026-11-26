@@ -181,6 +181,37 @@
                 </div>
             </div>
 
+            <!-- 2b. 程式化附著肌肉層 (Phase 1: Upper Limb & Chest) -->
+            <div class="panel-section">
+                <div class="panel-title">
+                    <span>💪 肌肉層與剝除 (Muscles)</span>
+                    <span class="control-val" id="valMuscleCounter" style="color: #fca5a5;">20 / 20</span>
+                </div>
+                <div class="toggle-row">
+                    <span>顯示程式化肌肉 (Upper Limb & Chest)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="toggleMuscles" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="gender-buttons" style="margin-top: 6px; margin-bottom: 6px;">
+                    <button class="btn btn-sm active" id="btnMuscleModePeel" title="點擊任意肌肉直接剝除，露出深層肌肉或骨骼">🔪 點擊剝除</button>
+                    <button class="btn btn-sm" id="btnMuscleModeInspect" title="點擊任意肌肉顯示英文解剖名稱">🔍 檢視名稱</button>
+                </div>
+                <div class="gender-buttons" style="margin-bottom: 8px;">
+                    <button class="btn btn-sm" id="btnMuscleUndo" title="復原上一塊剝除的肌肉">↩ 復原</button>
+                    <button class="btn btn-sm" id="btnMusclePeelSuperficial" title="一鍵剝除表層肌肉，露出深層肌與骨骼">只留深層</button>
+                    <button class="btn btn-sm" id="btnMuscleRestoreAll" title="恢復顯示全部肌肉">↺ 全顯</button>
+                </div>
+                <div class="control-row" style="margin-bottom: 2px;">
+                    <div class="control-label-wrap">
+                        <span>肌肉透明度 (Opacity)</span>
+                        <span class="control-val" id="valMuscleOpacity">96%</span>
+                    </div>
+                    <input type="range" class="range-slider" id="sliderMuscleOpacity" min="10" max="100" value="96">
+                </div>
+            </div>
+
             <!-- 3. 動態姿態微調 (Sliders) -->
             <div class="panel-section">
                 <div class="panel-title">
@@ -598,7 +629,7 @@
     </div>
 
     <!-- 啟動應用程式腳本 -->
-    <script type="module" src="app.js?v=9.2"></script>
+    <script type="module" src="app.js?v=10.0"></script>
 </body>
 </html>
 

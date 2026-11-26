@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=9.2';
+import { AnatomicalTorso } from './anatomy.js?v=10.0';
 import { TorsoPoseEstimator } from './poseDetector.js?v=9.2';
 
 class App {
@@ -25,6 +25,10 @@ class App {
         // 性別形態控制 ('auto' | 'female' | 'male')
         this.genderMode = 'auto';
         this.currentGender = 'female';
+
+        // 肌肉點擊模式 (true: 點擊直接剝除露出底下結構 | false: 點擊高光顯示英文名稱)
+        this.musclePeelMode = true;
+        this._peelToastTimer = null;
 
         // 人體面向狀態 ('front' | 'back' | 'over_shoulder')
         this.currentStance = 'front';
@@ -225,13 +229,56 @@ class App {
                     }
                     curr = curr.parent;
                 }
-                if (vis && hit.object.userData.boneName) {
+                if (vis && (hit.object.userData.muscleId || hit.object.userData.boneName)) {
                     pickedHit = hit;
                     break;
                 }
             }
 
-            if (pickedHit) {
+            if (pickedHit && pickedHit.object.userData.muscleId) {
+                const muscleId = pickedHit.object.userData.muscleId;
+                const muscleName = pickedHit.object.userData.muscleName;
+                const ms = this.anatomicalTorso.muscleSystem;
+
+                this.anatomicalTorso.selectBoneByName(null);
+
+                if (this.musclePeelMode && ms) {
+                    ms.peelMuscle(muscleId);
+                    this.selectedBoneMesh = null;
+                    this.selectedBoneAnchorLocal = null;
+                    this._updateMuscleCounterUI();
+
+                    if (this.boneTooltip) {
+                        clearTimeout(this._peelToastTimer);
+                        const clickX = Math.max(70, Math.min(rect.width - 70, e.clientX - rect.left));
+                        const clickY = Math.max(42, Math.min(rect.height - 20, e.clientY - rect.top));
+                        this.boneTooltip.textContent = muscleName;
+                        this.boneTooltip.style.left = `${clickX}px`;
+                        this.boneTooltip.style.top = `${clickY}px`;
+                        this.boneTooltip.style.display = 'block';
+                        this._peelToastTimer = setTimeout(() => {
+                            if (!this.selectedBoneMesh && this.boneTooltip) {
+                                this.boneTooltip.style.display = 'none';
+                            }
+                        }, 1600);
+                    }
+                } else if (ms) {
+                    clearTimeout(this._peelToastTimer);
+                    ms.selectMuscleById(muscleId);
+                    this.selectedBoneMesh = pickedHit.object;
+                    this.selectedBoneAnchorLocal = pickedHit.object.worldToLocal(pickedHit.point.clone());
+
+                    if (this.boneTooltip) {
+                        this.boneTooltip.textContent = muscleName;
+                        this.boneTooltip.style.display = 'block';
+                        this._updateBoneTooltipPosition();
+                    }
+                }
+            } else if (pickedHit) {
+                clearTimeout(this._peelToastTimer);
+                if (this.anatomicalTorso.muscleSystem) {
+                    this.anatomicalTorso.muscleSystem.selectMuscleById(null);
+                }
                 const boneName = pickedHit.object.userData.boneName;
                 this.anatomicalTorso.selectBoneByName(boneName);
                 this.selectedBoneMesh = pickedHit.object;
@@ -243,7 +290,11 @@ class App {
                     this._updateBoneTooltipPosition();
                 }
             } else {
+                clearTimeout(this._peelToastTimer);
                 this.anatomicalTorso.selectBoneByName(null);
+                if (this.anatomicalTorso.muscleSystem) {
+                    this.anatomicalTorso.muscleSystem.selectMuscleById(null);
+                }
                 this.selectedBoneMesh = null;
                 this.selectedBoneAnchorLocal = null;
                 if (this.boneTooltip) {
@@ -354,6 +405,50 @@ class App {
         document.getElementById('toggleFeet').addEventListener('change', (e) => {
             this.anatomicalTorso.toggleFeet(e.target.checked);
         });
+
+        // 程式化肌肉層與單塊剝除互動控制
+        const ms = this.anatomicalTorso.muscleSystem;
+        document.getElementById('toggleMuscles')?.addEventListener('change', (e) => {
+            this.anatomicalTorso.toggleMuscles(e.target.checked);
+        });
+        const btnPeelMode = document.getElementById('btnMuscleModePeel');
+        const btnInspectMode = document.getElementById('btnMuscleModeInspect');
+        const syncMuscleModeUI = () => {
+            btnPeelMode?.classList.toggle('active', this.musclePeelMode);
+            btnInspectMode?.classList.toggle('active', !this.musclePeelMode);
+        };
+        btnPeelMode?.addEventListener('click', () => {
+            this.musclePeelMode = true;
+            ms?.selectMuscleById(null);
+            syncMuscleModeUI();
+        });
+        btnInspectMode?.addEventListener('click', () => {
+            this.musclePeelMode = false;
+            syncMuscleModeUI();
+        });
+        document.getElementById('btnMuscleUndo')?.addEventListener('click', () => {
+            const restoredName = ms?.undoPeel();
+            this._updateMuscleCounterUI();
+            if (restoredName && this.boneTooltip) {
+                this.boneTooltip.textContent = restoredName;
+            }
+        });
+        document.getElementById('btnMusclePeelSuperficial')?.addEventListener('click', () => {
+            ms?.peelSuperficial();
+            this._updateMuscleCounterUI();
+        });
+        document.getElementById('btnMuscleRestoreAll')?.addEventListener('click', () => {
+            ms?.restoreAll();
+            this._updateMuscleCounterUI();
+        });
+        const sliderMuscleOpacity = document.getElementById('sliderMuscleOpacity');
+        const valMuscleOpacity = document.getElementById('valMuscleOpacity');
+        sliderMuscleOpacity?.addEventListener('input', (e) => {
+            const pct = parseInt(e.target.value, 10);
+            if (valMuscleOpacity) valMuscleOpacity.textContent = `${pct}%`;
+            ms?.setOpacity(pct / 100);
+        });
+        this._updateMuscleCounterUI();
 
         // 地面自動吸附開關
         document.getElementById('toggleGroundSnap')?.addEventListener('change', (e) => {
@@ -672,6 +767,14 @@ class App {
             sliderRatio.value = this.currentPose.headToBodyRatio;
             valRatio.textContent = this._getRatioDesc(this.currentPose.headToBodyRatio);
         }
+    }
+
+    _updateMuscleCounterUI() {
+        const badge = document.getElementById('valMuscleCounter');
+        const ms = this.anatomicalTorso?.muscleSystem;
+        if (!badge || !ms) return;
+        const stats = ms.getStats();
+        badge.textContent = `${stats.remaining} / ${stats.total}`;
     }
 
     _getRatioDesc(ratio) {
