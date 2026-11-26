@@ -101,6 +101,9 @@ export const PHASE1_MUSCLE_TEMPLATES = [
         region: 'shoulder',
         layer: 'superficial',
         isFan: true,
+        fanNormalM: [0.45, 0.15, 0.88],
+        origTendonBand: 0.05,
+        insTendonBand: 0.18,
         originM: [0.120, 1.410, -0.015],
         insertM: [0.203, 1.268, -0.028],
         chain: [
@@ -117,6 +120,9 @@ export const PHASE1_MUSCLE_TEMPLATES = [
         region: 'shoulder',
         layer: 'superficial',
         isFan: true,
+        fanNormalM: [0.98, 0.15, 0.0],
+        origTendonBand: 0.05,
+        insTendonBand: 0.18,
         originM: [0.167, 1.408, -0.045],
         insertM: [0.205, 1.268, -0.032],
         chain: [
@@ -133,6 +139,9 @@ export const PHASE1_MUSCLE_TEMPLATES = [
         region: 'shoulder',
         layer: 'superficial',
         isFan: true,
+        fanNormalM: [0.45, 0.15, -0.88],
+        origTendonBand: 0.05,
+        insTendonBand: 0.18,
         originM: [0.105, 1.380, -0.090],
         insertM: [0.203, 1.268, -0.036],
         chain: [

@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { GLB_SCALE, GLB_PIVOTS_M } from './medicalSkeletonLoader.js?v=9.0';
-import { PHASE1_MUSCLE_TEMPLATES } from './medicalMuscleConfig.js?v=11.0';
+import { PHASE1_MUSCLE_TEMPLATES } from './medicalMuscleConfig.js?v=11.3';
 
 const MM_TO_SCENE = GLB_SCALE * 0.001;
 
@@ -358,15 +358,36 @@ export class AnatomicalMuscleSystem {
         const perpA = new THREE.Vector3().crossVectors(vAxis, refUp).normalize();
         const perpB = new THREE.Vector3().crossVectors(vAxis, perpA).normalize();
 
-        // 為扇形肌 (胸大肌/三角肌/肩袖肌群) 定義平面投影展開軸，避免三角肌圓頂產生木紋渦流
-        const fanNormal = (tmpl.region === 'chest')
-            ? new THREE.Vector3(0, 0, 1)
-            : new THREE.Vector3(sign, 0, 0);
+        // 為扇形肌 (胸大肌/三角肌/肩袖肌群) 定義平面投影展開軸，並逐段量測橫向寬度，確保肌束由寬起點直線收斂至窄止點
+        const fanNormal = tmpl.fanNormalM
+            ? new THREE.Vector3(sign * tmpl.fanNormalM[0], tmpl.fanNormalM[1], tmpl.fanNormalM[2]).normalize()
+            : ((tmpl.region === 'chest') ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(sign, 0, 0));
         const fanSpread = new THREE.Vector3().crossVectors(fanNormal, vAxis);
         if (fanSpread.lengthSq() < 1e-5) {
             fanSpread.copy(perpA);
         } else {
             fanSpread.normalize();
+        }
+
+        // 若為扇形肌，預先統計各縱向分段 t 的橫向最小／最大投影範圍，使每條等 u 線從寬處精準直線收斂到尖端止點
+        const fanBins = 16;
+        const binMinAcross = new Float32Array(fanBins).fill(Infinity);
+        const binMaxAcross = new Float32Array(fanBins).fill(-Infinity);
+        if (tmpl.isFan) {
+            for (let i = 0; i < vertCount; i++) {
+                const t = clamp((projArr[i] - projMin) / projSpan, 0, 0.9999);
+                const bin = Math.min(fanBins - 1, Math.floor(t * fanBins));
+                const ac = restPos[i * 3] * fanSpread.x + restPos[i * 3 + 1] * fanSpread.y + restPos[i * 3 + 2] * fanSpread.z;
+                if (ac < binMinAcross[bin]) binMinAcross[bin] = ac;
+                if (ac > binMaxAcross[bin]) binMaxAcross[bin] = ac;
+            }
+            for (let b = 0; b < fanBins; b++) {
+                if (binMinAcross[b] === Infinity) {
+                    const nb = Math.max(0, b - 1);
+                    binMinAcross[b] = binMinAcross[nb];
+                    binMaxAcross[b] = binMaxAcross[nb];
+                }
+            }
         }
 
         // 找出骨心參考點（上臂 vs 前臂分別相對於各自骨幹線段判定外鼓方向）
@@ -486,19 +507,21 @@ export class AnatomicalMuscleSystem {
                 weights[i] = 1.0;
             }
 
-            // 3. 順應肌束走向之無渦流 UV 座標
+            // 3. 順應肌束走向之無渦流比例 UV 座標
             let uVal = 0;
             if (tmpl.isFan) {
-                const dx = px - anchorInsWorld.x;
-                const dy = py - anchorInsWorld.y;
-                const dz = pz - anchorInsWorld.z;
-                const projAlong = -(dx * vAxis.x + dy * vAxis.y + dz * vAxis.z);
-                const projAcross = dx * fanSpread.x + dy * fanSpread.y + dz * fanSpread.z;
-                const ang = Math.atan2(projAcross, Math.max(0.08, projAlong));
-                const rad = Math.hypot(dx, dy, dz) / maxFanDist;
-                uVal = (ang / Math.PI + 0.5) * (tmpl.region === 'chest' ? 1.8 : 1.3);
+                const ac = px * fanSpread.x + py * fanSpread.y + pz * fanSpread.z;
+                const fIdx = clamp(t, 0, 0.9999) * (fanBins - 1);
+                const b0 = Math.floor(fIdx);
+                const b1 = Math.min(fanBins - 1, b0 + 1);
+                const frac = fIdx - b0;
+                const mnA = binMinAcross[b0] * (1 - frac) + binMinAcross[b1] * frac;
+                const mxA = binMaxAcross[b0] * (1 - frac) + binMaxAcross[b1] * frac;
+                const spanA = Math.max(0.18, mxA - mnA);
+                const uSlice = clamp((ac - mnA) / spanA, 0.0, 1.0);
+                uVal = uSlice * (tmpl.region === 'chest' ? 1.55 : 0.72);
                 uvs[i * 2] = uVal;
-                uvs[i * 2 + 1] = rad;
+                uvs[i * 2 + 1] = t;
             } else {
                 const cx = pOrig.x + vAxis.x * projArr[i];
                 const cy = pOrig.y + vAxis.y * projArr[i];
@@ -515,8 +538,8 @@ export class AnatomicalMuscleSystem {
             // 4. 羽毛狀絲束漸層過渡 (Feathered Tendon Transition)：依微纖維相位微調邊界，消除生硬噴槍灰白邊
             const featherJitter = 0.026 * Math.sin(uVal * Math.PI * 48.0);
             const tFeathered = clamp(t + featherJitter, 0.0, 1.0);
-            const origBand = (tmpl.key === 'pectoralis_major_abdominal') ? 0.08 : 0.13;
-            const insBand = 0.14;
+            const origBand = tmpl.origTendonBand ?? ((tmpl.key === 'pectoralis_major_abdominal') ? 0.08 : 0.13);
+            const insBand = tmpl.insTendonBand ?? 0.14;
             let muscleBlend = 1.0;
             if (tFeathered < origBand) {
                 muscleBlend = THREE.MathUtils.smoothstep(tFeathered, 0.0, origBand);
