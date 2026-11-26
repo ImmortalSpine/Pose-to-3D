@@ -4,8 +4,8 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { AnatomicalTorso } from './anatomy.js?v=9.1';
-import { TorsoPoseEstimator } from './poseDetector.js?v=9.0';
+import { AnatomicalTorso } from './anatomy.js?v=9.2';
+import { TorsoPoseEstimator } from './poseDetector.js?v=9.2';
 
 class App {
     constructor() {

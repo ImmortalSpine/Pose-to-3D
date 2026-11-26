@@ -407,110 +407,202 @@ export class TorsoPoseEstimator {
 
         // -------------------------------------------------------------
         // 藝用解剖頭部姿態解算 (Head Yaw, Pitch, Roll)
-        // 核心：純 2D 幾何五官比例與兩側投影面積 (Eye & Facial Area Symmetry)
-        // 徹底杜絕單圖 3D z 深度噪聲與單臂舉天造成的假性旋轉
+        // 優先採用 Holistic 468 點 3D 臉部網格 (抗髮絲/手勢遮擋耳朵干擾)，
+        // 並於頭部局部座標系進行 Roll 去耦合 (徹底杜絕歪頭污染轉頭角)
         // -------------------------------------------------------------
+        const faceLm = results.faceLandmarks;
+        const hasFaceMesh468 = Boolean(
+            faceLm && faceLm.length >= 400 &&
+            faceLm[1] && faceLm[10] && faceLm[33] && faceLm[133] &&
+            faceLm[152] && faceLm[168] && faceLm[263] && faceLm[362]
+        );
+
         let headRoll = 0;
-        if (leftEye && rightEye) {
+        let hx = 1.0, hy = 0.0; // 頭部局部右軸 (指向畫面右方/人物左側)
+        let vx = 0.0, vy = 1.0; // 頭部局部下軸 (影像空間向下)
+
+        if (hasFaceMesh468) {
+            const fmRightEyeMidX = (faceLm[33].x + faceLm[133].x) * 0.5;
+            const fmRightEyeMidY = (faceLm[33].y + faceLm[133].y) * 0.5;
+            const fmLeftEyeMidX = (faceLm[263].x + faceLm[362].x) * 0.5;
+            const fmLeftEyeMidY = (faceLm[263].y + faceLm[362].y) * 0.5;
+            const eyeDx = (fmLeftEyeMidX - fmRightEyeMidX) * ar;
+            const eyeDy = fmLeftEyeMidY - fmRightEyeMidY;
+            const eyeLen = Math.hypot(eyeDx, eyeDy);
+            if (eyeLen > 0.008) {
+                headRoll = -Math.atan2(eyeDy, Math.max(0.01, eyeDx));
+                hx = eyeDx / eyeLen;
+                hy = eyeDy / eyeLen;
+                vx = -hy;
+                vy = hx;
+            }
+        } else if (leftEye && rightEye) {
             const eyeDx = (leftEye.x - rightEye.x) * ar;
             const eyeDy = leftEye.y - rightEye.y;
+            const eyeLen = Math.hypot(eyeDx, eyeDy);
             headRoll = -Math.atan2(eyeDy, Math.max(0.01, eyeDx));
+            if (eyeLen > 0.008) {
+                hx = eyeDx / eyeLen;
+                hy = eyeDy / eyeLen;
+                vx = -hy;
+                vy = hx;
+            }
         }
 
-        // 1. 眼睛投影寬度/面積縮小率 (Eye Width / Area Foreshortening)
+        // 檢測手部是否靠近耳側/臉側 (避免比 YA、摸臉/摸頭手勢拉偏全身模型的耳朵點位)
+        const handNearLeftEar = Boolean(
+            leftEar && (
+                (leftWrist && Math.hypot((leftWrist.x - leftEar.x) * ar, leftWrist.y - leftEar.y) < 0.24 * torsoHeight) ||
+                (rightWrist && Math.hypot((rightWrist.x - leftEar.x) * ar, rightWrist.y - leftEar.y) < 0.24 * torsoHeight)
+            )
+        );
+        const handNearRightEar = Boolean(
+            rightEar && (
+                (leftWrist && Math.hypot((leftWrist.x - rightEar.x) * ar, leftWrist.y - rightEar.y) < 0.24 * torsoHeight) ||
+                (rightWrist && Math.hypot((rightWrist.x - rightEar.x) * ar, rightWrist.y - rightEar.y) < 0.24 * torsoHeight)
+            )
+        );
+
+        // 1. 眼睛投影寬度/面積縮小率 (Eye Width Foreshortening)
         let eyeWidthAsym = 0;
-        if (leftEyeInner && leftEyeOuter && rightEyeInner && rightEyeOuter) {
+        if (hasFaceMesh468) {
+            const rightEyeW = Math.hypot((faceLm[133].x - faceLm[33].x) * ar, faceLm[133].y - faceLm[33].y);
+            const leftEyeW = Math.hypot((faceLm[263].x - faceLm[362].x) * ar, faceLm[263].y - faceLm[362].y);
+            eyeWidthAsym = (rightEyeW - leftEyeW) / Math.max(0.005, rightEyeW + leftEyeW);
+        } else if (leftEyeInner && leftEyeOuter && rightEyeInner && rightEyeOuter) {
             const leftEyeW = Math.hypot((leftEyeOuter.x - leftEyeInner.x) * ar, leftEyeOuter.y - leftEyeInner.y);
             const rightEyeW = Math.hypot((rightEyeOuter.x - rightEyeInner.x) * ar, rightEyeOuter.y - rightEyeInner.y);
             eyeWidthAsym = (rightEyeW - leftEyeW) / Math.max(0.005, rightEyeW + leftEyeW);
         }
 
-        // 2. 鼻樑正中線與眼距比例解算純 2D Head Yaw (零單圖深度噪聲干擾)
+        // 2. Head Yaw 解算：468 點 3D 臉部剛體眼線 + Roll 去耦合五官幾何 (避免髮絲/遮擋耳朵導致假性轉頭)
         let headYaw = 0;
-        if (leftEye && rightEye && nose) {
-            const midEyeX = (leftEye.x + rightEye.x) * 0.5;
-            const eyeDist = Math.max(0.015, Math.abs(leftEye.x - rightEye.x) * ar);
-            // 鼻尖相對雙眼中點之水平偏移量 (在 2D 影像上，鼻子偏向哪一側即代表臉部朝向該側)
-            const noseOffset = (nose.x - midEyeX) * ar;
-            const eyeYawRatio = noseOffset / (eyeDist * 0.5);
+        if (hasFaceMesh468) {
+            // (a) 3D 眼外角/眼心向量深度轉角 (Roll 不變量)
+            const pR = new THREE.Vector3(
+                (faceLm[33].x + faceLm[133].x) * 0.5 * ar,
+                -(faceLm[33].y + faceLm[133].y) * 0.5,
+                -((faceLm[33].z || 0) + (faceLm[133].z || 0)) * 0.5 * ar
+            );
+            const pL = new THREE.Vector3(
+                (faceLm[263].x + faceLm[362].x) * 0.5 * ar,
+                -(faceLm[263].y + faceLm[362].y) * 0.5,
+                -((faceLm[263].z || 0) + (faceLm[362].z || 0)) * 0.5 * ar
+            );
+            const eyeVec3 = pL.sub(pR);
+            const fmYaw3D = Math.atan2(-eyeVec3.z, Math.max(0.005, Math.hypot(eyeVec3.x, eyeVec3.y)));
+
+            // (b) Roll 去耦合 2D 鼻尖相對雙眼中心 (168 鼻根/雙內眼角中點) 偏移量
+            const fmMidInnerX = (faceLm[133].x + faceLm[362].x) * 0.5;
+            const fmMidInnerY = (faceLm[133].y + faceLm[362].y) * 0.5;
+            const fmNoseVecX = (faceLm[1].x - fmMidInnerX) * ar;
+            const fmNoseVecY = faceLm[1].y - fmMidInnerY;
+            const localNoseX = fmNoseVecX * hx + fmNoseVecY * hy;
+            const fmEyeDist2D = Math.max(0.012, Math.hypot((faceLm[263].x - faceLm[33].x) * ar, faceLm[263].y - faceLm[33].y));
+            const fmNoseYaw = THREE.MathUtils.clamp(localNoseX / (fmEyeDist2D * 0.31), -1.15, 1.15);
+
+            headYaw = fmYaw3D * 0.65 + fmNoseYaw * 0.25 + THREE.MathUtils.clamp(eyeWidthAsym * 1.4, -0.8, 0.8) * 0.10;
+        } else if (leftEye && rightEye && nose) {
+            const eyeDist = Math.max(0.015, Math.hypot((leftEye.x - rightEye.x) * ar, leftEye.y - rightEye.y));
+            // Roll 去耦合：將 (nose - midEye) 投影至雙眼局部右軸 (hx, hy)
+            const noseDx = (nose.x - midEyeX) * ar;
+            const noseDy = nose.y - midEyeY;
+            const localNoseOffset = noseDx * hx + noseDy * hy;
+            const eyeYawRatio = localNoseOffset / (eyeDist * 0.5);
 
             let earYawRatio = 0;
-            let hasValidEars = false;
-            if (leftEar && rightEar && (leftEar.visibility === undefined || leftEar.visibility > 0.45) &&
-                (rightEar.visibility === undefined || rightEar.visibility > 0.45)) {
+            let hasCleanEars = false;
+            const leftEarVis = leftEar ? (leftEar.visibility ?? 0.5) : 0;
+            const rightEarVis = rightEar ? (rightEar.visibility ?? 0.5) : 0;
+            if (leftEar && rightEar && leftEarVis > 0.50 && rightEarVis > 0.50 &&
+                !handNearLeftEar && !handNearRightEar && Math.abs(leftEarVis - rightEarVis) < 0.22) {
                 const midEarX = (leftEar.x + rightEar.x) * 0.5;
-                const earDist = Math.max(0.025, Math.abs(leftEar.x - rightEar.x) * ar);
-                earYawRatio = (nose.x - midEarX) * ar / (earDist * 0.5);
-                hasValidEars = true;
+                const midEarY = (leftEar.y + rightEar.y) * 0.5;
+                const earDist = Math.max(0.025, Math.hypot((leftEar.x - rightEar.x) * ar, leftEar.y - rightEar.y));
+                const localEarNoseX = ((nose.x - midEarX) * ar) * hx + (nose.y - midEarY) * hy;
+                earYawRatio = localEarNoseX / (earDist * 0.5);
+                // 僅當雙耳幾何與眼鼻一致 (無頭髮拉偏) 時才納入低權重輔助
+                if (Math.abs(earYawRatio - eyeYawRatio) < 0.40) {
+                    hasCleanEars = true;
+                }
             }
 
-            if (hasValidEars) {
-                headYaw = (earYawRatio * 0.60 + eyeYawRatio * 0.40) * 0.85;
+            if (hasCleanEars) {
+                headYaw = (eyeYawRatio * 0.70 + earYawRatio * 0.20 + eyeWidthAsym * 0.10) * 0.90;
             } else {
-                headYaw = (eyeYawRatio * 0.75 + eyeWidthAsym * 0.25) * 0.90;
+                headYaw = (eyeYawRatio * 0.80 + eyeWidthAsym * 0.20) * 0.90;
             }
         }
         headYaw = this._clamp(headYaw, -1.2, 1.2);
 
         let headPitch = 0;
         if (leftEye && rightEye && nose) {
-            const midEyeY = (leftEye.y + rightEye.y) * 0.5;
-            const eyeNoseDy = nose.y - midEyeY;
+            const pEyeMidX = hasFaceMesh468 ? (faceLm[133].x + faceLm[362].x) * 0.5 : midEyeX;
+            const pEyeMidY = hasFaceMesh468 ? (faceLm[133].y + faceLm[362].y) * 0.5 : midEyeY;
+            const pNose = hasFaceMesh468 ? faceLm[1] : nose;
+            // Roll 去耦合之局部垂直眼-鼻距離
+            const eyeNoseDy = Math.max(0.005, ((pNose.x - pEyeMidX) * ar) * vx + (pNose.y - pEyeMidY) * vy);
 
-            // 1. 口-鼻-眼垂直投影比例 (Mouth Ratio)
+            // 1. 口-鼻-眼垂直投影比例 (Mouth Ratio, Roll 去耦合)
             let mouthPitch = null;
             if (leftMouth && rightMouth &&
                 (leftMouth.visibility === undefined || leftMouth.visibility > 0.30) &&
                 (rightMouth.visibility === undefined || rightMouth.visibility > 0.30)) {
+                const midMouthX = (leftMouth.x + rightMouth.x) * 0.5;
                 const midMouthY = (leftMouth.y + rightMouth.y) * 0.5;
-                const eyeMouthDy = Math.max(0.02, midMouthY - midEyeY);
-                // 解剖五官黃金比例：正面平視仰角 0° 時，眼鼻垂直距佔眼口距約 50%
-                // 低頭 (Flexion) 時鼻尖相對眼睛下移、更靠近唇口，投影比例增高 (>0.50)，產生正向 pitch (>0)
-                // 仰頭 (Extension) 時鼻尖相對眼睛上移、遠離唇口，投影比例縮小 (<0.50)，產生負向 pitch (<0)
+                const eyeMouthDy = Math.max(0.02, ((midMouthX - pEyeMidX) * ar) * vx + (midMouthY - pEyeMidY) * vy);
                 const normRatio = eyeNoseDy / eyeMouthDy;
                 const pitchOffset = normRatio - 0.50;
                 mouthPitch = THREE.MathUtils.clamp(pitchOffset * 2.8, -0.42, 0.42);
             }
 
-            // 2. 雙耳-雙眼高度差 (Ear-Eye Offset)
+            // 2. 雙耳-雙眼局部垂直高度差 (Ear-Eye Offset, 僅於雙耳清晰對稱且無手遮擋時輔助)
             let earPitch = null;
-            if (leftEar && rightEar &&
-                (leftEar.visibility === undefined || leftEar.visibility > 0.40) &&
-                (rightEar.visibility === undefined || rightEar.visibility > 0.40)) {
+            const leftEarVis = leftEar ? (leftEar.visibility ?? 0.5) : 0;
+            const rightEarVis = rightEar ? (rightEar.visibility ?? 0.5) : 0;
+            if (leftEar && rightEar && leftEarVis > 0.50 && rightEarVis > 0.50 &&
+                !handNearLeftEar && !handNearRightEar && Math.abs(leftEarVis - rightEarVis) < 0.22) {
+                const midEarX = (leftEar.x + rightEar.x) * 0.5;
                 const midEarY = (leftEar.y + rightEar.y) * 0.5;
                 const faceScale = Math.max(0.02, eyeNoseDy);
-                // 影像座標向下為正：低頭時雙耳相對眼睛上升 (midEarY < midEyeY)，midEyeY - midEarY > 0 -> pitch > 0
-                // 仰頭時雙耳相對眼睛下降 (midEarY > midEyeY)，midEyeY - midEarY < 0 -> pitch < 0
-                const earEyeOffset = (midEyeY - midEarY) / faceScale;
-                earPitch = THREE.MathUtils.clamp(earEyeOffset * 0.85, -0.42, 0.42);
+                const localEyeEarDy = ((pEyeMidX - midEarX) * ar) * vx + (pEyeMidY - midEarY) * vy;
+                earPitch = THREE.MathUtils.clamp((localEyeEarDy / faceScale) * 0.85, -0.42, 0.42);
             }
 
-            // 3. 雙眼-鼻距水平比基準校正 (Fallback when ears/mouth occluded)
-            const eyeDx = Math.max(0.02, Math.abs(leftEye.x - rightEye.x) * ar);
+            // 3. 468 點 3D 額-頷斜率與眼-鼻水平比基準校正
+            const eyeDx = Math.max(0.02, Math.hypot((leftEye.x - rightEye.x) * ar, leftEye.y - rightEye.y));
             const normNose = eyeNoseDy / eyeDx;
-            // 解剖五官常態：眼鼻垂直距約為雙眼間距之 52% (非 72%)
             const fallbackFacePitch = THREE.MathUtils.clamp((normNose - 0.52) * 2.0, -0.38, 0.38);
 
             let facePitch = fallbackFacePitch;
             if (mouthPitch !== null && earPitch !== null) {
-                facePitch = mouthPitch * 0.65 + earPitch * 0.35;
+                facePitch = mouthPitch * 0.75 + earPitch * 0.25;
             } else if (mouthPitch !== null) {
                 facePitch = mouthPitch;
             } else if (earPitch !== null) {
                 facePitch = earPitch;
             }
 
+            if (hasFaceMesh468) {
+                // 額頭(10)->下巴(152) 3D 向量在側視前傾/後仰之絕對基準校正 (~0.06 rad 自然微傾補償)
+                const vFace3D = new THREE.Vector3(
+                    (faceLm[10].x - faceLm[152].x) * ar,
+                    -(faceLm[10].y - faceLm[152].y),
+                    -((faceLm[10].z || 0) - (faceLm[152].z || 0)) * ar
+                );
+                // 低頭時額頭向前(-Z較小->+Z大)，vFace3D.z > 0 -> pitch > 0；仰頭時額頭後退，vFace3D.z < 0 -> pitch < 0
+                const fmPitch3D = THREE.MathUtils.clamp(Math.atan2(vFace3D.z, Math.max(0.02, Math.hypot(vFace3D.x, vFace3D.y))) - 0.06, -0.42, 0.42);
+                facePitch = facePitch * 0.55 + fmPitch3D * 0.45;
+            }
+
             // 4. 眼-肩垂直距離壓縮比 (Eye-to-Shoulder Compression Ratio) - 抗毛髮/手部遮擋
-            // 注意：當單側或雙側手肘高舉過肩 (elbow.y < shoulder.y) 時，肩胛上提會拉高雙肩中點，
-            // 使 eyeShoulderDy 假性縮短並誤判為低頭，故高舉手臂時停用此項，保留五官與耳眼真實仰頭角！
             let pitchFromShoulder = null;
             const anyElbowOverhead = (leftElbow && leftShoulder && leftElbow.y < leftShoulder.y - 0.02) ||
                                      (rightElbow && rightShoulder && rightElbow.y < rightShoulder.y - 0.02);
             if (leftShoulder && rightShoulder && !anyElbowOverhead) {
                 const midShoulderY = (leftShoulder.y + rightShoulder.y) * 0.5;
-                const eyeShoulderDy = midShoulderY - midEyeY;
+                const eyeShoulderDy = midShoulderY - pEyeMidY;
                 const normEyeShoulder = eyeShoulderDy / Math.max(0.1, torsoHeight || 0.45);
-                // 平視常態約 0.245~0.27；低頭下巴貼胸時眼肩距顯著壓縮 (< 0.22)；仰頭伸頸時顯著拉長 (> 0.28)
                 const shoulderOffset = 0.245 - normEyeShoulder;
                 pitchFromShoulder = THREE.MathUtils.clamp(shoulderOffset * 2.4, -0.42, 0.42);
             }
@@ -520,19 +612,18 @@ export class TorsoPoseEstimator {
             if (leftMouth && rightMouth) {
                 const midMouthZ = ((leftMouth.z || 0) + (rightMouth.z || 0)) * 0.5;
                 const midEyeZ = ((leftEye.z || 0) + (rightEye.z || 0)) * 0.5;
-                // 低頭時下巴與嘴巴向後內收 (Z 變大)、額眼向前 (Z 變小)
                 const dzMouthEye = midMouthZ - midEyeZ;
                 pitchFromZ = THREE.MathUtils.clamp(dzMouthEye * 2.0, -0.35, 0.35);
             }
 
             // 多特徵加權融合 (Multi-cue Fusion)
             if (pitchFromShoulder !== null) {
-                headPitch = facePitch * 0.55 + pitchFromShoulder * 0.45;
+                headPitch = facePitch * 0.60 + pitchFromShoulder * 0.40;
             } else {
                 headPitch = facePitch;
             }
 
-            if (pitchFromZ !== null) {
+            if (!hasFaceMesh468 && pitchFromZ !== null) {
                 headPitch = headPitch * 0.80 + pitchFromZ * 0.20;
             }
         }

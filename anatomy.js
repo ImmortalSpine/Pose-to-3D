@@ -1222,11 +1222,16 @@ export class AnatomicalTorso {
         const cervicalPartYaw = safeRelativeYaw * 0.65;
         const cranialPartYaw = safeRelativeYaw - cervicalPartYaw;
 
+        let diffNeckRoll = headRoll - thoracicRoll;
+        while (diffNeckRoll > Math.PI) diffNeckRoll -= 2 * Math.PI;
+        while (diffNeckRoll < -Math.PI) diffNeckRoll += 2 * Math.PI;
+        const safeRelativeRoll = THREE.MathUtils.clamp(diffNeckRoll, -0.75, 0.75);
+
         this.cervicalVertebrae.forEach((vert) => {
             vert.rotation.order = 'YXZ';
             const rotX = cervicalPitch / cCount;
             const rotY = cervicalPartYaw / cCount;
-            const rotZ = (headRoll - thoracicRoll) / cCount * 0.4;
+            const rotZ = safeRelativeRoll / cCount * 0.4;
             vert.rotation.x = rotX;
             vert.rotation.y = rotY;
             vert.rotation.z = rotZ;
@@ -1237,7 +1242,7 @@ export class AnatomicalTorso {
             this.headJoint.rotation.order = 'YXZ';
             this.headJoint.rotation.x = headPitch;
             this.headJoint.rotation.y = cranialPartYaw;
-            this.headJoint.rotation.z = headRoll - accumCervicalRoll;
+            this.headJoint.rotation.z = safeRelativeRoll - accumCervicalRoll;
         }
 
         // 5. 左右大臂肱骨與肩胛胸壁 2:1 滑動節律
