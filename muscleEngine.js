@@ -40,12 +40,13 @@ function mToScene(ptM) {
 }
 
 /**
- * 程式化生成 512x512 無縫肌束纖維紋理組 (Albedo Map / Bump Map / Roughness Map)
+ * 程式化生成 1024x512 絲滑微纖維肌束紋理組 (對齊 Anatomage 醫學圖譜質感：細緻微纖維 + 柔霧生物肌膜)
  */
 function createProceduralMuscleTextures() {
-    const W = 512;
+    const W = 1024;
     const H = 512;
-    const bundleCount = 14;
+    const bundleCount = 16;
+    const fineFiberCount = 96;
 
     const albedoCanvas = document.createElement('canvas');
     albedoCanvas.width = W;
@@ -77,26 +78,32 @@ function createProceduralMuscleTextures() {
 
         for (let x = 0; x < W; x++) {
             const u = x / W;
-            const warpU = u + 0.004 * waveV;
+            const warpU = u + 0.0022 * waveV;
 
+            // 大尺度柔和肌束起伏 (不產生生硬黑線)
             const bundlePhase = warpU * bundleCount * Math.PI;
-            const bundleArch = Math.pow(Math.abs(Math.sin(bundlePhase)), 0.55);
+            const bundleArch = Math.pow(Math.abs(Math.sin(bundlePhase)), 0.65);
 
-            const subPhase = warpU * (bundleCount * 5) * Math.PI;
-            const subFiber = Math.pow(Math.abs(Math.sin(subPhase)), 0.68);
+            // 極細密平行肌絲纖維紋理 (96 條絲狀纖維)
+            const finePhase = warpU * fineFiberCount * Math.PI;
+            const fineFiber = Math.pow(Math.abs(Math.sin(finePhase)), 0.55);
 
-            const nFine = hash(Math.floor(warpU * 256), Math.floor(v * 32));
-            const fasciaGlow = Math.pow(bundleArch, 2.4) * (0.05 + 0.08 * nFine);
+            // 有機肌絲微色差雜訊 (避免單調條紋)
+            const streakNoise = hash(Math.floor(warpU * 384), Math.floor(v * 20));
+            const fasciaSheen = Math.pow(bundleArch, 2.0) * (0.03 + 0.04 * streakNoise);
 
-            const lum = clamp(0.50 + 0.34 * bundleArch + 0.12 * subFiber + fasciaGlow, 0.34, 1.0);
+            // 1. Albedo：維持柔和亮麗的中高明度暖調，讓肌腹呈現溫潤珊瑚紅、細溝槽僅微暗不發黑
+            const lum = clamp(0.74 + 0.12 * bundleArch + 0.11 * fineFiber + 0.03 * streakNoise + fasciaSheen, 0.68, 1.0);
             const rVal = Math.round(clamp(lum * 255, 0, 255));
-            const gVal = Math.round(clamp((lum * 0.91 - (1.0 - bundleArch) * 0.07) * 255, 0, 255));
-            const bVal = Math.round(clamp((lum * 0.91 - (1.0 - bundleArch) * 0.05) * 255, 0, 255));
+            const gVal = Math.round(clamp((lum * 0.94 - (1.0 - fineFiber) * 0.03) * 255, 0, 255));
+            const bVal = Math.round(clamp((lum * 0.93 - (1.0 - fineFiber) * 0.025) * 255, 0, 255));
 
-            const bumpH = clamp(0.14 + 0.64 * bundleArch + 0.18 * subFiber + 0.04 * nFine, 0, 1);
+            // 2. Bump：細膩微纖維凹凸高度，消除粗糙條紋塑膠感
+            const bumpH = clamp(0.28 + 0.34 * bundleArch + 0.32 * fineFiber + 0.06 * streakNoise, 0, 1);
             const bByte = Math.round(bumpH * 255);
 
-            const rough = clamp(0.72 - 0.36 * bundleArch - 0.06 * subFiber, 0.25, 0.85);
+            // 3. Roughness：絲滑柔霧生物組織光澤 (0.56 ~ 0.84)，消除胸口白塑膠反光斑
+            const rough = clamp(0.84 - 0.18 * bundleArch - 0.10 * fineFiber, 0.54, 0.88);
             const rByte = Math.round(rough * 255);
 
             const p = (y * W + x) * 4;
@@ -168,10 +175,10 @@ export class AnatomicalMuscleSystem {
             color: 0xffffff,
             map: this.textures.albedoMap,
             bumpMap: this.textures.bumpMap,
-            bumpScale: 0.16,
+            bumpScale: 0.055,
             roughnessMap: this.textures.roughnessMap,
-            roughness: 0.85,
-            metalness: 0.04,
+            roughness: 0.92,
+            metalness: 0.02,
             vertexColors: true,
             transparent: true,
             opacity: this.opacity,
@@ -182,20 +189,21 @@ export class AnatomicalMuscleSystem {
             color: 0xffffff,
             map: this.textures.albedoMap,
             bumpMap: this.textures.bumpMap,
-            bumpScale: 0.18,
+            bumpScale: 0.065,
             roughnessMap: this.textures.roughnessMap,
-            roughness: 0.72,
-            metalness: 0.08,
+            roughness: 0.80,
+            metalness: 0.05,
             emissive: 0xff8c42,
-            emissiveIntensity: 0.42,
+            emissiveIntensity: 0.38,
             vertexColors: true,
             transparent: true,
             opacity: this.opacity,
             side: THREE.DoubleSide
         });
 
-        this._colorBelly = new THREE.Color(0xc24044);
-        this._colorTendon = new THREE.Color(0xf0e7da);
+        // 對齊 Anatomage 醫學圖譜的溫潤珊瑚磚紅肌腹與絲絨乳白腱膜色調
+        this._colorBelly = new THREE.Color(0xd15c54);
+        this._colorTendon = new THREE.Color(0xf4ebe2);
 
         this._onReadyCallbacks = [];
 
@@ -350,6 +358,17 @@ export class AnatomicalMuscleSystem {
         const perpA = new THREE.Vector3().crossVectors(vAxis, refUp).normalize();
         const perpB = new THREE.Vector3().crossVectors(vAxis, perpA).normalize();
 
+        // 為扇形肌 (胸大肌/三角肌/肩袖肌群) 定義平面投影展開軸，避免三角肌圓頂產生木紋渦流
+        const fanNormal = (tmpl.region === 'chest')
+            ? new THREE.Vector3(0, 0, 1)
+            : new THREE.Vector3(sign, 0, 0);
+        const fanSpread = new THREE.Vector3().crossVectors(fanNormal, vAxis);
+        if (fanSpread.lengthSq() < 1e-5) {
+            fanSpread.copy(perpA);
+        } else {
+            fanSpread.normalize();
+        }
+
         // 找出骨心參考點（上臂 vs 前臂分別相對於各自骨幹線段判定外鼓方向）
         const boneRefStart = (tmpl.region === 'forearm')
             ? mToScene(mirrorM([P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ], sign))
@@ -467,14 +486,18 @@ export class AnatomicalMuscleSystem {
                 weights[i] = 1.0;
             }
 
-            // 3. 順應肌束走向之 UV 座標 (扇形肌使用以止點為圓心的極座標放射角度；管狀肌使用柱面角度)
+            // 3. 順應肌束走向之無渦流 UV 座標
+            let uVal = 0;
             if (tmpl.isFan) {
-                const dx = (px - anchorInsWorld.x) * sign;
+                const dx = px - anchorInsWorld.x;
                 const dy = py - anchorInsWorld.y;
                 const dz = pz - anchorInsWorld.z;
-                const ang = Math.atan2(dy, Math.hypot(dx, dz)); // -PI/2 .. +PI/2
+                const projAlong = -(dx * vAxis.x + dy * vAxis.y + dz * vAxis.z);
+                const projAcross = dx * fanSpread.x + dy * fanSpread.y + dz * fanSpread.z;
+                const ang = Math.atan2(projAcross, Math.max(0.08, projAlong));
                 const rad = Math.hypot(dx, dy, dz) / maxFanDist;
-                uvs[i * 2] = (ang / Math.PI + 0.5) * 1.4;
+                uVal = (ang / Math.PI + 0.5) * (tmpl.region === 'chest' ? 1.8 : 1.3);
+                uvs[i * 2] = uVal;
                 uvs[i * 2 + 1] = rad;
             } else {
                 const cx = pOrig.x + vAxis.x * projArr[i];
@@ -484,16 +507,21 @@ export class AnatomicalMuscleSystem {
                 const uProj = rx * perpA.x + ry * perpA.y + rz * perpA.z;
                 const vProj = rx * perpB.x + ry * perpB.y + rz * perpB.z;
                 const theta = Math.atan2(vProj, uProj);
-                uvs[i * 2] = theta / (Math.PI * 2.0) + 0.5;
+                uVal = theta / (Math.PI * 2.0) + 0.5;
+                uvs[i * 2] = uVal;
                 uvs[i * 2 + 1] = t;
             }
 
-            // 4. 肌腹 (紅棕) vs 兩端肌腱 (乳白) 頂點漸層
+            // 4. 羽毛狀絲束漸層過渡 (Feathered Tendon Transition)：依微纖維相位微調邊界，消除生硬噴槍灰白邊
+            const featherJitter = 0.026 * Math.sin(uVal * Math.PI * 48.0);
+            const tFeathered = clamp(t + featherJitter, 0.0, 1.0);
+            const origBand = (tmpl.key === 'pectoralis_major_abdominal') ? 0.08 : 0.13;
+            const insBand = 0.14;
             let muscleBlend = 1.0;
-            if (t < 0.14) {
-                muscleBlend = THREE.MathUtils.smoothstep(t, 0.0, 0.14);
-            } else if (t > 0.84) {
-                muscleBlend = 1.0 - THREE.MathUtils.smoothstep(t, 0.84, 1.0);
+            if (tFeathered < origBand) {
+                muscleBlend = THREE.MathUtils.smoothstep(tFeathered, 0.0, origBand);
+            } else if (tFeathered > 1.0 - insBand) {
+                muscleBlend = 1.0 - THREE.MathUtils.smoothstep(tFeathered, 1.0 - insBand, 1.0);
             }
             colTmp.copy(this._colorTendon).lerp(this._colorBelly, muscleBlend);
             colors[i * 3] = colTmp.r;
@@ -585,8 +613,8 @@ export class AnatomicalMuscleSystem {
 
         const muscleRootInv = this.muscleGroup.matrixWorld.clone().invert();
         const genderNormShift = (this.torso.currentGender === 'male')
-            ? 0.032
-            : (this.torso.currentGender === 'female' ? -0.042 : 0.0);
+            ? 0.028
+            : (this.torso.currentGender === 'female' ? -0.014 : 0.0);
 
         const P = GLB_PIVOTS_M;
         // 取得當前雙側大臂與前臂的實際骨幹線段（供防止極端屈肘/高舉穿插）
