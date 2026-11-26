@@ -19,7 +19,7 @@ import {
     FOOT_STATIC_NAMES,
     loadMedicalSkeletonGLB
 } from './medicalSkeletonLoader.js?v=9.0';
-import { AnatomicalMuscleSystem } from './muscleEngine.js?v=11.0';
+import { AnatomicalMuscleSystem } from './muscleEngine.js?v=11.1';
 
 function toVec3(arr) {
     return new THREE.Vector3(arr[0], arr[1], arr[2]);

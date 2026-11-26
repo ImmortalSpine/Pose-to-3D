@@ -197,8 +197,6 @@ export class AnatomicalMuscleSystem {
         this._colorBelly = new THREE.Color(0xc24044);
         this._colorTendon = new THREE.Color(0xf0e7da);
 
-        // 必須在尚未切換女性體型與姿態前，擷取骨骼在純解剖靜止位 (Neutral 1.0 Scale, 0 Rotation) 之逆矩陣
-        this._neutralInvMatrices = this._captureNeutralBoneInvMatrices();
         this._onReadyCallbacks = [];
 
         this.readyPromise = this._loadMedicalMusclesGLB('./z-anatomy-muscles.glb');
@@ -227,31 +225,22 @@ export class AnatomicalMuscleSystem {
         }
     }
 
-    _captureNeutralBoneInvMatrices() {
-        const savedRotL = this.torso.shoulderGirdle.left?.humerusJoint?.rotation.z ?? 0;
-        const savedRotR = this.torso.shoulderGirdle.right?.humerusJoint?.rotation.z ?? 0;
-        if (this.torso.shoulderGirdle.left?.humerusJoint) this.torso.shoulderGirdle.left.humerusJoint.rotation.z = 0;
-        if (this.torso.shoulderGirdle.right?.humerusJoint) this.torso.shoulderGirdle.right.humerusJoint.rotation.z = 0;
-
-        this.torso.rootGroup.updateMatrixWorld(true);
-
-        const invMap = {};
-        const roles = ['ribcage', 'clavicle', 'scapula', 'humerus', 'ulna', 'radius', 'hand'];
-        for (const side of ['left', 'right']) {
-            invMap[side] = {};
-            for (const role of roles) {
-                const node = this._getBoneNode(role, side);
-                if (node) {
-                    invMap[side][role] = node.matrixWorld.clone().invert();
-                }
-            }
+    /**
+     * 取得與 anatomy.js _mountMesh() 100% 一致的原始公尺樞紐點 (含 qAlignArm / qAlignFore 未拉直前的原生空間)
+     */
+    _getBonePivotM(role, side) {
+        const sign = (side === 'left') ? 1 : -1;
+        const P = GLB_PIVOTS_M;
+        switch (role) {
+            case 'ribcage': return P.thoraxOrigin;
+            case 'clavicle': return [sign * P.claviclePivotX, P.claviclePivotY, P.claviclePivotZ];
+            case 'scapula': return [sign * P.scapulaPivotX, P.scapulaPivotY, P.scapulaPivotZ];
+            case 'humerus': return [sign * P.shoulderPivotX, P.shoulderPivotY, P.shoulderPivotZ];
+            case 'ulna': return [sign * P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ];
+            case 'radius': return [sign * P.radProxX, P.radProxY, P.radProxZ];
+            case 'hand': return [sign * P.wristPivotX, P.wristPivotY, P.wristPivotZ];
+            default: return P.pelvisOrigin;
         }
-
-        if (this.torso.shoulderGirdle.left?.humerusJoint) this.torso.shoulderGirdle.left.humerusJoint.rotation.z = savedRotL;
-        if (this.torso.shoulderGirdle.right?.humerusJoint) this.torso.shoulderGirdle.right.humerusJoint.rotation.z = savedRotR;
-        this.torso.rootGroup.updateMatrixWorld(true);
-
-        return invMap;
     }
 
     async _loadMedicalMusclesGLB(url) {
@@ -308,7 +297,8 @@ export class AnatomicalMuscleSystem {
         const axisLen = Math.max(0.01, vAxis.length());
         vAxis.divideScalar(axisLen);
 
-        // 先將毫米網格轉換為系統世界靜止座標系 (Scene Units, 以 pelvisOrigin 為零點)
+        // 先將毫米網格轉換為公尺座標與系統世界靜止座標系 (Scene Units, 以 pelvisOrigin 為零點)
+        const restMeters = new Float32Array(vertCount * 3);
         const restPos = new Float32Array(vertCount * 3);
         const restNorm = new Float32Array(vertCount * 3);
         const projArr = new Float32Array(vertCount);
@@ -320,10 +310,16 @@ export class AnatomicalMuscleSystem {
 
         for (let i = 0; i < vertCount; i++) {
             vTmp.fromBufferAttribute(posAttr, i).applyMatrix4(mWorld);
-            // mm -> m -> offset by pelvisOrigin -> scale by GLB_SCALE
-            const sx = (vTmp.x * 0.001 - P.pelvisOrigin[0]) * GLB_SCALE;
-            const sy = (vTmp.y * 0.001 - P.pelvisOrigin[1]) * GLB_SCALE;
-            const sz = (vTmp.z * 0.001 - P.pelvisOrigin[2]) * GLB_SCALE;
+            const mx = vTmp.x * 0.001;
+            const my = vTmp.y * 0.001;
+            const mz = vTmp.z * 0.001;
+            restMeters[i * 3] = mx;
+            restMeters[i * 3 + 1] = my;
+            restMeters[i * 3 + 2] = mz;
+
+            const sx = (mx - P.pelvisOrigin[0]) * GLB_SCALE;
+            const sy = (my - P.pelvisOrigin[1]) * GLB_SCALE;
+            const sz = (mz - P.pelvisOrigin[2]) * GLB_SCALE;
             restPos[i * 3] = sx;
             restPos[i * 3 + 1] = sy;
             restPos[i * 3 + 2] = sz;
@@ -354,22 +350,32 @@ export class AnatomicalMuscleSystem {
         const perpA = new THREE.Vector3().crossVectors(vAxis, refUp).normalize();
         const perpB = new THREE.Vector3().crossVectors(vAxis, perpA).normalize();
 
-        // 找出骨心參考點（若屬於上臂／前臂則相對於骨幹中心線判定外鼓方向）
-        const boneRefStart = mToScene(mirrorM([P.shoulderPivotX, P.shoulderPivotY, P.shoulderPivotZ], sign));
-        const boneRefEnd = mToScene(mirrorM([P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ], sign));
+        // 找出骨心參考點（上臂 vs 前臂分別相對於各自骨幹線段判定外鼓方向）
+        const boneRefStart = (tmpl.region === 'forearm')
+            ? mToScene(mirrorM([P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ], sign))
+            : mToScene(mirrorM([P.shoulderPivotX, P.shoulderPivotY, P.shoulderPivotZ], sign));
+        const boneRefEnd = (tmpl.region === 'forearm')
+            ? mToScene(mirrorM([P.wristPivotX, P.wristPivotY, P.wristPivotZ], sign))
+            : mToScene(mirrorM([P.elbowPivotX, P.elbowPivotY, P.elbowPivotZ], sign));
         const chestCenter = mToScene([0, 1.30, 0.0]);
         const vTmpOut = { x: 0, y: 0, z: 0 };
 
-        // 為扇形肌 (如胸大肌/三角肌) 尋找止點端平均點作為放射圓心
+        // 為扇形肌 (如胸大肌/三角肌) 尋找止點端平均點作為放射圓心，並記錄起止點公尺中心
         let insCx = 0, insCy = 0, insCz = 0, insCnt = 0;
         let origCx = 0, origCy = 0, origCz = 0, origCnt = 0;
+        let insMx = 0, insMy = 0, insMz = 0;
+        let origMx = 0, origMy = 0, origMz = 0;
         for (let i = 0; i < vertCount; i++) {
             const t = (projArr[i] - projMin) / projSpan;
             tArr[i] = t;
             if (t < 0.14) {
-                origCx += restPos[i * 3]; origCy += restPos[i * 3 + 1]; origCz += restPos[i * 3 + 2]; origCnt++;
+                origCx += restPos[i * 3]; origCy += restPos[i * 3 + 1]; origCz += restPos[i * 3 + 2];
+                origMx += restMeters[i * 3]; origMy += restMeters[i * 3 + 1]; origMz += restMeters[i * 3 + 2];
+                origCnt++;
             } else if (t > 0.86) {
-                insCx += restPos[i * 3]; insCy += restPos[i * 3 + 1]; insCz += restPos[i * 3 + 2]; insCnt++;
+                insCx += restPos[i * 3]; insCy += restPos[i * 3 + 1]; insCz += restPos[i * 3 + 2];
+                insMx += restMeters[i * 3]; insMy += restMeters[i * 3 + 1]; insMz += restMeters[i * 3 + 2];
+                insCnt++;
             }
         }
         const anchorOrigWorld = origCnt > 0
@@ -378,6 +384,12 @@ export class AnatomicalMuscleSystem {
         const anchorInsWorld = insCnt > 0
             ? new THREE.Vector3(insCx / insCnt, insCy / insCnt, insCz / insCnt)
             : pIns.clone();
+        const anchorOrigM = origCnt > 0
+            ? [origMx / origCnt, origMy / origCnt, origMz / origCnt]
+            : mirrorM(tmpl.originM, sign);
+        const anchorInsM = insCnt > 0
+            ? [insMx / insCnt, insMy / insCnt, insMz / insCnt]
+            : mirrorM(tmpl.insertM, sign);
 
         const restChordLen = Math.max(0.4, anchorInsWorld.distanceTo(anchorOrigWorld));
 
@@ -393,15 +405,15 @@ export class AnatomicalMuscleSystem {
             }
         }
 
-        // 建置多骨骼局部座標 & 法線快取，並生成 UV、肌腱色與外鼓權重
+        // 建置與 anatomy.js _mountMesh() 完全一致的多骨骼局部座標與法線快取
         const chainLen = tmpl.chain.length;
         const bones = tmpl.chain.map((link, idx) => {
             const node = this._getBoneNode(link.role, side);
-            const invMat = this._neutralInvMatrices[side]?.[link.role];
+            const pivotM = this._getBonePivotM(link.role, side);
             return {
                 role: link.role,
                 node,
-                invMat,
+                pivotM,
                 localPos: new Float32Array(vertCount * 3),
                 localNorm: new Float32Array(vertCount * 3),
                 jointPivot: link.jointPivotM ? mToScene(mirrorM(link.jointPivotM, sign)) : null,
@@ -415,25 +427,22 @@ export class AnatomicalMuscleSystem {
         const colTmp = new THREE.Color();
 
         for (let i = 0; i < vertCount; i++) {
+            const mx = restMeters[i * 3], my = restMeters[i * 3 + 1], mz = restMeters[i * 3 + 2];
             const px = restPos[i * 3], py = restPos[i * 3 + 1], pz = restPos[i * 3 + 2];
             const nx = restNorm[i * 3], ny = restNorm[i * 3 + 1], nz = restNorm[i * 3 + 2];
             const t = tArr[i];
 
-            // 1. 計算每個頂點在各節骨骼局部空間的精確靜止位置與法線
+            // 1. 直接依目標骨頭樞紐平移並縮放至該骨節的局部座標 (與 skeleton.glb 骨頭掛載公式 100% 同構)
             for (let b = 0; b < chainLen; b++) {
                 const bn = bones[b];
-                if (bn.invMat) {
-                    vTmp.set(px, py, pz).applyMatrix4(bn.invMat);
-                    bn.localPos[i * 3] = vTmp.x;
-                    bn.localPos[i * 3 + 1] = vTmp.y;
-                    bn.localPos[i * 3 + 2] = vTmp.z;
+                const pm = bn.pivotM;
+                bn.localPos[i * 3] = (mx - pm[0]) * GLB_SCALE;
+                bn.localPos[i * 3 + 1] = (my - pm[1]) * GLB_SCALE;
+                bn.localPos[i * 3 + 2] = (mz - pm[2]) * GLB_SCALE;
 
-                    const nMat = new THREE.Matrix3().setFromMatrix4(bn.invMat);
-                    nTmp.set(nx, ny, nz).applyMatrix3(nMat).normalize();
-                    bn.localNorm[i * 3] = nTmp.x;
-                    bn.localNorm[i * 3 + 1] = nTmp.y;
-                    bn.localNorm[i * 3 + 2] = nTmp.z;
-                }
+                bn.localNorm[i * 3] = nx;
+                bn.localNorm[i * 3 + 1] = ny;
+                bn.localNorm[i * 3 + 2] = nz;
             }
 
             // 2. 關節過渡帶權重 (Joint-Localized Blend Weights)
@@ -506,17 +515,29 @@ export class AnatomicalMuscleSystem {
             bellyEnv[i] = Math.pow(Math.max(0, Math.sin(Math.PI * clamp(t, 0.0, 1.0))), 0.85);
         }
 
-        // 原點錨點與止點錨點存放於起點骨/末節骨局部座標系，供即時量測距離變化 L
-        const originAnchorLocal = anchorOrigWorld.clone().applyMatrix4(bones[0].invMat);
-        const insertAnchorLocal = anchorInsWorld.clone().applyMatrix4(bones[chainLen - 1].invMat);
+        // 原點錨點與止點錨點直接依起止骨樞紐轉換為局部座標，供即時量測距離變化 L
+        const pOrig0 = bones[0].pivotM;
+        const pInsL = bones[chainLen - 1].pivotM;
+        const originAnchorLocal = new THREE.Vector3(
+            (anchorOrigM[0] - pOrig0[0]) * GLB_SCALE,
+            (anchorOrigM[1] - pOrig0[1]) * GLB_SCALE,
+            (anchorOrigM[2] - pOrig0[2]) * GLB_SCALE
+        );
+        const insertAnchorLocal = new THREE.Vector3(
+            (anchorInsM[0] - pInsL[0]) * GLB_SCALE,
+            (anchorInsM[1] - pInsL[1]) * GLB_SCALE,
+            (anchorInsM[2] - pInsL[2]) * GLB_SCALE
+        );
 
         geom.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
         geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        // 若位置 attribute 原先為 quantized Int16，重建為標準 Float32Array 供即時寫入
+        // 若位置 attribute 原先為 quantized Int16，重建為標準 Float32Array 供即時寫入，並清除舊的 quantized 包圍盒
         const dynPos = new Float32Array(restPos);
         const dynNorm = new Float32Array(restNorm);
         geom.setAttribute('position', new THREE.BufferAttribute(dynPos, 3));
         geom.setAttribute('normal', new THREE.BufferAttribute(dynNorm, 3));
+        geom.boundingBox = null;
+        geom.boundingSphere = null;
 
         const fullId = `${tmpl.key}_${side}`;
         const fullName = `${tmpl.name} (${sideLabel})`;
@@ -682,6 +703,7 @@ export class AnatomicalMuscleSystem {
 
             m.geom.attributes.position.needsUpdate = true;
             m.geom.attributes.normal.needsUpdate = true;
+            m.geom.computeBoundingBox();
             m.geom.computeBoundingSphere();
         }
     }
